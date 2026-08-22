@@ -51,7 +51,10 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
       <br>_Dev harnesses retired: `run_real_solve.py` deleted, `run_comparison.py` rewritten to POST to the live endpoints, `real_data.py` demoted to a payload builder for tests._
 - [ ] `todo` — **T10**: Express API — auth (JWT), CRUD for tasks/corridors/assets, orchestration calls to FastAPI service
       <br>_**Partially done.** Read-only routes exist and are tested: `/api/corridors`, `/api/corridors/:id`, `/api/assets`, `/api/assets/:id`, `/api/tasks`, `/api/tasks/:id`, `/api/resources`, `/api/provenance` — all validated, paginated (limit capped at 200) and using the shared `ApiError` envelope._
-      <br>_**Still pending:** JWT auth + role gating (FR10), write/CRUD paths for task submission (FR1.1), CSV/JSON bulk import (FR1.3), and the orchestration calls to the optimizer. T9 is done, so the optimizer side is ready — `backend/src/services/optimizerClient.js` already has the `requestOptimizer()` helper; what remains is the Mongo→payload gathering (mirror `optimizer/scripts/real_data.py:build_payload`) and persisting the returned schedule._
+      <br>_**Orchestration slice done (2026-08-22).** `POST /api/schedules/generate` closes the loop: MongoDB → gather → optimizer HTTP → MongoDB. Also `GET /api/schedules`, `/latest`, `/:id`, and `POST /api/tasks/reprioritize`. New `schedules` collection (append-only per FR6.3, D-034); FR2.3 priority scores now persist onto tasks, so `/api/tasks` no longer returns null and the UI no longer shows "unscored". 16 new tests (34 in `/backend`)._
+      <br>_**Real corpus reproduces through the full loop:** 89 tasks → OPTIMAL 36/53 in 0.65 s, 2 batches, baseline 6 double-bookings / 605 min / 3 over-subscribed, knownGaps 11/5, priorityScore range 25.04–87.31 on all 89 tasks. Asserted in a test, not just observed._
+      <br>_**Bug fixed, found only by integration:** the error handler masked ALL 5xx messages, so an unreachable optimizer reported "Internal server error" instead of "Could not reach the optimizer service". `ApiError` messages are author-written and safe by construction; only unexpected errors are masked now (D-037)._
+      <br>_**Still pending in T10:** JWT auth + role gating (FR10), write/CRUD for task submission (FR1.1), CSV/JSON bulk import (FR1.3)._
 - [ ] `todo` — **T11**: React app shell — routing, auth flow, API client module
       <br>_**Partially done.** `react-router-dom` installed and wired; six routes live (`/corridors`, `/corridors/:id`, `/assets`, `/tasks`, `/resources`, `/status`) with header nav, all reading through the RTK Query `apiSlice` — no bare `fetch` anywhere. `SyntheticBadge` renders the PRD Section 5 honesty framing from the data itself._
       <br>_**Still pending:** the login screen and role-based routing (Dept Engineer / Controller / DRM, PRD Section 8), which need T10's auth._
@@ -94,6 +97,10 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 ## Integration checkpoints
 
+- **2026-08-22 @ `d4910eb`** — T10 orchestration slice landed on top of the checkpoint. The
+  four-layer loop (MongoDB → Node → optimizer HTTP → MongoDB) runs end to end and reproduces
+  every CHECKPOINT.md number.
+
 - **2026-08-22 @ `8bac58b`** — [CHECKPOINT.md](CHECKPOINT.md): full T5→T9 regression pass before
   T10. Pipeline determinism, seed idempotency, D-018 indexes, 232 tests across four layers, and
   the real-corpus result over live HTTP all verified against documentation. **No fixes required.**
@@ -102,6 +109,7 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 _Append a dated one-line entry here each session — what was completed, what's next._
 
+- **2026-08-22** — T10 orchestration slice complete. The four-layer loop runs end to end for the first time; priority scores persist; schedules are stored append-only. One real bug found in the seam between two already-tested components (5xx message masking). Next: **T11 auth/routing or T13/T14 dashboard** — see the tradeoff note in the session report.
 - **2026-08-22** — T9 (optimizer endpoints) complete. `/prioritize`, `/optimize`, `/baseline` live; the full T6/T7/T8 real-corpus result now reproduces over HTTP with every honesty field intact. This closes the optimizer-service half of the architecture. Next: **the Node orchestration half of T10**, then T11–T14 for the UI.
 - **2026-08-22** — T8 (naive baseline) complete. Real FCFS per-department algorithm producing 6 genuine double-bookings and 605 double-booked minutes on the real corpus, against the optimizer's zero. Key framing finding: throughput is **identical** (36/36 both) at every horizon, so the honest claim is coordination and feasibility, not volume — and the baseline's higher utilisation is an over-subscription artefact (D-031). Next: **T9 — FastAPI endpoints** wrapping both solver cores.
 - **2026-08-22** — T7 (priority engine) complete. FR2.3 score + FR2.4 ranked queue, weights measured against four alternatives (ties 1,057 → 11). Wired into the solver and re-run for real: scheduled set unchanged at 36/53, which D-028 explains rather than explains away. Next: **T8 — the naive baseline**.

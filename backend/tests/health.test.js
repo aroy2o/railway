@@ -42,10 +42,19 @@ test('GET /api/health/ready reports 503 while MongoDB is not connected', async (
 });
 
 test('GET /api/health/dependencies reports a down dependency instead of throwing', async () => {
-  // tests/.env.test points OPTIMIZER_URL at a dead port, so this exercises the
-  // failure path: a dependency being down must be *reported* as part of a 200
-  // response, never propagated as an error from the health endpoint itself.
-  const res = await request(app).get('/api/health/dependencies').expect(200);
+  // The optimizer is stubbed as unreachable so this exercises the failure path
+  // deterministically: a dependency being down must be *reported* as part of a
+  // 200 response, never propagated as an error from the health endpoint itself.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw Object.assign(new TypeError('fetch failed'), { name: 'TypeError' });
+  };
+  let res;
+  try {
+    res = await request(app).get('/api/health/dependencies').expect(200);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 
   assert.equal(res.body.status, 'degraded');
   assert.equal(res.body.checks.optimizer.reachable, false);

@@ -11,6 +11,9 @@ import { Task } from '../models/index.js';
 import { validate } from '../middleware/validate.js';
 import { ApiError } from '../utils/ApiError.js';
 import { departmentParam, listResponse, paginationSchema } from '../utils/query.js';
+import { gatherScenario } from '../services/scheduleGathering.js';
+import { requestPriorityQueue } from '../services/optimizerClient.js';
+import { persistPriorityScores } from '../services/scheduleOrchestrator.js';
 
 const router = Router();
 
@@ -50,6 +53,50 @@ router.get('/', validate({ query: listQuerySchema }), async (req, res, next) => 
     next(err);
   }
 });
+
+/**
+ * POST /api/tasks/reprioritize
+ *
+ * FR2.4 - recompute the ranked queue without running a solve.
+ *
+ * Generation already refreshes priority scores, so this is not required for the
+ * plan to be correct. It exists because the Controller's priority queue (PRD
+ * Section 8) is useful on its own, and re-ranking is far cheaper than a CP-SAT
+ * run - no reason to make someone wait for a solve to see an updated queue
+ * after new defects are logged. See docs/DECISIONS.md D-034.
+ */
+router.post(
+  '/reprioritize',
+  validate({
+    body: z.object({
+      asOf: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/, 'asOf must be an ISO date (YYYY-MM-DD)')
+        .optional(),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const { payload } = await gatherScenario({ horizonStart: req.body.asOf });
+      const queue = await requestPriorityQueue({
+        tasks: payload.tasks,
+        asOf: payload.horizonStart,
+      });
+      const updated = await persistPriorityScores(queue.queue);
+
+      res.json({
+        data: {
+          asOf: queue.asOf,
+          ranked: queue.count,
+          tasksUpdated: updated,
+          topTaskIds: queue.queue.slice(0, 5).map((entry) => entry.taskId),
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 router.get(
   '/:id',

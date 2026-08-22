@@ -83,13 +83,66 @@ with supertest and never bind a socket.
 | `GET` | `/api/tasks/:id` | One task. |
 | `GET` | `/api/resources` | Filter by `corridorId` (matches `corridorScope`), `department`, `type`, `depot`. |
 | `GET` | `/api/provenance` | Per-collection disclaimer and field-level real/synthetic map (D-015). |
+| `POST` | `/api/schedules/generate` | **Orchestration.** Gathers from MongoDB, calls the optimizer, persists the plan. Returns `201` with the stored schedule. |
+| `GET` | `/api/schedules` | Generated plans, newest first (heavy fields excluded). |
+| `GET` | `/api/schedules/latest` | The most recent plan, in full. |
+| `GET` | `/api/schedules/:id` | One plan by id. |
+| `POST` | `/api/tasks/reprioritize` | FR2.4 re-rank without running a solve. |
 
 Every list endpoint answers `{ data, pagination }` and is bounded — `limit`
 defaults to 50 and is capped at 200, so no route can return all 10,149
 corridors by accident.
 
-These are read-only. Auth (FR10), task submission (FR1.1) and schedule
-orchestration are the remaining T10 work.
+Auth (FR10), task submission write paths (FR1.1) and CSV/JSON bulk import
+(FR1.3) are the remaining T10 work.
+
+## Orchestration
+
+`POST /api/schedules/generate` is the loop that ties all four layers together:
+
+```
+MongoDB ──gather──> Node ──HTTP──> optimizer ──> Node ──persist──> MongoDB
+```
+
+It gathers the 30 corridors carrying demand (indexed, D-018), their free windows
+from `corridor_calendar`, the backlog, and the asset-criticality join; POSTs that
+to `/optimize`, `/baseline` and `/prioritize` **in parallel**; then stores the
+plan and writes FR2.3 priority scores back onto the task documents.
+
+**Two field-name translations happen in `scheduleGathering.js`, deliberately.**
+The two schemas were designed independently and each name is right in its own
+context, so the mapping belongs at the boundary:
+
+| Stored in MongoDB | Optimizer contract |
+|---|---|
+| `maxDailyBlockWindows[].startMin` / `.endMin` | `dailyWindows[].startMinute` / `.endMinute` |
+| task `_id` | `taskId` |
+
+The optimizer's request models are `extra="forbid"`, so an unmapped field is a
+422 rather than a silent drop — which is why the mapping is written out
+explicitly rather than spreading the document and hoping.
+
+Only `/optimize` failing aborts the request. A failed `/baseline` or
+`/prioritize` is recorded in `generationErrors` and the plan is still stored, so
+a missing comparison is distinguishable from a comparison of zero (D-036).
+
+Schedules are **appended, never replaced** — FR6.3 needs prior plans viewable
+for audit (D-034).
+
+```bash
+curl -X POST localhost:5000/api/schedules/generate \
+  -H 'content-type: application/json' \
+  -d '{"horizonStart":"2026-08-24","horizonDays":7}'
+
+curl localhost:5000/api/schedules/latest
+```
+
+### Running the orchestration tests
+
+`tests/schedules.test.js` needs MongoDB **and** the optimizer service running;
+it skips cleanly without either. It uses its own database (`..._schedules`)
+because `node --test` runs files in parallel and sharing one test database let
+two files' fixtures wipe each other mid-run.
 
 ## Conventions
 

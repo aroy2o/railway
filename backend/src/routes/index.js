@@ -12,6 +12,7 @@ import assetsRouter from './assets.js';
 import tasksRouter from './tasks.js';
 import resourcesRouter from './resources.js';
 import provenanceRouter from './provenance.js';
+import schedulesRouter from './schedules.js';
 
 const router = Router();
 
@@ -21,5 +22,6 @@ router.use('/assets', assetsRouter);
 router.use('/tasks', tasksRouter);
 router.use('/resources', resourcesRouter);
 router.use('/provenance', provenanceRouter);
+router.use('/schedules', schedulesRouter);
 
 export default router;

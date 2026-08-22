@@ -51,8 +51,17 @@ export function errorHandler(err, req, res, next) {
   const body = {
     error: {
       code: err instanceof ApiError ? err.code : 'INTERNAL_ERROR',
-      // Never leak an internal exception message to a client.
-      message: status >= 500 ? 'Internal server error' : err.message,
+      // An ApiError message is author-written and safe to show by construction
+      // (see ApiError's contract), so it is passed through at any status. Only
+      // an UNEXPECTED error is masked, which is what the no-leaking rule was
+      // actually for.
+      //
+      // This distinction was missed until T10: a 502 from an unreachable
+      // optimizer reported "Internal server error" rather than "Could not reach
+      // the optimizer service", turning the single most likely operational
+      // failure into the least actionable message the API can produce.
+      message:
+        err instanceof ApiError || status < 500 ? err.message : 'Internal server error',
     },
   };
 

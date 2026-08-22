@@ -1059,3 +1059,126 @@ a class of silent data loss, that is a good trade.
 result, so T14 cannot accidentally draw the comparison from all 89 tasks
 (D-031), and warns explicitly when `dateRaised` is missing rather than letting
 FCFS ordering degrade unnoticed.
+
+---
+
+## D-034 — Schedules are appended, never replaced
+
+**Date:** 2026-08-22 · **Task:** T10
+
+**Decision.** Each generation writes a new `schedules` document, keyed
+`SCH-<compact ISO timestamp>`. Nothing is overwritten.
+
+**Why.** FR6.3 requires published plans to be versioned with prior versions
+viewable for audit. A plan is an *event* — it records what the solver decided at
+a moment, against the data as it stood. Overwriting would destroy exactly the
+history the approval workflow (T19) and the audit trail need.
+
+This is deliberately the opposite of the seed script's strategy (D-019), and the
+contrast is the point: the seed *mirrors* deterministic source files, so the
+database should match them exactly and stale rows are a defect. A schedule
+mirrors nothing; it happened.
+
+**Shape.** PRD Section 15's fields are all present, and the optimizer's richer
+output is stored rather than trimmed — `decisionLog` (which T17 builds
+explanations from), `knownGaps`, `metrics`, and the full baseline result. Same
+reasoning as T2–T4: discarding a field that already exists only forces a later
+task to recompute or re-request it. `blocks[].trainImpact` is present but null,
+because train-impact scoring is T22 — null means "not computed", never "no
+impact".
+
+**Known limitation.** The id encodes millisecond precision, so two generations
+in the same millisecond would collide. Acceptable for a single-controller
+prototype; a counter or ObjectId would be needed under real concurrency.
+
+---
+
+## D-035 — Every generation refreshes priority scores; a lighter re-rank path also exists
+
+**Date:** 2026-08-22 · **Task:** T10
+
+**Decision.** `POST /api/schedules/generate` writes FR2.3 scores back onto every
+task document. `POST /api/tasks/reprioritize` recomputes the ranking without
+running a solve.
+
+**Why generation always refreshes them.** A priority score is not a static
+property of a task. It folds in SLA urgency and overdue breach (D-027), both
+measured against the date the plan starts from — so a score is only meaningful
+relative to a horizon. Leaving last week's number sitting on a task while
+showing this week's plan beside it would be quietly wrong in the direction that
+matters: a task's urgency grows every day it waits.
+
+**Why the second path exists anyway.** The Controller's priority queue (PRD
+Section 8) is useful on its own, and re-ranking is far cheaper than a CP-SAT
+run. Making someone wait for a solve to see an updated queue after new defects
+are logged would be a poor trade for no benefit.
+
+**What is stored.** `priorityScore` plus the FR2.4 `priorityBreakdown` —
+per-factor contributions, days-to-due, overdue flag — and
+`dominantPriorityFactor`, mirroring how T4 stored `criticalityBreakdown` on
+assets. FR2.4 asks *which factor dominated*, and recomputing that on every read
+would be wasteful and could drift from the score it explains.
+
+`failureRiskScore` stays null. T16 owns it, and nothing in this pass invents it.
+
+---
+
+## D-036 — Three optimizer calls in parallel; only the plan is allowed to fail the request
+
+**Date:** 2026-08-22 · **Task:** T10
+
+**Decision.** `/optimize`, `/baseline` and `/prioritize` are called
+concurrently with `Promise.allSettled`. A failed `/optimize` fails the request;
+a failed `/baseline` or `/prioritize` is recorded on the schedule in
+`generationErrors` and generation continues.
+
+**Why not `Promise.all`.** It rejects on the first failure and discards the
+others' results — so a baseline timeout would throw away a perfectly good plan
+that had already been computed. The plan is the product; the comparison and the
+ranking are valuable additions to it.
+
+**Why recorded rather than swallowed.** A schedule with
+`comparisonToBaseline: null` and a `generationErrors` entry is honestly
+different from one whose comparison genuinely came out zero. T14 can tell them
+apart; a silent null could not.
+
+**The comparison is computed once, here, with its caveats attached.** D-031
+records two traps a comparison screen would otherwise fall into — drawing the
+denominator from all 89 tasks instead of the 36 contestable ones, and rendering
+utilisation without the conflict count, which reads as the baseline winning.
+Both are structural rather than advisory, so `comparisonToBaseline` carries
+`contestableTaskCount`, `structurallyImpossibleCount` and three explicit
+`caveats` strings. A screen that renders the numbers without them is making a
+claim the data does not support.
+
+---
+
+## D-037 — An `ApiError` message is safe at any status; only unexpected errors are masked
+
+**Date:** 2026-08-22 · **Task:** T10
+
+**Decision.** The Express error handler now passes through `err.message` for any
+`ApiError`, and masks to "Internal server error" only for errors it did not
+construct.
+
+**Why — a real defect, surfaced by integration rather than by either component.**
+The original rule was "never leak an internal exception message", implemented as
+`status >= 500 ? 'Internal server error' : err.message`. That is right for an
+unexpected throw, whose message may carry a stack detail or a connection string.
+
+But `ApiError` messages are author-written and safe by construction — that is
+the class's stated contract. Masking them by status meant the single most likely
+operational failure in this architecture, an unreachable optimizer, reported:
+
+```
+502  { "code": "BAD_GATEWAY", "message": "Internal server error" }
+```
+
+The code was right and the message was actively unhelpful. It now reads
+"Could not reach the optimizer service". A genuine unexpected 500 is still
+masked, and still logged in full internally — verified by test.
+
+**Worth noting how it was found.** Both the error handler (T1) and the optimizer
+client (T1/T9) were tested and correct in isolation. The defect lived in the
+interaction: no test had ever asserted what a 5xx *ApiError* looks like to a
+client, because until T10 nothing routinely produced one.

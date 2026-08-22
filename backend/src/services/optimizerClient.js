@@ -5,9 +5,12 @@
  * itself (CLAUDE.md tech-stack rule), so this is the single seam between the
  * two services and the only place that knows the optimizer's URL shape.
  *
- * Scope today is the health probe. The scheduling calls - /prioritize,
- * /optimize, /baseline - are added here by task T10 and will reuse the same
- * request helper, so timeout and error handling stay uniform.
+ * All four calls - the health probe plus /prioritize, /optimize and /baseline -
+ * go through the same `requestOptimizer` helper, so timeout handling and the
+ * 502 envelope are uniform. Nothing here reshapes a response: the optimizer's
+ * payload is returned verbatim, because every honesty-critical field it carries
+ * (knownGaps, priorityIsPlaceholder, the baseline conflict report) would be one
+ * careless destructure away from being lost (D-033).
  */
 import { config } from '../config/env.js';
 import { ApiError } from '../utils/ApiError.js';
@@ -100,4 +103,32 @@ export async function checkOptimizerHealth({ timeoutMs = 3000 } = {}) {
       error: err.message,
     };
   }
+}
+
+
+/**
+ * FR3 - run the CP-SAT optimizer (PRD Section 13).
+ *
+ * @param {object} payload A ScenarioIn + horizon body; see D-032 for the shape.
+ * @returns {Promise<object>} The solver's full result, unmodified.
+ */
+export function requestOptimizedSchedule(payload) {
+  return requestOptimizer('/optimize', { method: 'POST', body: payload });
+}
+
+/** FR9.1 - run the naive per-department baseline (PRD Section 12). */
+export function requestBaselineSchedule(payload) {
+  return requestOptimizer('/baseline', { method: 'POST', body: payload });
+}
+
+/**
+ * FR2.4 - the ranked priority queue with per-factor breakdowns.
+ *
+ * Takes the same task list as a solve, plus the date SLA urgency is measured
+ * against. `assetCriticalityScore` must already be joined on - the optimizer
+ * rejects the request without it, deliberately, because scoring without the
+ * real value would produce a weaker ranking that still looked authoritative.
+ */
+export function requestPriorityQueue({ tasks, asOf }) {
+  return requestOptimizer('/prioritize', { method: 'POST', body: { tasks, asOf } });
 }

@@ -39,9 +39,18 @@ const taskSchema = new mongoose.Schema(
     dependsOnTaskId: { type: String, default: null, index: true },
     workflowStage: { type: String, default: null },
 
-    // Populated downstream - never guessed at seed time.
+    // Populated downstream - never guessed at seed time. The seed always
+    // writes null; T10's orchestration fills priorityScore from the FR2.3
+    // engine, and T16 will fill failureRiskScore.
     priorityScore: { type: Number, default: null },
     failureRiskScore: { type: Number, default: null },
+
+    // FR2.4 requires the ranked queue to show WHICH factor dominated, so the
+    // breakdown is stored alongside the score rather than being recomputed -
+    // the same choice T4 made with the asset criticalityBreakdown.
+    priorityBreakdown: { type: mongoose.Schema.Types.Mixed, default: null },
+    dominantPriorityFactor: { type: String, default: null },
+    priorityComputedAt: { type: Date, default: null },
 
     status: {
       type: String,
