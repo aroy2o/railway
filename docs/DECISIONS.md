@@ -748,3 +748,134 @@ turns an optimisation into an infeasibility.
 
 **Alternative considered.** Adding a lower bound linking the flag to window
 occupancy. Equivalent in effect, more variables, and less obvious to read.
+
+---
+
+## D-026 — Priority is an additive weighted score, ordered physical-state-first
+
+**Date:** 2026-08-22 · **Task:** T7
+
+**Decision.** FR2.3 priority is a 0–100 weighted sum:
+
+| Factor | Weight | Why it sits there |
+|---|---:|---|
+| `severity` | 0.35 | The defect's own observed condition. A rail fracture outranks joint wear wherever it sits, so it leads. |
+| `asset_criticality` | 0.30 | The same defect matters more on a high-consequence asset. Real, measured-anchored (FR2.1). |
+| `sla_urgency` | 0.20 | Deadline pressure is a compliance signal, not a physical one — it must not let a trivial defect leapfrog a critical one because a date is nearer. |
+| `sla_breach` | 0.15 | Escalation for a commitment already broken. Smallest and capped, on purpose. |
+
+**Why additive rather than multiplicative.** Two reasons, the first decisive:
+FR2.4 asks *which factor dominated*, and a product has no honest answer — it
+cannot be decomposed. Second, a product lets one near-zero factor annihilate the
+score, so a critical defect on an asset with little recorded criticality would
+rank at nothing. Same reasoning D-012 used for asset criticality itself.
+
+**Measured against the alternatives** on the real 89-task corpus:
+
+| Formula | Tied pairs | Range | Spearman ρ vs severity-only |
+|---|---:|---|---:|
+| severity only (T6 placeholder) | **1,057** | 1–4 | 1.000 |
+| **additive 35/30/20/15 (chosen)** | **11** | 25.0–87.3 | +0.706 |
+| severity × criticality | 25 | 8.0–68.8 | +0.773 |
+| criticality-dominant 20/50/20/10 | 11 | 24.6–87.0 | +0.461 |
+| SLA-dominant 20/20/35/25 | 11 | 18.3–91.7 | +0.596 |
+
+The placeholder left **1,057 tied pairs among 89 tasks** — about a quarter of
+all pairs indistinguishable. The chosen formula reduces that to 11 while keeping
+ρ = +0.706, so it preserves severity's broad ordering rather than overturning it.
+
+**Criticality earns its 0.30 because it is uncorrelated with severity.** Median
+asset criticality is 59–65 across *every* severity band, with heavily
+overlapping ranges — so it genuinely reorders tasks within a band instead of
+restating what severity already said.
+
+**Alternative rejected on a correctness test, not taste.** The SLA-dominant
+weighting inverts the ordering check below: a 60-day-overdue trivial defect
+scores 69.58 against a fresh critical one at 39.71. That is not a preference,
+it is wrong, and it is what fixes the ceiling on the SLA weights.
+
+---
+
+## D-027 — Overdue urgency lives in the priority score, capped
+
+**Date:** 2026-08-22 · **Task:** T7
+
+**Decision.** Two separate SLA terms. `sla_urgency` ramps 0→1 over 90 days and
+holds at 1 once due. `sla_breach` starts at zero and ramps 0→1 over 60 days
+*past* due, then saturates.
+
+**Why this was T7's job.** D-020 made SLA soft in the solver, because 18 of the
+89 real tasks are already past due and a hard deadline would make them
+permanently unschedulable. That deliberately left the urgency of lateness
+unmodelled, to be picked up here — which is where it belongs: an overdue task
+is not ineligible, it is more important.
+
+**Why two terms rather than one.** They measure different things. Urgency is
+"the deadline is pressing"; breach is "the commitment is already broken and by
+how much". Collapsing them would either lose the escalation or double-count it.
+
+**Why the cap.** Without saturation, an ancient low-severity task would climb
+the queue purely by ageing until it outranked genuinely critical work. Capped at
+60 days — the worst case in the real corpus is 58 days overdue — being
+three months late ranks the same as two.
+
+**Constants are data-grounded, not round numbers.** The 90-day urgency ramp is
+exactly PRD 5.2's longest SLA tier, so it spans one full SLA window.
+
+**A known property, stated rather than hidden.** For any overdue task
+`sla_urgency` is pinned at 1.0 (contributing 20) while `sla_breach` contributes
+at most 15, so **breach can never be the dominant factor**. That is correct
+behaviour — deadline pressure is the headline, lateness is the escalation on top
+— but it does mean `sla_breach` will never appear in a FR2.4 "dominant factor"
+readout. Observed spread on the real corpus: asset_criticality 48, severity 38,
+sla_urgency 3.
+
+---
+
+## D-028 — The priority engine changed the ranking, not the plan — and why that is expected
+
+**Date:** 2026-08-22 · **Task:** T7
+
+**Finding, from a real second solve rather than a remembered one.** Swapping the
+severity placeholder for the FR2.3 score leaves the outcome identical:
+
+| Metric | Severity placeholder | FR2.3 priority |
+|---|---:|---:|
+| Tasks scheduled | 36 | 36 |
+| Tasks deferred | 53 | 53 |
+| Cross-department batches | 2 | 2 |
+| Block utilisation | 74.33% | 74.33% |
+| Objective value | 865,815 | 15,525,815 |
+| Scheduled task set | — | **identical** |
+
+Twenty-one of the 36 scheduled tasks moved to a different day, but no task
+changed from scheduled to deferred or back.
+
+**Why, precisely.** It follows from D-024. Every deferral on this corpus is
+structural (`EXCEEDS_LONGEST_WINDOW`), and over a 7-day horizon there are zero
+`NO_CAPACITY` deferrals — so priority has nothing to arbitrate. Shortening the
+horizon to force contention (1 day → 4 `NO_CAPACITY` deferrals) *still* produces
+an identical set, because the contests that exist are ones both orderings agree
+on: on BRMD-NIM and DGU-PNB only a single window is long enough for the
+competing tasks, and the highest-severity task is also the highest-priority one.
+
+**A correction to an intermediate check.** Aggregate window capacity is not
+usable capacity. BRMD-NIM offers 914 minutes across 13 windows, but a ~160-minute
+task needs one contiguous gap, and only one window (176 min) qualifies — so
+those 914 minutes hold exactly one such job. Any capacity reasoning on this
+project must be per-window, never summed.
+
+**Why the engine is still load-bearing.** It reduces tied pairs from 1,057 to
+11, so FR2.4's ranked queue is meaningful for the first time, and it decides
+contests *on merit* rather than by an arbitrary solver tie-break — on DGU-PNB,
+TSK-00032 and TSK-00033 are both severity 2 and indistinguishable to the
+placeholder, while FR2.3 separates them 32 vs 41. The moment contention rises —
+a shorter horizon, more demand, or T22 opening the saturated corridors — it will
+change outcomes too. A test pins the current equality so that shift is noticed
+rather than missed.
+
+**One refinement deliberately not made.** The 21 day-shifts happen because the
+objective is flat across days for a task whose SLA any day satisfies — the day
+dimension is under-determined. Adding an earliness preference would stabilise it
+and get work done sooner, but that is an objective change and belongs with T23's
+policy weights, not here.

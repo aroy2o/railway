@@ -124,12 +124,16 @@ class MaintenanceTask:
     department: str
     duration_minutes: int
     sla_due_date: date
-    #: PLACEHOLDER (T6): severity 1-5 standing in for the real FR2.3 priority
-    #: score, which T7 computes from severity + asset criticality + predicted
-    #: risk + SLA urgency. Swapping it is a one-line change at the call site.
+    #: FR2.3 priority. T7 supplies a real 0-100 score from severity + asset
+    #: criticality + SLA urgency; before T7 this carried raw severity 1-5.
     priority: int
     depends_on_task_id: str | None = None
     required_resource_ids: tuple[str, ...] = ()
+    #: True while `priority` is a stand-in rather than a computed FR2.3 score.
+    #: Surfaced in the decision log so a downstream consumer can tell the
+    #: difference instead of assuming. Defaults True so an un-migrated caller
+    #: is honest by default rather than silently claiming a real score.
+    priority_is_placeholder: bool = True
 
 
 @dataclass(frozen=True)
@@ -684,7 +688,7 @@ def _build_decision_log(all_tasks, placements, deferred) -> list[dict]:
                     "window": f"{_clock(window.start_minute)}-{_clock(window.end_minute)}",
                     "contributingFactors": {
                         "priority": task.priority,
-                        "priorityIsPlaceholder": True,
+                        "priorityIsPlaceholder": task.priority_is_placeholder,
                         "durationMinutes": task.duration_minutes,
                         "windowCapacityMinutes": window.duration_minutes,
                         "slaDueDate": task.sla_due_date.isoformat(),
@@ -703,7 +707,7 @@ def _build_decision_log(all_tasks, placements, deferred) -> list[dict]:
                     "detail": item.detail,
                     "contributingFactors": {
                         "priority": task.priority,
-                        "priorityIsPlaceholder": True,
+                        "priorityIsPlaceholder": task.priority_is_placeholder,
                         "durationMinutes": task.duration_minutes,
                         "slaDueDate": task.sla_due_date.isoformat(),
                     },

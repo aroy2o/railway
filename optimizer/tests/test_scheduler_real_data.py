@@ -167,4 +167,56 @@ def test_decision_log_has_an_entry_per_task(result, scenario):
     tasks, _ = scenario
 
     assert len(result.decision_log) == len(tasks)
-    assert all(entry["contributingFactors"]["priorityIsPlaceholder"] for entry in result.decision_log)
+
+
+def test_the_priority_placeholder_flag_is_now_false(result):
+    """T6 ran on raw severity and flagged every log entry
+    `priorityIsPlaceholder: true`. T7 supplies the real FR2.3 score, so the flag
+    must flip - it exists precisely so a downstream consumer can tell, and a
+    stale `true` would be a lie in the other direction.
+    """
+    flags = {entry["contributingFactors"]["priorityIsPlaceholder"] for entry in result.decision_log}
+
+    assert flags == {False}
+
+
+def test_priorities_come_from_the_fr23_score_not_severity(scenario):
+    """Severity is 1-5; the FR2.3 score is 0-100. If priorities were still
+    severity, every value would sit in 1-5."""
+    tasks, _ = scenario
+    priorities = {task.priority for task in tasks}
+
+    assert max(priorities) > 5, "priorities look like raw severity, not FR2.3 scores"
+    assert min(priorities) >= 1
+    # The placeholder left 1,057 tied pairs among 89 tasks; the real score should
+    # be far more discriminating.
+    assert len(priorities) > 20
+
+
+def test_priority_wiring_does_not_change_which_tasks_are_scheduled(scenario):
+    """A finding worth pinning rather than assuming.
+
+    Swapping severity for the real FR2.3 score leaves the scheduled SET
+    identical on this corpus. That is not the engine failing to work - it is a
+    consequence of D-024: the few genuine capacity contests here are ones where
+    both orderings agree on the winner, and every other deferral is structural.
+
+    If this starts failing, contention has increased (a shorter horizon, more
+    demand, or T22 opening up saturated corridors) and the priority engine has
+    begun changing outcomes, not just reasoning. That is worth noticing.
+    """
+    from scripts.real_data import load_scenario
+
+    tasks, corridors = scenario
+    with_priority = solve_schedule(
+        tasks, corridors, horizon_start=HORIZON_START, horizon_days=7
+    ).scheduled_task_ids
+
+    placeholder_tasks, placeholder_corridors = load_scenario(
+        horizon_start=HORIZON_START, use_priority_engine=False
+    )
+    with_placeholder = solve_schedule(
+        placeholder_tasks, placeholder_corridors, horizon_start=HORIZON_START, horizon_days=7
+    ).scheduled_task_ids
+
+    assert with_priority == with_placeholder

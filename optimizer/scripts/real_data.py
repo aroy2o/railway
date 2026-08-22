@@ -21,6 +21,7 @@ import urllib.request
 from datetime import date
 from typing import Any
 
+from app.core.priority import PriorityInputs, score_task
 from app.core.scheduler import CorridorAvailability, DailyWindow, MaintenanceTask
 
 DEFAULT_API = "http://localhost:5000/api"
@@ -38,11 +39,20 @@ def _get(url: str, timeout: float = 15.0) -> Any:
         raise BackendUnavailable(f"could not reach {url}: {exc}") from exc
 
 
-def load_scenario(api_base: str = DEFAULT_API) -> tuple[list[MaintenanceTask], dict[str, CorridorAvailability]]:
+def load_scenario(
+    api_base: str = DEFAULT_API,
+    *,
+    horizon_start: date | None = None,
+    use_priority_engine: bool = True,
+) -> tuple[list[MaintenanceTask], dict[str, CorridorAvailability]]:
     """Fetch every corridor carrying demand, its free windows, and the backlog.
 
     Uses `hasSyntheticDemand=true`, which is the indexed filter T5 added - so
     this pulls the ~30 relevant corridors rather than all 10,149.
+
+    `use_priority_engine=False` reproduces T6's severity-only placeholder, which
+    is what makes a genuine before/after comparison possible rather than a
+    remembered one.
     """
     corridor_list = _get(f"{api_base}/corridors?hasSyntheticDemand=true&limit=200")["data"]
 
@@ -60,19 +70,69 @@ def load_scenario(api_base: str = DEFAULT_API) -> tuple[list[MaintenanceTask], d
         )
 
     task_payload = _get(f"{api_base}/tasks?limit=200")["data"]
-    tasks = [
-        MaintenanceTask(
-            task_id=task["_id"],
-            corridor_id=task["corridorId"],
-            department=task["department"],
-            duration_minutes=task["estBlockDurationMins"],
-            sla_due_date=date.fromisoformat(task["slaDueDate"]),
-            # PLACEHOLDER (T6): severity stands in for T7's FR2.3 priority score.
-            priority=task["severity"],
-            depends_on_task_id=task.get("dependsOnTaskId"),
-            required_resource_ids=tuple(task.get("requiredResourceIds") or []),
+
+    # Asset criticality is a REAL input to FR2.3 (T4 computed it from measured
+    # train counts), so the priority engine needs the assets joined in.
+    asset_payload = _get(f"{api_base}/assets?limit=200")["data"]
+    criticality = {asset["_id"]: asset["criticalityScore"] for asset in asset_payload}
+
+    as_of = horizon_start or date.today()
+    tasks = []
+    for task in task_payload:
+        if use_priority_engine:
+            breakdown = score_task(
+                PriorityInputs(
+                    task_id=task["_id"],
+                    severity=task["severity"],
+                    asset_criticality_score=criticality[task["assetId"]],
+                    sla_due_date=date.fromisoformat(task["slaDueDate"]),
+                    as_of=as_of,
+                    # FR2.2 stays null until T16; the engine ignores it.
+                    failure_risk_score=task.get("failureRiskScore"),
+                )
+            )
+            priority, is_placeholder = breakdown.solver_priority, False
+        else:
+            priority, is_placeholder = task["severity"], True
+
+        tasks.append(
+            MaintenanceTask(
+                task_id=task["_id"],
+                corridor_id=task["corridorId"],
+                department=task["department"],
+                duration_minutes=task["estBlockDurationMins"],
+                sla_due_date=date.fromisoformat(task["slaDueDate"]),
+                priority=priority,
+                depends_on_task_id=task.get("dependsOnTaskId"),
+                required_resource_ids=tuple(task.get("requiredResourceIds") or []),
+                priority_is_placeholder=is_placeholder,
+            )
         )
-        for task in task_payload
-    ]
 
     return tasks, corridors
+
+
+def load_priority_queue(
+    api_base: str = DEFAULT_API, *, horizon_start: date | None = None
+) -> list:
+    """FR2.4 - the ranked queue with per-task breakdowns, straight from the API."""
+    from app.core.priority import rank_tasks
+
+    task_payload = _get(f"{api_base}/tasks?limit=200")["data"]
+    asset_payload = _get(f"{api_base}/assets?limit=200")["data"]
+    criticality = {asset["_id"]: asset["criticalityScore"] for asset in asset_payload}
+    as_of = horizon_start or date.today()
+
+    return rank_tasks(
+        [
+            PriorityInputs(
+                task_id=task["_id"],
+                severity=task["severity"],
+                asset_criticality_score=criticality[task["assetId"]],
+                sla_due_date=date.fromisoformat(task["slaDueDate"]),
+                as_of=as_of,
+                failure_risk_score=task.get("failureRiskScore"),
+            )
+            for task in task_payload
+        ]
+    )

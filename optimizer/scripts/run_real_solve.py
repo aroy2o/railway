@@ -20,12 +20,14 @@ HORIZON_START = date(2026, 8, 24)  # Monday after the dataset reference date
 
 def main() -> int:
     try:
-        tasks, corridors = load_scenario()
+        tasks, corridors = load_scenario(horizon_start=HORIZON_START)
     except BackendUnavailable as exc:
         print(f"backend unavailable: {exc}", file=sys.stderr)
         return 1
 
     print(f"loaded {len(tasks)} tasks across {len(corridors)} corridors")
+    print(f"priority source: FR2.3 engine (range "
+          f"{min(t.priority for t in tasks)}-{max(t.priority for t in tasks)})")
 
     result = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
     payload = result.as_dict()

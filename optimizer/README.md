@@ -46,7 +46,7 @@ without starting a server (`CLAUDE.md` Python convention).
 | Module | Task | Implements | Status |
 |---|---|---|---|
 | `scheduler.py` | T6 | CP-SAT model + solve (PRD Section 13) | **done** |
-| `priority.py` | T7 | Asset criticality + priority scoring (FR2) | next |
+| `priority.py` | T7 | Priority scoring + ranked queue (FR2.3/FR2.4) | **done** |
 | `baseline.py` | T8 | Naive per-department scheduler (FR9.1) | pending |
 
 ---
@@ -86,9 +86,42 @@ priority task (10,000) always beats the worst possible waste penalty on one
 window (~1,440 + 500), so coverage is never traded for tidiness. Everything else
 breaks ties. Full multi-term objective with policy sliders is T23 (D-023).
 
-`MaintenanceTask.priority` is a **placeholder** carrying severity 1–5 until T7
-computes the real FR2.3 score. The decision log flags every entry with
-`priorityIsPlaceholder: true` so no downstream consumer mistakes it.
+`MaintenanceTask.priority` now carries the real FR2.3 score from
+`app/core/priority.py` (0–100), and the decision log reports
+`priorityIsPlaceholder: false`. Set `use_priority_engine=False` in
+`load_scenario` to reproduce T6's severity-only behaviour for comparison.
+
+---
+
+## The priority engine (`app/core/priority.py`)
+
+Implements FR2.3 (one score) and FR2.4 (ranked queue with a visible breakdown).
+
+```
+priority = 100 x ( 0.35 x severity/5
+                 + 0.30 x assetCriticalityScore/100     <- real (FR2.1)
+                 + 0.20 x sla_urgency                    <- 0..1 over 90 days
+                 + 0.15 x sla_breach )                   <- 0..1 over 60 days past due
+```
+
+Ordered on one principle: **the physical state of the asset outranks the
+paperwork clock.** Additive rather than multiplicative because FR2.4 asks which
+factor dominated, and a product cannot be decomposed (D-026).
+
+Overdue urgency lives here rather than in the solver, because D-020 keeps SLA
+soft — 18 of 89 real tasks are already past due, and a hard deadline would make
+them permanently unschedulable (D-027).
+
+**FR2.2 `failureRiskScore` is accepted and deliberately unused** until T16.
+`PriorityBreakdown.uses_failure_risk` reports `False` so nobody mistakes this for
+a risk-aware score.
+
+### Effect on the real corpus
+
+Tied pairs among the 89 tasks drop from **1,057 to 11**. The scheduled set is
+unchanged (36/53) because every deferral on this corpus is structural and there
+are no capacity contests for priority to arbitrate — see D-028 for the full
+before/after and why that is the expected result rather than a failure.
 
 ### Running it against real data
 
