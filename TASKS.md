@@ -92,6 +92,12 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 ---
 
+## Integration checkpoints
+
+- **2026-08-22 @ `8bac58b`** — [CHECKPOINT.md](CHECKPOINT.md): full T5→T9 regression pass before
+  T10. Pipeline determinism, seed idempotency, D-018 indexes, 232 tests across four layers, and
+  the real-corpus result over live HTTP all verified against documentation. **No fixes required.**
+
 ## Session log
 
 _Append a dated one-line entry here each session — what was completed, what's next._
