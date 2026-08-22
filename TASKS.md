@@ -37,10 +37,13 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
       <br>_**Overdue handling** (the gap D-020 left): two terms, `sla_urgency` (0→1 over 90 days, PRD 5.2's longest SLA tier) and `sla_breach` (0→1 over 60 days past due, then capped so ageing alone cannot dominate the queue). D-027._
       <br>_**Before/after solve is a real second run, not a claim:** scheduled set **identical** (36/53), 21 tasks moved day. Expected, and explained in D-028 — every deferral on this corpus is structural, so there is nothing for priority to arbitrate. A test pins the equality so the shift is noticed when contention rises._
       <br>_Still deferred: **T16** owns `failureRiskScore` (FR2.2) — accepted on the input and deliberately unused rather than faked._
-- [ ] `todo` — **T8**: Naive baseline algorithm (independent per-department scheduling, FR9.1) — must be real, not mocked
-      <br>_Reuse T6's input dataclasses (`MaintenanceTask`, `CorridorAvailability`) and result shape (`ScheduleResult`) so T14's comparison screen diffs like against like._
-      <br>_⚠️ The baseline must be **worse for a structural reason**, not by being badly written: each department schedules independently with no cross-department visibility, so it cannot batch and will double-book windows other departments already claimed._
-      <br>_⚠️ 53 of 89 tasks are structurally unschedulable for **both** engines (D-024). The comparison must not read as "AI schedules 36, baseline schedules 20" without stating that 53 are impossible for either — that would be exactly the fabricated-improvement trap PRD Section 18 warns about._
+- [x] `done` — **T8**: Naive baseline algorithm (independent per-department scheduling, FR9.1) — must be real, not mocked
+      <br>_`optimizer/app/core/baseline.py` — each department runs an independent FCFS pass with a clean view of the calendar, so double-booking is structural rather than introduced. Reuses T6's input dataclasses and `ScheduledBlock`/`DeferredTask`, with a `BaselineResult` shaped for direct diffing. 15 new tests (85 in `/optimizer`)._
+      <br>_Ran: `cd optimizer && .venv/bin/python -m scripts.run_comparison`_
+      <br>_**Real result on the contestable 36:** baseline 36/36 scheduled, **6 double-bookings, 605 double-booked minutes, 3 over-subscribed windows, 0 batches**. Optimizer: 36/36, 0 conflicts, 2 batches._
+      <br>_⚠️ **The optimizer schedules NO more tasks than the baseline** — identical at 1/2/3/7-day horizons. Any "AI schedules N% more" headline would be false. The advantage is executability and coordination (D-031)._
+      <br>_⚠️ **The baseline's utilisation is HIGHER (77.01% vs 74.33%)** and that is the defect, not an advantage: same 4,880 minutes crammed into 24 windows instead of 25 by over-subscribing 3. Never show utilisation without the conflict count beside it._
+      <br>_FCFS orders by `dateRaised`, deliberately not `slaDueDate` — that would be earliest-deadline-first and would flatter the baseline (D-029). Added an optional `date_raised` field to `MaintenanceTask`; additive only, no constraint or objective logic touched._
 - [ ] `todo` — **T9**: FastAPI service wrapping T6/T7/T8 as `/prioritize`, `/optimize`, `/baseline` endpoints
 - [ ] `todo` — **T10**: Express API — auth (JWT), CRUD for tasks/corridors/assets, orchestration calls to FastAPI service
       <br>_**Partially done.** Read-only routes exist and are tested: `/api/corridors`, `/api/corridors/:id`, `/api/assets`, `/api/assets/:id`, `/api/tasks`, `/api/tasks/:id`, `/api/resources`, `/api/provenance` — all validated, paginated (limit capped at 200) and using the shared `ApiError` envelope._
@@ -51,6 +54,8 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 - [ ] `todo` — **T12**: Gantt/corridor timeline component (weekly/monthly toggle, department color-coding)
 - [ ] `todo` — **T13**: Controller Dashboard — KPI strip, priority queue, "Generate schedule" trigger
 - [ ] `todo` — **T14**: Baseline vs AI comparison screen (FR9.3) — real computed metrics table
+      <br>_⚠️ **Read D-031 first.** Draw the comparison from `structurally_contestable()` (36 tasks), not all 89. Do not lead with task count — both engines schedule 36/36. Lead with conflicts (6 → 0) and batching (0 → 2)._
+      <br>_⚠️ Utilisation must never appear without the conflict count: the baseline's 77.01% beats the AI's 74.33% purely by over-subscribing windows._
 - [ ] `todo` — **T15**: Manual override UI + backend re-validation against constraints (FR6.2/FR3)
 
 ## 🟠 Strong differentiators (start only once all 🔴 above is `done`)
@@ -87,6 +92,7 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 _Append a dated one-line entry here each session — what was completed, what's next._
 
+- **2026-08-22** — T8 (naive baseline) complete. Real FCFS per-department algorithm producing 6 genuine double-bookings and 605 double-booked minutes on the real corpus, against the optimizer's zero. Key framing finding: throughput is **identical** (36/36 both) at every horizon, so the honest claim is coordination and feasibility, not volume — and the baseline's higher utilisation is an over-subscription artefact (D-031). Next: **T9 — FastAPI endpoints** wrapping both solver cores.
 - **2026-08-22** — T7 (priority engine) complete. FR2.3 score + FR2.4 ranked queue, weights measured against four alternatives (ties 1,057 → 11). Wired into the solver and re-run for real: scheduled set unchanged at 36/53, which D-028 explains rather than explains away. Next: **T8 — the naive baseline**.
 - **2026-08-22** — T6 (CP-SAT scheduler) complete. Built and hand-verified in isolation first, then run on the real corpus: OPTIMAL in 0.65 s, 36/89 scheduled, all 53 deferrals structural. Found and fixed an INFEASIBLE-making batching constraint that the hand-built tests could not surface. Resource conflicts (11) and dependency violations (5) are detected and reported rather than silently shipped — quantified gaps for T25 and T24. Next: **T7 — priority engine**, which replaces T6's severity placeholder.
 - **2026-08-22** — T5 complete, plus read-only slices of T10 and T11 so the pipeline output is browsable. Six Mongoose models, an idempotent seed script, eight read-only API routes and six frontend routes. Found and fixed a silent full-collection-scan caused by abandoned background index builds. All 🔴 tier — no Controller Dashboard or Gantt (T12/T13). Next: **T6 — the CP-SAT scheduler**, the first real optimizer milestone.

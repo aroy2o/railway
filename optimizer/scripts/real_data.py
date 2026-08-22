@@ -106,6 +106,7 @@ def load_scenario(
                 depends_on_task_id=task.get("dependsOnTaskId"),
                 required_resource_ids=tuple(task.get("requiredResourceIds") or []),
                 priority_is_placeholder=is_placeholder,
+                date_raised=date.fromisoformat(task["dateRaised"]),
             )
         )
 

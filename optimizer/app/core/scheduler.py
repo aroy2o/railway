@@ -134,6 +134,10 @@ class MaintenanceTask:
     #: difference instead of assuming. Defaults True so an un-migrated caller
     #: is honest by default rather than silently claiming a real score.
     priority_is_placeholder: bool = True
+    #: When the defect was raised. Unused by the CP-SAT model - it is here for
+    #: the FR9.1 baseline (T8), whose first-come-first-served ordering needs a
+    #: genuine arrival time. Optional so existing callers are unaffected.
+    date_raised: date | None = None
 
 
 @dataclass(frozen=True)

@@ -47,7 +47,7 @@ without starting a server (`CLAUDE.md` Python convention).
 |---|---|---|---|
 | `scheduler.py` | T6 | CP-SAT model + solve (PRD Section 13) | **done** |
 | `priority.py` | T7 | Priority scoring + ranked queue (FR2.3/FR2.4) | **done** |
-| `baseline.py` | T8 | Naive per-department scheduler (FR9.1) | pending |
+| `baseline.py` | T8 | Naive per-department scheduler (FR9.1) | **done** |
 
 ---
 
@@ -187,3 +187,52 @@ Deliberately lean; libraries are added by the task that needs them.
 `scikit-learn`/`lifelines` arrive with the risk model (T16) and `anthropic` with
 `/explain` (T18). OR-Tools is installed from the start so an install failure
 surfaces now rather than on the day the solver is written.
+
+
+---
+
+## The naive baseline (`app/core/baseline.py`)
+
+Implements PRD FR9.1 / Section 12 — the current BDMS process, where each
+department books blocks for its own work with no visibility of the others. It
+exists so T14's comparison shows a **real computed** "before", never a
+hand-typed one.
+
+```bash
+.venv/bin/python -m scripts.run_comparison
+```
+
+### How it is worse, structurally
+
+Not by being badly written. Two failure modes, both unreachable-by-design for
+the optimizer:
+
+1. **No cross-department batching.** Blocks are built per department per window,
+   so a possession never serves two departments. Asserted as an invariant.
+2. **Double-booking.** Each department's pass starts from a clean view of the
+   calendar, so two departments take the same window at the same clock time.
+
+A department's own pass *is* coordinated — the same office knows what it already
+requested. Only cross-department visibility is missing, which is exactly the
+problem statement's complaint (D-030).
+
+Ordering is first-come-first-served by `dateRaised`, **not** by `slaDueDate` —
+that would be earliest-deadline-first, a genuinely good heuristic that would
+flatter the baseline (D-029).
+
+### Result on the real corpus (contestable subset, weekly horizon)
+
+| Metric | Baseline | AI-optimised |
+|---|---:|---:|
+| Contestable tasks scheduled | 36/36 | 36/36 |
+| Cross-department batches | 0 | 2 |
+| Double-booking conflicts | 6 | 0 |
+| Double-booked minutes | 605 | 0 |
+| Over-subscribed windows | 3 | 0 |
+| Block utilisation | 77.01% | 74.33% |
+
+**Read that table carefully.** The optimizer schedules no more work than the
+baseline, and the baseline's utilisation is *higher* — because it crams the same
+4,880 minutes into 24 windows instead of 25 by over-subscribing three of them.
+The advantage is feasibility and coordination, not throughput. See D-031 before
+building any comparison screen.

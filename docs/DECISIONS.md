@@ -879,3 +879,112 @@ objective is flat across days for a task whose SLA any day satisfies — the day
 dimension is under-determined. Adding an earliness preference would stabilise it
 and get work done sooner, but that is an objective change and belongs with T23's
 policy weights, not here.
+
+---
+
+## D-029 — The baseline orders by arrival date, deliberately not by deadline
+
+**Date:** 2026-08-22 · **Task:** T8
+
+**Decision.** Within a department, the FR9.1 baseline works its queue by
+`date_raised` ascending, breaking ties on task id.
+
+**Why.** PRD Section 12 specifies first-come-first-served, and FCFS means
+arrival order. There is no submission timestamp in the data; the date the defect
+was raised is the closest honest analogue, and a real block-demand queue is
+genuinely worked in the order requests arrive. `dateRaised` has 50 distinct
+values across the 89 tasks, so it orders the queue meaningfully rather than
+collapsing into a tie-break.
+
+**The alternative was rejected because it would have been too good.** Ordering by
+`slaDueDate` is earliest-deadline-first — a genuinely effective scheduling
+heuristic. Using it would quietly make the "naive" baseline smarter than the
+process it represents, and any comparison drawn against it would understate the
+optimizer's advantage while looking rigorous. There is a test
+(`test_ordering_is_not_earliest_deadline_first`) specifically to stop that
+creeping back in.
+
+**Consequence.** `MaintenanceTask` gained an optional `date_raised` field. It is
+additive, defaulted, and untouched by the CP-SAT model — no constraint or
+objective logic changed.
+
+---
+
+## D-030 — Departments are blind to each other, not to themselves
+
+**Date:** 2026-08-22 · **Task:** T8
+
+**Decision.** Each department's scheduling pass tracks its own window
+consumption but starts from a completely clean view of what other departments
+have claimed. Collisions are detected and reported afterwards; they are never
+prevented.
+
+**Why the asymmetry matters.** Modelling a department as globally blind would be
+a strawman — no planner double-books their own crew, and a baseline that did so
+would be beatable by trivially better bookkeeping rather than by coordination.
+The complaint in the problem statement is specifically about *cross-department*
+visibility, so that is precisely and only what this algorithm lacks. That makes
+the resulting conflicts a property of the process rather than of sloppy code.
+
+**Conflicts are the output, not a defect.** PRD Section 12 wants the failure
+demonstrated. Two kinds are reported:
+
+* **Double-booking** — two departments holding the same corridor at overlapping
+  clock times. Both crews arrive; one is turned away.
+* **Over-subscription** — a window claimed for more work than it can hold.
+
+**Blocks are never merged across departments**, even when two departments take
+the same window. They did not agree a shared possession; they each requested one,
+unaware of the other. Merging them would hide the conflict *and* invent a batch
+the algorithm cannot produce.
+
+---
+
+## D-031 — The comparison is drawn from the contestable subset, and the honest headline is not throughput
+
+**Date:** 2026-08-22 · **Task:** T8
+
+**Decision.** T14's comparison must be computed over the **36 structurally
+contestable tasks**, not all 89, and must not lead with a task-count claim.
+
+**Why the subset.** 53 of 89 tasks are longer than any window their corridor
+offers (D-024). That is a fact about the timetable, identical for both
+algorithms. Comparing over the full backlog would credit the optimizer for 53
+tasks nothing could have placed. `structurally_contestable()` computes the set
+so both engines and T14 use one definition.
+
+**Why not throughput — the finding that matters most here.** Measured on the
+real corpus at four horizons:
+
+| Horizon | Baseline scheduled | Optimizer scheduled |
+|---|---:|---:|
+| 1 day | 32/36 | 32/36 |
+| 2 days | 34/36 | 34/36 |
+| 3 days | 36/36 | 36/36 |
+| 7 days | 36/36 | 36/36 |
+
+**The optimizer never schedules more tasks than the baseline on this dataset.**
+Any "the AI schedules N% more work" headline would be false. The real difference
+is that the baseline's plan is **not executable**:
+
+| Metric | Baseline | AI-optimised |
+|---|---:|---:|
+| Contestable tasks scheduled | 36/36 | 36/36 |
+| Cross-department batches | **0** | **2** |
+| Double-booking conflicts | **6** | **0** |
+| Double-booked minutes | **605** | **0** |
+| Over-subscribed windows | **3** | **0** |
+
+**And a trap inside the trap: the baseline's utilisation looks better.** It
+reports 77.01% against the optimizer's 74.33%. That is not an advantage — it is
+the defect showing through. Both place the same 4,880 minutes of work, but the
+baseline fits them into 24 windows instead of 25 by stacking 605 minutes into 3
+windows that cannot physically hold them. Utilisation must never be shown
+without the conflict count beside it, or the screen will read as the baseline
+outperforming the optimizer.
+
+**So the honest claim is about coordination and feasibility, not volume:** the
+baseline produces a schedule that double-books three corridors and batches
+nothing; the optimizer produces one that is conflict-free and shares two
+possessions across departments. That is a narrower claim than "the AI does more
+work" and it is the one the data supports.
