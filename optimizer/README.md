@@ -126,16 +126,15 @@ before/after and why that is the expected result rather than a failure.
 ### Running it against real data
 
 ```bash
-# needs the backend API up and `npm run seed` done
-.venv/bin/python -m scripts.run_real_solve
+# needs the backend API, MongoDB, `npm run seed`, and this service running
+.venv/bin/python -m scripts.run_comparison
 ```
 
-`scripts/real_data.py` is a **dev harness, not the production path**. PRD
-Section 11 puts Node in front of MongoDB: the Controller triggers a schedule,
-Node gathers the inputs and POSTs them to `/optimize` (task T9). The Python
-service never talks to MongoDB itself. The harness reads through the T5
-read-only API so T6 could be validated against the real corpus before that
-endpoint exists.
+`scripts/real_data.py` builds a request payload from the seeded corpus and
+`scripts/run_comparison.py` POSTs it to the live endpoints — they stand in for
+Node's gathering step so the endpoints can be exercised end to end without an
+orchestration layer. Neither is on the request path.
+(`scripts/run_real_solve.py` was removed when `/optimize` landed.)
 
 ### Result on the real corpus (89 tasks, 30 corridors, weekly horizon)
 
@@ -168,10 +167,56 @@ runs (D-022).
 |---|---|---|
 | `GET` | `/health` | Liveness. |
 | `GET` | `/health/ready` | `503` unless OR-Tools CP-SAT is genuinely usable. |
+| `POST` | `/prioritize` | FR2.4 ranked queue with per-factor breakdowns. |
+| `POST` | `/optimize` | FR3 CP-SAT block schedule (PRD Section 13). |
+| `POST` | `/baseline` | FR9.1 naive per-department schedule (PRD Section 12). |
 | `GET` | `/docs`, `/openapi.json` | Generated API contract. |
 
-`/prioritize`, `/optimize` and `/baseline` land with task T9; `/whatif` with
-T20 and `/explain` with T18.
+`/whatif` lands with T20 and `/explain` with T18.
+
+### The scheduling endpoints
+
+Node gathers inputs from MongoDB and POSTs them here; **this service never
+touches the database**. The payload is a clean intermediate shape rather than
+raw documents, with the asset-criticality join already resolved by Node — see
+D-032.
+
+```jsonc
+POST /optimize        // and /baseline, same body
+{
+  "horizonStart": "2026-08-24",
+  "horizonDays": 7,
+  "corridors": [
+    { "corridorId": "GZB-SBB",
+      "dailyWindows": [{ "startMinute": 68, "endMinute": 122 }],
+      "lowConfidence": false }
+  ],
+  "tasks": [
+    { "taskId": "TSK-00042", "corridorId": "GZB-SBB", "department": "S&T",
+      "estBlockDurationMins": 120, "slaDueDate": "2026-10-18", "severity": 1,
+      "assetCriticalityScore": 90.75,   // REAL, joined by Node
+      "dateRaised": "2026-07-20",       // load-bearing for /baseline's FCFS
+      "dependsOnTaskId": null, "requiredResourceIds": ["RES-D04-signal-test-van"] }
+  ]
+}
+```
+
+`/prioritize` takes `{ tasks, asOf }` and requires `assetCriticalityScore` —
+scoring without it would silently produce a weaker ranking that still looked
+authoritative.
+
+Responses are the solver dataclasses' `as_dict()`, returned **unfiltered on
+purpose**: a `response_model` would silently drop any undeclared field, and the
+honesty fields (`priorityIsPlaceholder`, `usesFailureRisk`, `knownGaps`, the
+baseline's conflict report) are exactly what would go missing. See D-033.
+
+`/baseline` additionally returns `contestableTaskIds` so T14 cannot draw the
+comparison from the full backlog (D-031), and warns when `dateRaised` is absent.
+
+Validation is strict at the boundary: unknown fields, a task referencing an
+absent corridor, duplicate ids, overlapping windows, a `lowConfidence` corridor,
+an oversized body or a horizon past the configured ceiling all return a clean
+422/413 rather than failing inside the solver.
 
 ### Why readiness builds a model
 

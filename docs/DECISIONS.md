@@ -988,3 +988,74 @@ baseline produces a schedule that double-books three corridors and batches
 nothing; the optimizer produces one that is conflict-free and shares two
 possessions across departments. That is a narrower claim than "the AI does more
 work" and it is the one the data supports.
+
+---
+
+## D-032 — The API contract is a clean intermediate shape, not MongoDB documents
+
+**Date:** 2026-08-22 · **Task:** T9
+
+**Decision.** `/optimize`, `/baseline` and `/prioritize` take a narrow payload
+describing only what a solve needs — corridors with their free windows, and
+tasks with the asset-criticality join already resolved. They do not accept the
+documents Node happens to hold, and the Python service still never touches
+MongoDB.
+
+**Why.** Two reasons, both about coupling. A schema change in T5's collections
+must not break the optimizer; and the contract then documents exactly what a
+solve depends on, which is far less than a corridor or task document carries.
+It also puts the joins where they belong: only Node can reach the `assets`
+collection, so `assetCriticalityScore` arrives already resolved onto the task —
+the data flow PRD Section 11 describes.
+
+**`extra="forbid"` on every request model.** An unknown field is a 422, not a
+silent drop. This is not pedantry: a typo'd `dateRaisd` would otherwise be
+ignored, and the baseline's first-come-first-served ordering would quietly
+degrade to "everything sorts last" with no error anywhere (D-029). There is a
+test for exactly that typo.
+
+**Validation that Pydantic cannot express** lives in model validators: a task
+referencing a corridor absent from the payload, duplicate ids, a dangling
+`dependsOnTaskId`, overlapping windows on one corridor. Each returns a 422
+naming the offending ids, rather than surfacing as a `KeyError` three frames
+inside the solver.
+
+**Alternative considered.** Accepting raw documents and letting the service pick
+what it needs. Rejected: it makes the optimizer depend on the database schema,
+and it hides which fields actually matter.
+
+---
+
+## D-033 — Responses are returned unfiltered, and pinned by tests instead of a schema
+
+**Date:** 2026-08-22 · **Task:** T9
+
+**Decision.** The scheduling endpoints declare **no** `response_model`. Each
+returns the dataclass's own `as_dict()` verbatim.
+
+**Why — this is an honesty risk, not a style preference.** FastAPI's
+`response_model` silently *drops* any field the model does not declare. Every
+honesty-critical field this project has built would be one schema drift away
+from vanishing: `priorityIsPlaceholder`, `usesFailureRisk`, the solver's
+`knownGaps` naming the constraints T24 and T25 have not yet implemented, and the
+baseline's double-booking report. A plan that quietly stopped reporting its own
+gaps would look *better* than the one that reports them — the worst possible
+direction for a failure.
+
+That is the same category of risk as D-015 (provenance surviving the database)
+and D-018 (indexes actually being built), appearing in a new layer.
+
+So the dataclasses' `as_dict()` stays the single source of truth for the
+response shape, and a test asserts each honesty field survives the round trip.
+The shape is pinned by something that fails loudly, rather than by a schema that
+can quietly subtract from it.
+
+**What this costs.** The OpenAPI document describes request bodies precisely but
+responses only loosely, so Node codes against the documented JSON shape and the
+tests rather than against a generated response schema. Given the alternative is
+a class of silent data loss, that is a good trade.
+
+**Also from this task:** `/baseline` returns `contestableTaskIds` alongside its
+result, so T14 cannot accidentally draw the comparison from all 89 tasks
+(D-031), and warns explicitly when `dateRaised` is missing rather than letting
+FCFS ordering degrade unnoticed.

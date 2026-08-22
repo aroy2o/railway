@@ -50,6 +50,18 @@ class Settings(BaseSettings):
     # service must start and serve every other endpoint without it.
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
 
+    # --- request limits -----------------------------------------------------
+    # Bounds on what a single solve request may contain. PRD Section 7 sizes the
+    # weekly problem at 50-100 tasks; these ceilings sit well above that so a
+    # legitimate request is never refused, while a malformed or oversized one is
+    # rejected at the boundary instead of being discovered as a hung solve.
+    max_request_tasks: int = Field(default=2000, gt=0, alias="MAX_REQUEST_TASKS")
+    max_request_corridors: int = Field(default=2000, gt=0, alias="MAX_REQUEST_CORRIDORS")
+    max_request_bytes: int = Field(
+        default=8 * 1024 * 1024, gt=0, alias="MAX_REQUEST_BYTES"
+    )
+    max_horizon_days: int = Field(default=90, gt=0, le=365, alias="MAX_HORIZON_DAYS")
+
     @field_validator("log_level")
     @classmethod
     def _normalise_log_level(cls, value: str) -> str:

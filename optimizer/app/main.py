@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.config import get_settings
 from app.logging_config import configure_logging
-from app.routers import health
+from app.routers import health, optimizer
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,29 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
+    app.include_router(optimizer.router)
+
+    @app.middleware("http")
+    async def limit_body_size(request: Request, call_next):
+        """Refuse an oversized body before it is parsed.
+
+        Starlette does not bound request size by default, so a large payload
+        would be fully read and parsed before any handler saw it. Same
+        fail-loud-at-the-boundary posture as the Express validate() middleware.
+        """
+        settings = get_settings()
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > settings.max_request_bytes:
+            return JSONResponse(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                content={
+                    "error": {
+                        "code": "PAYLOAD_TOO_LARGE",
+                        "message": f"body exceeds {settings.max_request_bytes} bytes",
+                    }
+                },
+            )
+        return await call_next(request)
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:

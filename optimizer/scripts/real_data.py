@@ -1,16 +1,14 @@
-"""Load a real scheduling scenario from the backend API.
+"""Build a real scheduling payload from the backend API.
 
-DEV HARNESS, NOT THE PRODUCTION PATH. PRD Section 11 puts Node in front of
-MongoDB: the Controller triggers a schedule, Node gathers tasks, corridors and
-resources, and POSTs them to this service's /optimize endpoint (task T9). The
-Python service never talks to MongoDB itself - it could not use the Mongoose
-models anyway, and a second writer to the same database is exactly the coupling
-the microservice split exists to avoid.
+WHAT THIS IS NOW. Since T9, the production path is Node gathering inputs from
+MongoDB and POSTing them to /optimize, /baseline and /prioritize. This module is
+the *test and development* stand-in for Node's gathering step: it reads the same
+data through the T5 read-only API and shapes it into the same request payload.
 
-This module exists so T6 can validate the solver against the real seeded corpus
-before that endpoint exists. It reads through the T5 read-only API rather than
-data/processed/*.json, because T5 established the database as the source of
-truth. When T9 lands, the request payload replaces this and it can go.
+It exists so the optimizer's tests can exercise the endpoints against the real
+seeded corpus without a Node orchestration layer, and so a developer can
+reproduce a solve locally. It is NOT on the request path, and the Python service
+still never talks to MongoDB - that stays Node's alone.
 """
 
 from __future__ import annotations
@@ -137,3 +135,56 @@ def load_priority_queue(
             for task in task_payload
         ]
     )
+
+
+def build_payload(
+    api_base: str = DEFAULT_API, *, horizon_start: date, horizon_days: int = 7
+) -> dict:
+    """Shape the seeded corpus into a /optimize or /baseline request body.
+
+    Mirrors what Node will send: corridors with their real free windows, and
+    tasks with the asset criticality join already resolved.
+    """
+    corridor_list = _get(f"{api_base}/corridors?hasSyntheticDemand=true&limit=200")["data"]
+
+    corridors = []
+    for summary in corridor_list:
+        detail = _get(f"{api_base}/corridors/{summary['_id']}")["data"]
+        corridors.append(
+            {
+                "corridorId": detail["_id"],
+                "dailyWindows": [
+                    {"startMinute": w["startMin"], "endMinute": w["endMin"]}
+                    for w in detail.get("maxDailyBlockWindows", [])
+                ],
+                "lowConfidence": bool((detail.get("occupancy") or {}).get("lowConfidence", False)),
+            }
+        )
+
+    task_payload = _get(f"{api_base}/tasks?limit=200")["data"]
+    asset_payload = _get(f"{api_base}/assets?limit=200")["data"]
+    criticality = {asset["_id"]: asset["criticalityScore"] for asset in asset_payload}
+
+    tasks = [
+        {
+            "taskId": task["_id"],
+            "corridorId": task["corridorId"],
+            "department": task["department"],
+            "estBlockDurationMins": task["estBlockDurationMins"],
+            "slaDueDate": task["slaDueDate"],
+            "severity": task["severity"],
+            "assetCriticalityScore": criticality[task["assetId"]],
+            "dateRaised": task["dateRaised"],
+            "dependsOnTaskId": task.get("dependsOnTaskId"),
+            "requiredResourceIds": task.get("requiredResourceIds") or [],
+            "failureRiskScore": task.get("failureRiskScore"),
+        }
+        for task in task_payload
+    ]
+
+    return {
+        "tasks": tasks,
+        "corridors": corridors,
+        "horizonStart": horizon_start.isoformat(),
+        "horizonDays": horizon_days,
+    }
