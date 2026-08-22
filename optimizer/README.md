@@ -17,6 +17,14 @@ python3 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
+> **Always call the binaries through `.venv/bin/`, even with the venv activated.**
+> A bare `uvicorn app.main:app` can pick up a user-level install from
+> `~/.local/bin` that shadows the venv, launches under system Python and fails
+> with `ModuleNotFoundError: No module named 'pydantic_settings'`. The traceback
+> gives it away - the frames come from `~/.local/lib/...` rather than
+> `optimizer/.venv/lib64/...`. `.venv/bin/uvicorn` or
+> `.venv/bin/python -m uvicorn` avoids it entirely.
+
 Interactive API docs at <http://localhost:8000/docs>.
 
 Configuration comes from the repo-root `.env` (see `../.env.example`);
