@@ -41,13 +41,93 @@ tests/              pytest
 one-way dependency is what lets the CP-SAT model be unit-tested standalone
 without starting a server (`CLAUDE.md` Python convention).
 
-Planned `core/` modules:
+`core/` modules:
 
-| Module | Task | Implements |
-|---|---|---|
-| `scheduler.py` | T6 | CP-SAT model + solve (PRD Section 13) |
-| `priority.py` | T7 | Asset criticality + priority scoring (FR2) |
-| `baseline.py` | T8 | Naive per-department scheduler (FR9.1) |
+| Module | Task | Implements | Status |
+|---|---|---|---|
+| `scheduler.py` | T6 | CP-SAT model + solve (PRD Section 13) | **done** |
+| `priority.py` | T7 | Asset criticality + priority scoring (FR2) | next |
+| `baseline.py` | T8 | Naive per-department scheduler (FR9.1) | pending |
+
+---
+
+## The CP-SAT scheduler (`app/core/scheduler.py`)
+
+Implements PRD Section 13 / FR3. Pure: dataclasses in, a result object out. No
+FastAPI, no database, no network — so it is unit-testable standalone, which
+CLAUDE.md names as testing priority #1.
+
+### What is implemented from PRD Section 13
+
+| PRD Section 13 item | Status |
+|---|---|
+| `assign[i][j]` per task and candidate free window on its corridor | implemented |
+| Each task in at most one window; zero means deferred | implemented |
+| Sum of assigned durations ≤ window length | implemented |
+| No overlap between windows on one corridor | holds structurally (T3 emits a merged complement); asserted, not re-encoded |
+| Cross-department batching, rewarded | implemented and exercised on real data |
+| Deadline respected where feasible | implemented as a soft objective term — see D-020 |
+| Resource no-overlap (9.8) | **deferred to T25** — violations detected and reported |
+| Dependency precedence (9.7) | **deferred to T24** — violations detected and reported |
+| Weather/seasonal risk (9.9) | **deferred to T26** |
+
+### Objective (simplified PRD 13.1)
+
+```
+MAXIMIZE  10000 x priority-weighted coverage
+        +  2000 x tasks landing within SLA
+        +  3000 x windows carrying two or more departments
+        -     1 x unused minutes inside opened windows
+        -   500 x windows opened
+```
+
+The magnitudes are a **priority order, not a tuning**: covering the lowest
+priority task (10,000) always beats the worst possible waste penalty on one
+window (~1,440 + 500), so coverage is never traded for tidiness. Everything else
+breaks ties. Full multi-term objective with policy sliders is T23 (D-023).
+
+`MaintenanceTask.priority` is a **placeholder** carrying severity 1–5 until T7
+computes the real FR2.3 score. The decision log flags every entry with
+`priorityIsPlaceholder: true` so no downstream consumer mistakes it.
+
+### Running it against real data
+
+```bash
+# needs the backend API up and `npm run seed` done
+.venv/bin/python -m scripts.run_real_solve
+```
+
+`scripts/real_data.py` is a **dev harness, not the production path**. PRD
+Section 11 puts Node in front of MongoDB: the Controller triggers a schedule,
+Node gathers the inputs and POSTs them to `/optimize` (task T9). The Python
+service never talks to MongoDB itself. The harness reads through the T5
+read-only API so T6 could be validated against the real corpus before that
+endpoint exists.
+
+### Result on the real corpus (89 tasks, 30 corridors, weekly horizon)
+
+```
+status OPTIMAL | objective 865,815 | solve 0.65 s
+36 scheduled · 53 deferred · 25 blocks · 2 cross-department batches
+block utilisation 74.3%
+deferrals: EXCEEDS_LONGEST_WINDOW 53, NO_CAPACITY 0
+```
+
+All 53 deferrals are structural: the task is longer than any gap its corridor
+offers. **Zero** tasks lose a capacity contest, so on this dataset the binding
+constraint is window *length*, not block-hours (D-024).
+
+### Performance
+
+PRD Section 7 requires a weekly solve under 10 seconds for 50–100 tasks.
+Measured: **0.65 s** with one worker, comfortably inside budget. A 30-day
+horizon hits the 10-second limit and returns `FEASIBLE` rather than `OPTIMAL` —
+monthly planning (T28) should use the coarser corridor-day reservation model
+PRD Section 13 describes rather than this fine-grained one.
+
+Single-worker is the default for reproducibility, not by accident: four workers
+solve in 0.08 s but returned **different plans for identical input** across three
+runs (D-022).
 
 ## Endpoints
 

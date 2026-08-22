@@ -577,3 +577,174 @@ reads back a sample asset, task and provenance record and asserts that
 survived the round trip, and that `priorityScore` is still null. The failure it
 guards against — provenance quietly dropped by a schema change — would otherwise
 only surface as a missing badge on a dashboard nobody is checking.
+
+---
+
+## D-020 — SLA compliance is an objective reward, not a hard deadline
+
+**Date:** 2026-08-22 · **Task:** T6
+
+**Decision.** A task may be scheduled into a window after its `slaDueDate`.
+Landing on or before the deadline earns an objective bonus (`epsilon`) instead.
+
+**Why.** The data settles it: **17 of the 89 tasks are already past their SLA
+date at the horizon start**, and only 9 fall due inside the 7-day window. A hard
+deadline constraint would make those 17 permanently unschedulable — which is
+exactly backwards. Overdue maintenance is *more* urgent, not ineligible.
+
+PRD 13.1 agrees: it lists SLA compliance under MAXIMIZE as `ε × SLA Compliance`,
+an objective term. Section 13's constraint list says "task assigned before
+`slaDueDate` **where feasible**", and "where feasible" is the language of a soft
+preference.
+
+**Alternative considered.** A hard constraint with overdue tasks exempted.
+Rejected as the worst of both: it still blocks a task that is one day late while
+waving through one that is sixty days late, and the exemption threshold would be
+arbitrary.
+
+**Consequence for T7.** Overdue-ness should be folded into the *priority score*,
+where urgency belongs, rather than into feasibility. The decision log already
+reports `withinSla` per scheduled task so the shortfall stays visible.
+
+---
+
+## D-021 — A weekly horizon is the daily window pattern replayed per day
+
+**Date:** 2026-08-22 · **Task:** T6
+
+**Decision.** Candidate slots are `(corridor free window) × (day in horizon)`.
+A 7-day plan over a corridor with 3 daily windows offers 21 assignable slots.
+
+**Why.** T3's calendar is a single representative 24-hour pattern, because
+neither source carries a day-of-week or running-days field (D-010). Replaying it
+is the only expansion the data supports. It also inherits D-010's conservatism:
+every train counted as daily means the free windows are, if anything,
+understated.
+
+**What this does not do.** It cannot lengthen a window. A task needing 173
+minutes on a corridor whose longest gap is 54 minutes stays unschedulable no
+matter how many days are added — which is precisely what the real corpus shows.
+
+**Alternative considered.** Treating the week as one 10,080-minute timeline.
+Rejected: it would let a task straddle midnight into a period the timetable says
+is occupied, since the occupancy pattern repeats daily.
+
+---
+
+## D-022 — One search worker and a fixed seed, bought with measured evidence
+
+**Date:** 2026-08-22 · **Task:** T6
+
+**Decision.** `num_workers=1`, `random_seed=20260822` by default.
+
+**Why.** CP-SAT's parallel portfolio returns whichever optimal solution a worker
+finds first, so identical input can produce different — equally optimal —
+schedules. Measured on the real corpus, three runs each:
+
+| Workers | Solve time | Identical plan across 3 runs |
+|---|---|---|
+| **1** | **0.64–0.71 s** | **yes** |
+| 4 | 0.078–0.097 s | **no** |
+| 8 | 0.074–0.080 s | yes (this time — not a guarantee) |
+
+So the risk is real, not theoretical: four workers genuinely returned different
+plans for the same input.
+
+Determinism costs about 0.57 s against PRD Section 7's 10-second budget, which
+makes it nearly free. A plan that changes when nothing changed cannot be
+demoed with confidence, cannot be diffed against a baseline (T8), and cannot be
+tested. `num_workers` stays a parameter for anyone who later needs the speed.
+
+---
+
+## D-023 — Objective weights encode a priority order, not a tuning
+
+**Date:** 2026-08-22 · **Task:** T6
+
+**Decision.** Simplified PRD 13.1 objective with these magnitudes:
+
+| Term | Weight | PRD 13.1 |
+|---|---:|---|
+| Priority-weighted coverage | 10,000 / priority unit | α Maintenance Priority |
+| SLA compliance | 2,000 / task | ε SLA Compliance |
+| Cross-department batching | 3,000 / window | δ Cross-Department Batching |
+| Unused minutes in opened windows | −1 / minute | μ Unused Block Time |
+| Windows opened | −500 / window | ν Schedule Fragmentation |
+
+**Why these magnitudes.** They are a rank order, not a fit. Covering even the
+lowest-priority task earns 10,000, while the worst possible waste penalty on a
+single window is about 1,440 (a full day) plus 500 to open it. So coverage can
+never be traded away for tidiness — the correct railway answer, since deferred
+maintenance is a safety and reliability cost rather than an inconvenience. The
+remaining terms only break ties between plans that cover the same work.
+
+Verified rather than assumed: the hand-built scenario's objective was computed by
+hand as `10000×(5+2) + 2000×2 + 3000 − 0 − 500 = 76,500`, and the solver returns
+exactly 76,500.
+
+**Deferred terms**, all named in PRD 13.1 and left out here on purpose:
+`β` asset risk reduction (needs T16's failureRiskScore), `λ` train delay impact
+(T22), `ξ` weather risk (T26), `ρ` resource conflicts (T25). `γ` block
+utilisation is covered indirectly by the μ waste penalty rather than as its own
+term. Exposing all of them as policy sliders is T23.
+
+---
+
+## D-024 — Structural impossibility is separated from losing a capacity contest
+
+**Date:** 2026-08-22 · **Task:** T6
+
+**Decision.** Before the solver runs, tasks are checked against the longest
+window their corridor offers. Those that cannot fit are deferred with
+`EXCEEDS_LONGEST_WINDOW` and never enter the model; the rest compete, and any
+that lose are deferred with `NO_CAPACITY`. FR3.3 requires a reason, and these
+two are different problems needing different remedies.
+
+**Why it matters more than it sounds.** On the real corpus **53 of 89 tasks are
+structurally unfittable**, and the pattern tracks utilisation exactly: every
+corridor above ~30% utilisation has all or most of its backlog unfittable, every
+corridor below ~20% fits everything.
+
+This was checked for artefact before being accepted as a finding. Recomputing
+T3's free windows with the clearance margin and the 30-minute floor both removed
+rescues **exactly one** task — so the shortfall is real occupancy, not a
+modelling choice.
+
+**What it means.** On busy corridors the natural gaps between trains are simply
+too short for maintenance. Real railways answer that with a *traffic block* that
+displaces trains, accepting delay as the price. That is PRD 9.6's
+train-impact-aware planning — task T22 — so the deferral message names it
+explicitly rather than just reporting failure.
+
+**A second finding from the same run:** zero tasks were deferred for
+`NO_CAPACITY`. Over a 7-day horizon every task that physically fits gets placed,
+so the binding constraint on this dataset is window *length*, not block-hours. A
+test pins that, and will fail loudly if the character of the problem changes.
+
+---
+
+## D-025 — A reward variable must be free to take the value zero
+
+**Date:** 2026-08-22 · **Task:** T6
+
+**Decision.** The cross-department batching flag is constrained as
+`sum(departments_used) >= 2` **enforced only if the flag is true**, rather than
+the unconditional `flag <= sum(departments_used) - 1`.
+
+**Why.** The unconditional form is subtly fatal. For a batching-eligible window
+that ends up empty, `sum(departments_used)` is 0, so the constraint reads
+`flag <= -1` — which a boolean cannot satisfy, making the **entire model
+infeasible**.
+
+The hand-built test scenarios all happened to fill their eligible windows, so
+21 tests passed against it. The real corpus, where most eligible windows go
+unused, returned `INFEASIBLE` on the first run. There is now a regression test
+that leaves an eligible window deliberately empty.
+
+**The general rule, worth carrying into T22–T25:** when adding a rewarded
+indicator to a CP-SAT model, check it can still be zero in the null solution.
+An indicator that is only bounded *above* by a quantity that can go negative
+turns an optimisation into an infeasibility.
+
+**Alternative considered.** Adding a lower bound linking the flag to window
+occupancy. Equivalent in effect, more variables, and less obvious to read.
