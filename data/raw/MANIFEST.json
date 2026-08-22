@@ -1,0 +1,53 @@
+{
+  "sources": [
+    {
+      "key": "datameet_stations",
+      "filename": "stations.json",
+      "url": "https://raw.githubusercontent.com/datameet/railways/master/stations.json",
+      "homepage": "https://github.com/datameet/railways",
+      "licence": "CC0",
+      "description": "GeoJSON FeatureCollection of Indian Railways stations (code, name, zone, state, address, coordinates).",
+      "bytes": 1864683,
+      "sha256": "9bd5e1da3a859e5359a95f40b6009aa468efb177da4faac57ffdcd7daeb4df18",
+      "fetchedAt": "2026-08-22T15:43:16+00:00"
+    },
+    {
+      "key": "datameet_trains",
+      "filename": "trains.json",
+      "url": "https://raw.githubusercontent.com/datameet/railways/master/trains.json",
+      "homepage": "https://github.com/datameet/railways",
+      "licence": "CC0",
+      "description": "GeoJSON FeatureCollection of trains, including train type/class, origin and destination. Used for train-priority scoring (PRD 9.6) in task T3.",
+      "bytes": 14768598,
+      "sha256": "e434d9c56016ccdf2291ccd446586ef87a7fab101084efa5f68871ab27800167",
+      "fetchedAt": "2026-08-22T15:43:16+00:00"
+    },
+    {
+      "key": "datameet_schedules",
+      "filename": "schedules.json",
+      "url": "https://raw.githubusercontent.com/datameet/railways/master/schedules.json",
+      "homepage": "https://github.com/datameet/railways",
+      "licence": "CC0",
+      "description": "Every train-stop-at-station record. The stop sequences in this file are what corridor sections are derived from (PRD 5.1).",
+      "bytes": 82174280,
+      "sha256": "105d63816acb177eac30a7d156eb2d312625a42ddebd273edee810d2989878ec",
+      "fetchedAt": "2026-08-22T15:43:16+00:00"
+    },
+    {
+      "key": "datagov_isl_timetable",
+      "filename": "indian_railways_time_table_kaggle.zip",
+      "url": "https://www.kaggle.com/api/v1/datasets/download/harsh16/indian-railways-time-table-for-trains-available",
+      "homepage": "https://www.data.gov.in/catalog/indian-railways-train-time-table",
+      "licence": "Government Open Data Licence - India (data.gov.in)",
+      "description": "ISL-wise train detail (03-08-2015): per-train stop sequence with an explicit islno stop number, arrival/departure times and cumulative distance.",
+      "bytes": 1109599,
+      "sha256": "9b168ebbdf89b207c98a3024bfb50e5786756bd4eb70b5b9886f45d31fef290f",
+      "fetchedAt": "2026-08-22T15:43:16+00:00",
+      "extracted": {
+        "filename": "isl_wise_train_detail_03082015_v1.csv",
+        "bytes": 8050200,
+        "sha256": "f15f7feeb002e1eb93b6879b84bfd2707a6f06a7d5d4acaf5e7266ae5d8c0e5e"
+      }
+    }
+  ]
+}

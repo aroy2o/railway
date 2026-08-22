@@ -9,8 +9,12 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 - [x] `done` — **T1**: Repo skeleton — `/backend`, `/optimizer`, `/frontend`, `/data`, `/docs` folders, package manifests, root `docker-compose.yml` stub, `.env.example`
       <br>_Built more than an empty skeleton: all three services boot, validate their config at startup, and answer health checks. `GET /api/health/dependencies` probes React → Express → MongoDB + CP-SAT in one call and is rendered live on the landing screen, so the wiring is provably real. Includes the PRD Section 5 prototype banner, a Zod validation-middleware factory and shared `ApiError` envelope on Express, Pydantic settings + an OR-Tools readiness probe on Python, and Redux Toolkit + RTK Query on the frontend. 6 backend tests, 5 optimizer tests, all passing._
-- [ ] `todo` — **T2**: Real data ingestion script — fetch/parse `datameet/railways` station+route data, extract corridor sections (consecutive station pairs)
+- [x] `done` — **T2**: Real data ingestion script — fetch/parse `datameet/railways` station+route data, extract corridor sections (consecutive station pairs)
+      <br>_Downloaded 98 MB of real data (stations 1.86 MB, trains 14.8 MB, schedules 82.2 MB from datameet/railways; plus the data.gov.in ISL timetable via the Kaggle mirror, 8.05 MB CSV). Parsed 417,080 stop records into **8,990 stations** and **10,149 corridor sections**, with a 100% station-code join rate. Corridor derivation groups stops by train, orders by `id`, and splits on id gaps — which is what prevents a phantom `JU–PPR` section from train 04857's duplicated stop list (unit-tested). Validated: median section length 6.6 km, and median published/straight-line distance ratio **1.034**. 28 tests; rebuilds are byte-identical. Also pulled in the ISL CSV far enough to corroborate sections and supply 1,890 real published distances — the occupancy calendar itself stays T3._
+      <br>_Ran: `cd data && .venv/bin/python -m ingestion.download && .venv/bin/python -m ingestion.build_corridors`_
 - [ ] `todo` — **T3**: Real timetable ingestion — fetch/parse data.gov.in / Kaggle timetable dataset, convert to per-corridor occupied-window calendar
+      <br>_Head start from T2: the timetable is **already downloaded** (`data/raw/isl_wise_train_detail_03082015_v1.csv`, 69,006 rows with arrival/departure per stop), and `schedules.json` carries arrival/departure for all 417k stops. `trains.json` (14.8 MB, downloaded, not yet parsed) supplies train type/class for priority weighting (PRD 9.6). T3 must also populate `maxDailyBlockWindows` on each corridor, which T2 deliberately left empty._
+      <br>_⚠️ Prefer corridors with `derivedFlags.longHop == false` and a high `distinctTrains` count — see `data/README.md` "Known limitation"._
 - [ ] `todo` — **T4**: Synthetic maintenance/asset data generator (PRD 5.2) — assets, tasks, resources, dependencies, anchored to T2's corridor list
 - [ ] `todo` — **T5**: MongoDB schemas (Mongoose) for all PRD Section 15 collections
 - [ ] `todo` — **T6**: Standalone CP-SAT scheduler script (Python, no API yet) — hand-built small test scenario first, verify constraints hold (no double-booking, no resource overlap, deadlines respected)
@@ -58,6 +62,7 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 _Append a dated one-line entry here each session — what was completed, what's next._
 
+- **2026-08-22** — T2 (real corridor ingestion) complete. 98 MB downloaded from datameet/railways + the data.gov.in Kaggle mirror; 8,990 stations and 10,149 corridor sections derived from 417,080 real stop records, cross-validated against a second source. Repo put under git and pushed to `github.com/aroy2o/railway`; `claude.md`/`todo.md` renamed to `CLAUDE.md`/`TASKS.md`. Next: **T3 — timetable occupancy calendar**.
 - **2026-08-22** — T1 (repo skeleton) + TX2 (decision log) complete. All three services boot and are wired together, verified by a live `/api/health/dependencies` probe returning green for MongoDB and CP-SAT. Frontend adopted as TypeScript + Tailwind v4 + Redux Toolkit (owner's scaffold + owner's request). Next: **T2 — real corridor data ingestion** from `datameet/railways`.
 
 ---

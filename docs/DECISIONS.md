@@ -136,3 +136,91 @@ task away rather than a rewrite.
 **Known gap.** The compose file has not been verified end to end, because
 compose is not installed here. That verification is explicitly part of TX1 and
 must happen before the demo, not on the day.
+
+---
+
+## D-006 — Corridor sections derived from consecutive stops, split on `id` gaps
+
+**Date:** 2026-08-22 · **Task:** T2
+
+**Decision.** Corridor sections are derived from `schedules.json` by grouping
+stop records by `train_number`, ordering them by `id`, and taking consecutive
+pairs — **splitting the sequence wherever ids are not consecutive**. Sections
+are undirected and keyed on the sorted station-code pair.
+
+**Why.** The source has no stop-number field, so ordering had to be established
+empirically: `id` runs consecutively in travel order, unbroken for 5,022 of
+5,208 trains. Splitting on a gap handles two real defects found in the data:
+
+- Some train numbers carry a **complete duplicate copy** of their stop list
+  under a separate id block (train `04857`, ids 11615–11621 then 11813–11819).
+  Chaining through would have invented a `JU–PPR` corridor that does not exist.
+- A smaller gap means a dropped intermediate stop, so the neighbouring stations
+  are not adjacent.
+
+Splitting is asymmetric in its failure mode, which is why it was chosen: it can
+omit a real section, but it cannot fabricate one. For a system whose output is a
+maintenance plan, inventing a track section is far worse than missing one.
+
+**Alternative considered.** Ordering by `(day, departure_time)` instead. Rejected
+on evidence: 659 trains have a stop with no usable time and 22,561 records have a
+null `day`, so time-ordering fails outright on ~13% of trains, while id-ordering
+covers all of them.
+
+**Validation.** Median section length is 6.6 km (99.2% under 25 km), and for
+sections with an independently-published distance the median published /
+straight-line ratio is 1.034 — track curving slightly more than a great-circle
+line, which is the physically correct answer and not a shape a mis-parse
+produces.
+
+---
+
+## D-007 — The data.gov.in ISL timetable corroborates sections but never defines them
+
+**Date:** 2026-08-22 · **Task:** T2
+
+**Decision.** Corridor sections come exclusively from datameet's stop sequences.
+The data.gov.in ISL timetable is used only to (a) corroborate sections that
+appear in both, and (b) supply real published inter-station distances.
+
+**Why.** The two files look interchangeable and are not. **The ISL file lists
+each train's halts, not every station it passes**: its consecutive pairs have a
+median straight-line gap of 16.9 km and a maximum of 2,513 km, against 6.6 km
+for datameet. Deriving sections from it would have produced "corridors"
+spanning hundreds of kilometres and quietly corrupted every downstream
+scheduling decision.
+
+This is also why only 3,295 of 10,149 sections are corroborated — expected
+behaviour given the two files describe different things, not a data-quality
+problem.
+
+**Alternative considered.** Merging both sources' pairs into one section set.
+Rejected — it would have mixed true adjacencies with long express hops in a way
+that could not be untangled downstream.
+
+**Consequence.** The same limitation exists in weaker form within datameet
+itself: a fast train skipping halts yields a consecutive-stop pair that is not
+physically adjacent. These are flagged (`derivedFlags.longHop`, 81 of 10,149)
+rather than deleted, since the observation is real — but corridor selection in
+T4 should prefer unflagged sections with a high `distinctTrains` count.
+
+---
+
+## D-008 — Deterministic processed outputs, with provenance kept separately
+
+**Date:** 2026-08-22 · **Task:** T2
+
+**Decision.** Files in `data/processed/` contain **no wall-clock timestamp**, so
+identical raw inputs produce byte-identical outputs. Fetch times, URLs, byte
+sizes and SHA-256 hashes live in `data/raw/MANIFEST.json` instead. Both
+provenance files are committed to git; the ~98 MB of bulk data is not.
+
+**Why.** Later tasks (T3's calendar, T4's generator, TX3's demo seed) all
+re-run ingestion. If every run rewrote the outputs, there would be no cheap way
+to tell "the data changed" from "the clock moved" — and the idempotency test
+that guards this would be impossible to write.
+
+**Alternative considered.** Embedding `generatedAt` in each output file, which
+is the conventional habit. Rejected: it makes every output differ on every run
+for no informational gain, since the manifest already records fetch time against
+the input hashes that actually determine the output.

@@ -1,9 +1,11 @@
 # Data pipeline dependencies: real dataset ingestion + synthetic generation.
 #
-# Kept separate from the optimizer service so the runtime image does not carry
+# Kept separate from the optimizer service so its runtime image does not carry
 # the download/parsing stack (PRD 10.4). Scripts here write to data/processed/,
 # which the backend seeds into MongoDB.
 
-requests>=2.32,<3.0     # fetching datameet/railways + data.gov.in datasets
-pandas>=2.2             # timetable CSV parsing and corridor extraction
-numpy>=2.0              # skewed synthetic distributions (Beta, etc. - PRD 5.2)
+requests>=2.32,<3.0     # downloading datameet/railways + the data.gov.in mirror
+numpy>=2.0              # skewed synthetic distributions (Beta, etc. - PRD 5.2, task T4)
+
+# --- dev/test ---
+pytest>=8.3,<9.0

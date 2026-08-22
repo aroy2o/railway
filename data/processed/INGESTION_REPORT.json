@@ -1,0 +1,41 @@
+{
+  "task": "T2 - real corridor data ingestion (PRD 5.1)",
+  "inputs": {
+    "stations.json": {
+      "stations": 8990
+    },
+    "schedules.json": {
+      "stop_records": 417080,
+      "runs": 5400,
+      "stop_pairs_seen": 411680,
+      "skipped_self_loop": 1,
+      "skipped_unknown_station": 0,
+      "pairs_accepted": 411679
+    },
+    "isl_csv": {
+      "trains": 2810,
+      "runs": 3727,
+      "pairs_accepted": 65266,
+      "skipped_self_loop": 13
+    }
+  },
+  "outputs": {
+    "stations": 8990,
+    "corridors": 10149,
+    "corridors_corroborated_by_second_source": 3295,
+    "corridors_with_published_distance_km": 1890,
+    "corridors_with_resolved_zone": 5383,
+    "corridors_flagged_long_hop": 81
+  },
+  "distanceValidation": {
+    "samples": 1881,
+    "medianPublishedOverStraightLine": 1.034,
+    "p10": 0.898,
+    "p90": 1.344
+  },
+  "crossSourceNote": "The ISL timetable lists each train's HALTS, not every station it passes: its consecutive pairs have a median straight-line gap of 16.9 km (max 2513 km) against 6.6 km for datameet's stop sequences. It is therefore used only to corroborate sections and supply published distances - never to define them. Partial overlap between the two source's section sets is expected for that reason.",
+  "unpopulatedFields": {
+    "maxDailyBlockWindows": "populated by T3 from timetable occupancy gaps",
+    "seasonalRiskFlag": "populated by T26 from IMD/flood-prone section data"
+  }
+}

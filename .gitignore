@@ -25,12 +25,18 @@ frontend/dist/
 frontend/.vite/
 
 # --- Data -------------------------------------------------------------------
-# Downloaded source datasets and generated synthetic output are reproducible
+# Downloaded source datasets (~98 MB) and generated output are reproducible
 # from the scripts in /data, so they are not committed. Keep the folders.
 data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+
+# ...but DO commit the provenance records. They are small, and they are the
+# evidence of which bytes produced which output - which is exactly what should
+# survive in version control.
+!data/raw/MANIFEST.json
+!data/processed/INGESTION_REPORT.json
 
 # --- Editors / OS -----------------------------------------------------------
 .DS_Store
