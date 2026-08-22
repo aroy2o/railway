@@ -10,8 +10,32 @@ OR-Tools itself (PRD 10.3).
 npm install
 npm run dev     # watch mode
 npm start       # once
+npm run seed    # load data/processed/*.json into MongoDB (~20 s)
 npm test        # node --test
 ```
+
+### Seeding
+
+`npm run seed` loads the data pipeline's output into MongoDB. Build that output
+first (see `data/README.md`), then:
+
+```bash
+npm run seed
+```
+
+It is **safe to re-run**: each of the six pipeline collections is emptied and
+reloaded rather than upserted, so a second run produces identical counts and no
+duplicates. It does not touch schedules, decision logs or audit logs. The
+rationale is in `docs/DECISIONS.md` D-019.
+
+The script also builds every declared index (awaited — see D-018) and verifies
+that `synthetic`, `fieldProvenance` and the real-anchored
+`criticality.trainsAffectedCount` survived the round trip before reporting
+success.
+
+Seeded counts: 10,149 corridors · 10,149 calendar entries · 55 assets ·
+89 tasks · 102 resources · 5 provenance records · **30 corridors flagged
+`hasSyntheticDemand`**.
 
 Configuration comes from the repo-root `.env` (see `../.env.example`).
 `backend/.env` may exist as a local override. The process **refuses to start**
@@ -51,8 +75,21 @@ with supertest and never bind a socket.
 | `GET` | `/api/health` | Liveness. No dependency checks. |
 | `GET` | `/api/health/ready` | Readiness. `503` unless MongoDB is connected. |
 | `GET` | `/api/health/dependencies` | Probes MongoDB **and** the optimizer in one call. Reports `degraded` rather than failing when something is down. |
+| `GET` | `/api/corridors` | Real corridor sections. `?hasSyntheticDemand=true` narrows 10,149 to the ~30 that carry demand, via an index. Also `zone`, `search`, `limit`, `offset`. |
+| `GET` | `/api/corridors/:id` | One section, with `maxDailyBlockWindows` and the occupancy detail joined from `corridor_calendar`. |
+| `GET` | `/api/assets` | Filter by `corridorId`, `department`, `assetType`, `minCriticality`. Sorted by criticality. |
+| `GET` | `/api/assets/:id` | One asset, including its degradation series. |
+| `GET` | `/api/tasks` | Filter by `corridorId`, `assetId`, `department`, `status`, `minSeverity`. |
+| `GET` | `/api/tasks/:id` | One task. |
+| `GET` | `/api/resources` | Filter by `corridorId` (matches `corridorScope`), `department`, `type`, `depot`. |
+| `GET` | `/api/provenance` | Per-collection disclaimer and field-level real/synthetic map (D-015). |
 
-Auth, tasks, corridors, assets and schedule orchestration land with task T10.
+Every list endpoint answers `{ data, pagination }` and is bounded — `limit`
+defaults to 50 and is capped at 200, so no route can return all 10,149
+corridors by accident.
+
+These are read-only. Auth (FR10), task submission (FR1.1) and schedule
+orchestration are the remaining T10 work.
 
 ## Conventions
 

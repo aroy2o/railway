@@ -74,12 +74,39 @@ Two conventions worth keeping as the dashboard grows:
   real API response. Any placeholder gets a `PLACEHOLDER` comment so it cannot
   reach the pitch deck by accident.
 
-## Current state
+## Routes
 
-The landing screen is build-phase scaffolding: the PRD Section 5 prototype
-banner, a live probe of React → Express → MongoDB + CP-SAT, and the build
-order. It is replaced by role-based routing (T11) and the Controller Dashboard
-(T13).
+Routing uses `react-router-dom`. All five views are reachable from the header
+nav; `/` redirects to `/corridors`.
+
+| Route | Shows |
+|---|---|
+| `/corridors` | The ~30 real sections carrying maintenance demand — traffic, utilisation, free minutes, block windows, task count |
+| `/corridors/:id` | One section: real infrastructure and occupancy, its free block windows, and the assets, backlog and resources on it |
+| `/assets` | Assets ranked by FR2.1 criticality score, with the dominant factor |
+| `/tasks` | The maintenance backlog, filterable by department |
+| `/resources` | Crews, machines and permissions with their depot corridor scope |
+| `/status` | Live service wiring **and** the data provenance record |
+
+These are deliberately plain tables. The Gantt timeline, KPI strip and
+Controller Dashboard (PRD Section 8) are tasks T12/T13 — there is nothing to
+visualise until the CP-SAT solver exists to produce a schedule.
+
+## Showing what is real and what is simulated
+
+`SyntheticBadge` renders from the `synthetic` flag carried on each record, and
+`/status` renders the field-level provenance map — both served from MongoDB,
+neither written by the UI. This is PRD Section 5's honesty requirement reaching
+the screen rather than stopping at a JSON file (`docs/DECISIONS.md` D-015).
+
+The badge distinguishes three cases, which matters because the boundary runs
+*through* a record: an asset is `SYNTHETIC`, but its `trainsAffectedCount`
+column is badged `REAL` because that number is the train count observed in the
+published timetable.
+
+Unscored values render as "unscored", never as 0 — `priorityScore` is null
+until the priority engine (T7) exists, and a zero would read as "lowest
+priority".
 
 Testing here is manual/visual by design — a hackathon budget is better spent on
 solver correctness than on component coverage (`CLAUDE.md` testing priorities).

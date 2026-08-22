@@ -11,7 +11,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --env-file=tests/.env.test --test tests/"
+    "test": "node --env-file=tests/.env.test --test tests/",
+    "seed": "node src/scripts/seed.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

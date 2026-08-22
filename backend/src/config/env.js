@@ -45,6 +45,10 @@ const envSchema = z.object({
   // The Python CP-SAT service. Node never runs OR-Tools itself.
   OPTIMIZER_URL: z.url('OPTIMIZER_URL must be a valid URL'),
   OPTIMIZER_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+
+  // Where the seed script reads the pipeline output from. Relative paths are
+  // resolved against the repo root, so the default works from any cwd.
+  DATA_PROCESSED_DIR: z.string().default('data/processed'),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -80,6 +84,12 @@ export const config = Object.freeze({
   optimizer: Object.freeze({
     baseUrl: raw.OPTIMIZER_URL.replace(/\/+$/, ''),
     timeoutMs: raw.OPTIMIZER_TIMEOUT_MS,
+  }),
+  paths: Object.freeze({
+    repoRoot: REPO_ROOT,
+    processedData: path.isAbsolute(raw.DATA_PROCESSED_DIR)
+      ? raw.DATA_PROCESSED_DIR
+      : path.join(REPO_ROOT, raw.DATA_PROCESSED_DIR),
   }),
 });
 

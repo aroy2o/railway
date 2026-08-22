@@ -465,3 +465,115 @@ them are simulated. "This file is synthetic" would be too coarse to be honest.
 **Alternative considered.** A single top-level flag per file. Rejected as
 misleading in both directions - it would hide the real anchoring and overstate
 the synthetic content.
+
+---
+
+## D-016 — Calendar stays its own collection; the corridor carries a scalar summary
+
+**Date:** 2026-08-22 · **Task:** T5
+
+**Decision.** `corridor_calendar` is a separate MongoDB collection, as D-009
+established for the files. Two things bridge it to `corridors`:
+
+- a **scalar `occupancySummary`** (trains observed, occupied/free minutes,
+  utilisation, window count, lowConfidence) denormalised onto the corridor
+  document at seed time;
+- a **read-time join** on the detail endpoint only, which is where
+  `maxDailyBlockWindows` is attached so the API still presents the shape PRD
+  Section 15 describes.
+
+**Why.** Embedding was tempting and wrong. A busy section carries hundreds of
+merged occupancy windows — the calendar file is 47 MB against the corridors'
+10 MB — so embedding would make every corridor *list* query drag window arrays
+it never renders. But a list view genuinely needs to sort and filter on
+utilisation, and a per-row join for that would be worse. Copying six scalars
+solves the list case; the join solves the detail case.
+
+**Alternative considered.** Embedding the whole calendar in the corridor
+document. Rejected on the size argument above, and it would have re-coupled the
+two pipeline stages that D-009 deliberately separated.
+
+**Staleness note.** The denormalised summary is a copy, so it can drift if the
+calendar is rebuilt without re-seeding. That is acceptable because seeding is
+all-or-nothing (D-019) — there is no path that updates one collection alone.
+
+---
+
+## D-017 — Human-readable string `_id`s instead of ObjectIds
+
+**Date:** 2026-08-22 · **Task:** T5
+
+**Decision.** Every seeded collection keys on the string id the pipeline
+already produced: `GZB-SBB` for a corridor, `AST-GZB-SBB-1` for an asset,
+`TSK-00042` for a task.
+
+**Why.** The corridor id is the sorted station-code pair, which is derived from
+real data and already unique. Keeping it as the primary key means the same
+identifier appears in the JSON file, the database, the API path, the URL bar and
+a judge's question — with no translation layer. Generating ObjectIds would have
+required a lookup table to answer "show me GZB-SBB".
+
+**Alternative considered.** ObjectId `_id` with the readable id in a unique
+secondary field. More conventional, and pointless here: the natural key is
+stable, short, and produced deterministically upstream.
+
+**Trade-off accepted.** String keys index slightly larger than ObjectIds. At
+10,149 corridors that is irrelevant.
+
+---
+
+## D-018 — `hasSyntheticDemand` is denormalised and indexed, and indexes are built explicitly
+
+**Date:** 2026-08-22 · **Task:** T5
+
+**Decision.** The seed computes which corridors carry generated maintenance
+demand and writes a `hasSyntheticDemand` boolean onto each corridor, indexed.
+The seed also calls `syncIndexes()` on every model and **awaits it**.
+
+**Why the flag.** Only ~30 of 10,149 real sections carry demand. Without the
+flag, finding them means either scanning the corridors collection or querying
+assets and then fetching corridors by a 30-element `$in` — two round trips for
+something the dashboard does on every page load.
+
+**Why the explicit index build — this was a real bug, not a precaution.**
+Mongoose's `autoIndex` starts index creation in the background when a model is
+first used, and the seed script closes its connection as soon as the inserts
+finish. The builds were being abandoned mid-flight, and the collections ended up
+with nothing but the default `_id` index. The filter still returned the correct
+30 corridors, so it *looked* fine — `explain()` showed `docsExamined: 10149`,
+`keysExamined: 0`: a full collection scan. After the explicit sync it is
+`docsExamined: 30, keysExamined: 30`.
+
+The lesson generalises: a correct result is not evidence of a correct query
+plan, and index creation must be awaited rather than assumed.
+
+`syncIndexes` rather than `createIndexes` because it also drops indexes no
+longer declared, which keeps a re-seed after a schema change honest.
+
+---
+
+## D-019 — The seed replaces collections rather than upserting
+
+**Date:** 2026-08-22 · **Task:** T5
+
+**Decision.** `npm run seed` empties each of the six source-of-truth collections
+and reloads them, rather than upserting document by document. It is safe to
+re-run and requires no manual database wipe.
+
+**Why.** The source files are themselves deterministic and fully regenerable
+(D-008, D-014), so the database is a mirror of them and should match exactly.
+Upserting would leave orphans behind whenever the generator's seed or
+`CORRIDOR_COUNT` changes and the new dataset is smaller — stale tasks pointing
+at assets that no longer exist is a much worse failure than a slower reload.
+The full load takes about 20 seconds.
+
+The reload is scoped to the six pipeline collections. It does not touch
+schedules, decision logs or audit logs, which the running system produces rather
+than the pipeline.
+
+**Verification is part of the script, not just a test.** After loading, the seed
+reads back a sample asset, task and provenance record and asserts that
+`synthetic`, `fieldProvenance` and the real-anchored `trainsAffectedCount`
+survived the round trip, and that `priorityScore` is still null. The failure it
+guards against — provenance quietly dropped by a schema change — would otherwise
+only surface as a missing badge on a dashboard nobody is checking.
