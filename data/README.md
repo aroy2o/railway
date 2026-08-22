@@ -37,10 +37,11 @@ python3 -m venv .venv
 
 ```bash
 cd data
-.venv/bin/python -m ingestion.download          # T2: ~98 MB, skips files already present
-.venv/bin/python -m ingestion.build_corridors   # T2: corridors.json          (~2 s)
-.venv/bin/python -m ingestion.build_timetable   # T3: calendar + trains.json  (~5 s)
-.venv/bin/python -m pytest                      # 69 tests
+.venv/bin/python -m ingestion.download            # T2: ~98 MB, skips files already present
+.venv/bin/python -m ingestion.build_corridors     # T2: corridors.json           (~2 s)
+.venv/bin/python -m ingestion.build_timetable     # T3: calendar + trains.json   (~5 s)
+.venv/bin/python -m generators.build_synthetic    # T4: assets/tasks/resources   (~5 s)
+.venv/bin/python -m pytest                        # 94 tests
 ```
 
 Stages are ordered but independent: `build_timetable` reads `corridors.json`
@@ -60,7 +61,17 @@ timestamp is written into them. Re-running is always safe.
 | `corridors.json` | T2 | 10,149 corridor sections + structural facts |
 | `corridor_calendar.json` | T3 | Per-section occupied and free windows |
 | `trains.json` | T3 | 5,208 trains: real class code and accommodation flags |
-| `INGESTION_REPORT.json` / `TIMETABLE_REPORT.json` | T2 / T3 | Coverage and validation stats (committed) |
+| `assets.json` | T4 | **Synthetic** assets + FR2.1 criticality scores |
+| `tasks.json` | T4 | **Synthetic** pending maintenance backlog |
+| `resources.json` | T4 | **Synthetic** depot-scoped crews, machines, permissions |
+| `*_REPORT.json` | T2–T4 | Coverage, validation and distribution stats (committed) |
+
+### Repository footprint
+
+`data/raw/` is ~103 MB and `data/processed/` ~61 MB, and **essentially none of
+it is committed** — only the four small report/manifest files are, totalling
+about 114 KB across all of `data/`. A clone stays small; everything else is
+rebuilt by the commands above.
 
 ---
 
@@ -387,17 +398,204 @@ less certain and are **not** guessed at anywhere in the code.
 
 ---
 
+# T4 — the synthetic maintenance layer
+
+**Everything in this section is simulated.** Indian Railways' TMS/SMMS/TDMS
+data is internal and not publicly available, so the maintenance backlog, asset
+attributes, degradation history, resources and dependencies are generated. What
+they are *anchored to* is real.
+
+## Honesty framing, implemented in the data
+
+A disclaimer in a README does not travel with the data — once these files are
+seeded into MongoDB and rendered on a dashboard, the caveat is gone. So it lives
+in the payload:
+
+- every output file carries `"synthetic": true`, the full disclaimer, the seed
+  and the reference date;
+- every individual asset and task record carries `"synthetic": true`;
+- every file carries a **field-level provenance map**, because the boundary runs
+  *through* a single record rather than around it.
+
+```json
+"fieldProvenance": {
+  "real": {
+    "corridorId": "T2 - derived from datameet/railways route data",
+    "criticality.trainsAffectedCount": "T3 - observed trains per day on the section",
+    "criticality.passengerDependency": "T3 - premium share of the observed train class mix"
+  },
+  "synthetic": {
+    "criticality.safetyImportance": "simulated, seeded by asset type",
+    "criticality.historicalFailureFreq": "simulated - no public failure history exists",
+    "degradationHistory": "simulated asset-health series (PRD 9.1)"
+  },
+  "computedDownstream": {
+    "tasks.priorityScore": "T7 (FR2.3)",
+    "tasks.failureRiskScore": "T16 (FR2.2 / 9.1)"
+  }
+}
+```
+
+`degradationHistory` is the one PRD 9.1 calls out specifically. It is a
+plausible monotone-decline-with-noise pattern, **not** observed asset health —
+no such public data exists. It is there so the predictive risk model (T16) has a
+shape to train against, and is explicitly designed to be replaced by real
+historical asset-health data. Any claim that it predicts real failures would be
+false.
+
+## What is real inside the synthetic records
+
+Two criticality inputs are **not** synthesised, because they already exist as
+measured data and inventing them would have been strictly worse:
+
+| Field | Source |
+|---|---|
+| `criticality.trainsAffectedCount` | T3 — trains actually observed on the section |
+| `criticality.passengerDependency` | T3 — premium share of the real train class mix |
+
+`passengerDependency` is derived as the share of long-distance/premium services
+among the **classified** trains on a section. That is a different signal from
+`trainsAffectedCount`: one measures how many services use the asset, the other
+how sensitive those services are. A section carrying three Rajdhanis depends on
+its assets differently from one carrying three suburban locals. Class codes
+whose meaning was not confidently established (`Hyd`, `Del`, `Klkt`) are
+excluded from **both** sides of the ratio rather than guessed into one.
+
+## Corridor selection
+
+30 real sections, chosen by three rules:
+
+1. **Exclude every section T3 flagged `lowConfidence`.** Anchoring a synthetic
+   backlog to a corridor the pipeline itself does not trust would launder a
+   data-quality caveat into apparently-solid demand.
+2. **Spread across utilisation bands** — 6 saturated, 9 busy, 9 moderate,
+   6 quiet.
+3. **And spread across traffic within each band**, at evenly spaced percentiles.
+
+Rule 3 was added after the first attempt. Taking the busiest section of each
+band produced 30 corridors whose train counts all sat between 134 and 281, so
+`trainsAffectedCount` barely varied and criticality compressed into 54.7–90.3.
+Spanning percentiles restored traffic to 1–281 and criticality to 27.9–90.8.
+
+The result carries genuine scheduling tension — **20 of the 26 corridors with
+tasks cannot fit their backlog into a single free window**:
+
+| Corridor | Util | Windows | Free min/day | Tasks | Minutes needed |
+|---|---:|---:|---:|---:|---:|
+| `GZB-SBB` Ghaziabad – Sahibabad | 82.2% | 1 | 54 | 4 | **580** |
+| `KYN-THK` Kalyan Jn – Thakurli | 40.0% | 1 | 35 | 4 | **566** |
+| `BCA-TGA` Bachwara Jn – Teghra | 60.9% | 1 | 58 | 6 | **601** |
+| `BBPR-SYU` Babupur – Sarayan | 3.5% | 7 | 1297 | 5 | 619 |
+| `ABEO-ABU` Pattaravakkam – Ambattur | 0.1% | 2 | 1428 | 3 | 549 |
+
+## Asset criticality (PRD FR2.1)
+
+The PRD names five inputs but not how to combine them. The formula is a weighted
+average on 0–100, ordered by one principle — **criticality is the consequence of
+failure**:
+
+| Component | Weight | Why |
+|---|---:|---|
+| `safety_importance` | 0.30 | Consequence dominates. An interlocking failure is a different class of event from a ballast deficiency. |
+| `trains_affected` | 0.25 | Real operational exposure; the component grounded in measured data. |
+| `no_alternate_route` | 0.20 | Resilience — if traffic can divert, the consequence drops sharply. |
+| `passenger_dependency` | 0.15 | Service sensitivity, also real. |
+| `historical_failure_freq` | 0.10 | Lowest **on purpose** — frequency is *likelihood*, and FR2.2 scores predicted risk separately. Weighting it heavily would double-count probability into a consequence score. |
+
+`trains_affected` is normalised on a **log1p** curve, chosen on measurement: on a
+linear scale 70.3% of sections fall below 0.2 and the component stops
+discriminating; on log1p only 10.7% do.
+
+Realised scores span **27.92 – 90.75** (median 63.67), and the dominant factor
+varies across assets (safety 40, trains-affected 11, no-alternate-route 4)
+rather than being a foregone conclusion. Each asset ships its
+`criticalityBreakdown`, because FR2.4 requires showing *which factor dominated*,
+not just the number.
+
+## Generated distributions, measured
+
+| Property | PRD 5.2 spec | Realised |
+|---|---|---|
+| Department split | 50 / 30 / 20 | **52.8 / 27.0 / 20.2** |
+| Asset type quota | 50 / 30 / 20 | 27 track / 17 signal / 11 OHE of 55 |
+| Severity | Beta, skewed, not uniform | `{1: 29, 2: 20, 3: 29, 4: 11, 5: 0}`, mean 2.25 |
+| Block duration | Eng 120–240, S&T 60–120, TRD 90–180 | all within range |
+| `dateRaised` | within 90 days | within 90 days of the reference date |
+| `slaDueDate` | +30/60/90 by severity | enforced and asserted |
+| Defect vocabulary | PRD 5.2 terms | all 12 terms used |
+
+**The department mix is allocated by exact quota, not sampled.** At ~60 assets
+independent draws miss it badly — the first run gave 34/42/24, over-representing
+S&T by 12 points through noise alone. A largest-remainder quota fixes the mix by
+construction while the shuffle keeps which corridor gets which type random.
+
+**Severity uses Beta(2, 3.5)**, measured over 500k draws against alternatives:
+
+| Parameters | severity ≥4 | severity 5 |
+|---|---:|---:|
+| Beta(2, 5) | 4.1% | 0.2% |
+| Beta(2, 4) | 8.7% | 0.7% |
+| **Beta(2, 3.5)** | **12.6%** | **1.4%** |
+| Beta(2, 3) | 17.9% | 2.7% |
+
+Being straight about this: Beta(2,4) was tried first and gave a backlog with
+zero severity-5 defects; Beta(2,3) was rejected for the opposite reason, since
+18% critical is not "few critical". The parameter was chosen partly so the
+critical tier is populated enough to exercise prioritisation and deferral —
+a defensible modelling goal, **not** a claim that 12.6% is a measured Indian
+Railways figure. No such public figure was available.
+
+**The seed was never re-rolled to fish for a better-looking sample.** The
+realised distribution is reported as it came out, including the fact that this
+89-task backlog happens to contain no severity-5 item (1.2 expected). Severity ≥4
+— 11 tasks — is the critical tier for the deferred-critical-tasks metric.
+`CORRIDOR_COUNT` in `generators/config.py` is the documented lever if a larger
+backlog is wanted.
+
+## Resources and dependencies
+
+Resources are **depot-scoped**, not per-corridor: one depot covers 5 corridors,
+which is both realistic and what creates genuine contention for PRD 9.8 — on
+`GZB-SBB`, two Engineering tasks both require `RES-D04-ballast-regulator`.
+`requiredResourceId` points at the **machine** where one exists, since machines
+are the genuinely scarce resource (a depot has one tower wagon and several
+gangs). The full crew + machine + permission set is kept in
+`requiredResourceIds`, an extension beyond the PRD's singular field.
+
+Dependencies are the exception, not the rule (PRD 5.2 calls them optional):
+9 of 89 tasks sit in a chain. Chains are inspection → repair → testing on one
+asset, sharing the underlying defect, and are acyclic by construction:
+
+```
+TSK-00001  inspection  sev2 200min  dependsOn=None         track geometry defect
+TSK-00002  repair      sev2 220min  dependsOn=TSK-00001    track geometry defect
+TSK-00003  testing     sev2 129min  dependsOn=TSK-00002    track geometry defect
+```
+
+## Reproducibility
+
+T2/T3 get determinism free because their inputs are real files. A generator has
+to get it from a seed, so **both** the seed and a fixed reference date are
+constants in `generators/config.py`:
+
+```python
+RANDOM_SEED    = 20260822
+REFERENCE_DATE = date(2026, 8, 22)
+```
+
+A generator using the real clock would emit different dates every run — the same
+trap D-008 avoided by keeping timestamps out of the ingestion outputs. Bump
+`REFERENCE_DATE` before the demo so the backlog reads as current.
+
+---
+
 ## Status
 
 - **T2 — done.** Stations and corridor sections from real route data.
 - **T3 — done.** Occupancy calendar, free block windows, and train class metadata.
-- **T4 — next.** `generators/` produces synthetic assets, tasks, resources and
-  dependencies against these real corridors, using the skewed distributions in
-  PRD 5.2 (severity is Beta-distributed, not uniform — realistic skew is part of
-  what makes the dataset credible).
-
-  T4 now has both real anchors it needs: **which** sections exist, and **when**
-  each is actually free. Prefer sections with `lowConfidence == false` and a
-  healthy `distinctTrains` count; the saturated four above make the most
-  compelling demo corridors, since they are where maintenance genuinely competes
-  with traffic.
+- **T4 — done.** Synthetic assets, tasks, resources and dependencies, anchored
+  to real corridors and real traffic.
+- **T5 — next.** Mongoose schemas for the PRD Section 15 collections, and the
+  seed path that loads these files into MongoDB. Note that
+  `corridors.maxDailyBlockWindows` is joined in from `corridor_calendar.json`
+  at seed time (D-009), not read from `corridors.json`.

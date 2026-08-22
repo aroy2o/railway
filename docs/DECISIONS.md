@@ -316,3 +316,152 @@ pairs are dropped this way, and they are counted in
 `TIMETABLE_REPORT.json.stopPairAccounting` — where the pipeline asserts that
 every one of the 411,680 stop pairs is accounted for as either used or skipped
 with a named reason.
+
+---
+
+## D-012 — Asset criticality weights: consequence outranks likelihood
+
+**Date:** 2026-08-22 · **Task:** T4
+
+**Decision.** PRD FR2.1 names five criticality inputs but not how to combine
+them. The formula is a weighted average on a 0-100 scale:
+
+| Component | Weight |
+|---|---:|
+| `safety_importance` | 0.30 |
+| `trains_affected` (real) | 0.25 |
+| `no_alternate_route` | 0.20 |
+| `passenger_dependency` (real) | 0.15 |
+| `historical_failure_freq` | 0.10 |
+
+**Why, in one principle: criticality is the consequence of failure.** That is
+what orders the weights. Safety consequence leads because a signalling
+interlocking failure is a different class of event from a ballast deficiency.
+Trains affected follows as real operational exposure. Losing the diversion
+option raises criticality, because there is nowhere to send the traffic.
+
+Historical failure frequency is weighted **lowest, deliberately**: frequency is
+a *likelihood* signal, and FR2.2 scores predicted failure risk separately.
+Weighting it heavily here would double-count probability into a score that is
+supposed to measure impact.
+
+`trains_affected` is normalised on a **log1p curve, and that choice is
+measured, not stylistic.** Train counts span two orders of magnitude (median 24,
+max 281). On a linear scale 70.3% of sections fall below 0.2 and the component
+stops discriminating between the ordinary majority; on log1p only 10.7% do, and
+the middle 80% of sections spread across 0.65 of the range instead of 0.42. The
+reference maximum is a fixed constant rather than the maximum of whatever set is
+being scored, so an asset's score does not shift when the corridor selection
+changes.
+
+**Alternative considered.** Equal weights across all five. Rejected: it implies
+a signal failure and a slightly elevated failure count matter equally, which no
+asset-management framework would accept.
+
+**Consequence.** The score is a genuine weighted average - the weights are
+asserted to sum to 1.0 at import time - so a component can be added later
+without silently rescaling every historical score.
+
+---
+
+## D-013 — Corridor selection stratified on two axes, not one
+
+**Date:** 2026-08-22 · **Task:** T4
+
+**Decision.** The 30 corridors carrying synthetic demand are chosen by:
+excluding every section T3 flagged `lowConfidence`, splitting the rest into four
+utilisation bands (saturated / busy / moderate / quiet), and taking sections at
+**evenly spaced percentiles of observed traffic within each band**.
+
+**Why.** Utilisation alone was not enough. The first implementation took the
+busiest section of each band, which produced 30 corridors whose train counts all
+sat between 134 and 281 - so `trainsAffectedCount`, a real FR2.1 input, barely
+varied and criticality scores compressed into 54.7-90.3. Spanning traffic
+percentiles as well restored the range to 1-281 and criticality to 27.9-90.8,
+and changed the dominant criticality factor from a near-constant to a genuine
+mix.
+
+Excluding `lowConfidence` sections matters for a subtler reason: anchoring a
+synthetic backlog to a corridor the pipeline itself does not trust would launder
+a data-quality caveat into apparently-solid demand.
+
+**Alternative considered.** Seeded random sampling within each band. Unbiased
+and simpler, but it gives no guarantee the range is covered at this sample size,
+and it drops the recognisable heavily-used sections that make the demo concrete.
+
+**Result.** The dataset has real scheduling tension: 20 of the 26 corridors that
+carry tasks cannot fit their whole backlog into a single free window.
+Ghaziabad-Sahibabad needs 580 minutes of work against 54 minutes of daily
+availability.
+
+---
+
+## D-014 — Distribution fidelity by construction, not by sampling luck
+
+**Date:** 2026-08-22 · **Task:** T4
+
+**Decision.** The department mix is allocated by **exact quota** at the asset
+level (largest-remainder), not drawn independently. Severity uses
+**Beta(2, 3.5)** mapped onto 1-5.
+
+**Why the quota.** PRD 5.2 states the department mix as a property of the
+dataset (Engineering 50 / S&T 30 / TRD 20). At roughly 60 assets, independent
+draws miss it badly: the first run produced a 34/42/24 task split, with S&T
+over-represented by 12 percentage points through sampling noise alone. A quota
+fixes the mix by construction while the shuffle keeps *which* corridor gets
+*which* asset type random. The realised task split is 52.8/27.0/20.2 - the
+residual comes from tasks-per-asset varying, which is a PRD-specified
+distribution and correctly left alone.
+
+**Why Beta(2, 3.5).** Measured over 500k draws against the alternatives:
+
+| Parameters | severity ≥4 | severity 5 |
+|---|---:|---:|
+| Beta(2, 5) | 4.1% | 0.2% |
+| Beta(2, 4) | 8.7% | 0.7% |
+| **Beta(2, 3.5)** | **12.6%** | **1.4%** |
+| Beta(2, 3) | 17.9% | 2.7% |
+
+Beta(2,4) was tried first and produced a backlog containing zero severity-5
+defects. Beta(2,3) was rejected in the other direction — 18% of defects being
+severity 4 or above is not "few critical". Beta(2,3.5) keeps 60% of the backlog
+routine while giving the critical tier real weight.
+
+**Being straight about this:** the parameter was chosen partly so the critical
+tier is populated enough to exercise prioritisation and deferral. That is a
+defensible modelling goal - a backlog with no urgent work would not represent
+the problem this system exists to solve, and a real block-demand queue does hold
+urgent items competing for scarce windows. It is *not* a claim that 12.6% is a
+measured Indian Railways figure. No such public figure was available.
+
+**What was not done.** The seed was never re-rolled to fish for a nicer sample.
+The realised distribution is reported as it came out, including the fact that
+this 89-task backlog happens to contain no severity-5 item (1.2 expected).
+
+---
+
+## D-015 — Honesty framing lives in the data, not only in the docs
+
+**Date:** 2026-08-22 · **Task:** T4
+
+**Decision.** Every synthetic output file carries `"synthetic": true`, a
+disclaimer naming the degradation series as simulated and designed for
+retraining on real data, the seed, the reference date, and a **field-level
+provenance map** splitting `real` / `synthetic` / `computedDownstream`. Every
+individual asset and task record also carries `"synthetic": true`.
+
+**Why.** PRD 9.1 requires the predictive-risk framing to be honest, and PRD
+Section 5 requires the real/simulated boundary to be visible. A disclaimer that
+lives only in a README does not travel with the data - once these files are
+seeded into MongoDB and surfaced on a dashboard, the caveat is gone. Putting it
+in the payload means the API, the UI and any judge inspecting the database all
+see the same statement.
+
+The provenance map exists because the boundary is genuinely mixed within a
+single record: an asset's `trainsAffectedCount` and `passengerDependency` are
+real measurements, while `safetyImportance` and `historicalFailureFreq` beside
+them are simulated. "This file is synthetic" would be too coarse to be honest.
+
+**Alternative considered.** A single top-level flag per file. Rejected as
+misleading in both directions - it would hide the real anchoring and overstate
+the synthetic content.

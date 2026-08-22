@@ -48,7 +48,8 @@
       "Del": 8,
       "DEMU": 4,
       "Klkt": 3
-    }
+    },
+    "sections_with_class_mix": 8454
   },
   "modellingChoices": {
     "occupancy": "departure at endpoint A -> arrival at endpoint B",

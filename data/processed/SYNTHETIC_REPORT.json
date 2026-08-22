@@ -1,0 +1,103 @@
+{
+  "task": "T4 - synthetic maintenance data generator (PRD 5.2)",
+  "seed": 20260822,
+  "referenceDate": "2026-08-22",
+  "anchoring": {
+    "corridors_selected": 30,
+    "selection_rule": "busiest sections in each utilisation band, excluding every section T3 flagged lowConfidence",
+    "by_band": {
+      "quiet": 6,
+      "saturated": 6,
+      "busy": 9,
+      "moderate": 9
+    },
+    "trains_observed_range": [
+      1,
+      281
+    ],
+    "corridors_with_zero_block_windows": 0
+  },
+  "assets": {
+    "count": 55,
+    "by_type": {
+      "track": 27,
+      "OHE": 11,
+      "signal": 17
+    },
+    "criticality_score": {
+      "min": 27.92,
+      "median": 63.67,
+      "max": 90.75
+    },
+    "dominant_factor": {
+      "safety_importance": 40,
+      "trains_affected": 11,
+      "no_alternate_route": 4
+    }
+  },
+  "tasks": {
+    "count": 89,
+    "severity_distribution": {
+      "1": {
+        "count": 29,
+        "pct": 32.6
+      },
+      "2": {
+        "count": 20,
+        "pct": 22.5
+      },
+      "3": {
+        "count": 29,
+        "pct": 32.6
+      },
+      "4": {
+        "count": 11,
+        "pct": 12.4
+      },
+      "5": {
+        "count": 0,
+        "pct": 0.0
+      }
+    },
+    "severity_mean": 2.25,
+    "department_split_pct": {
+      "Engineering": 52.8,
+      "S&T": 27.0,
+      "TRD": 20.2
+    },
+    "department_target_pct": {
+      "Engineering": 50.0,
+      "S&T": 30.0,
+      "TRD": 20.0
+    },
+    "block_duration_within_prd_ranges": true,
+    "with_dependency": 9,
+    "defect_types_used": {
+      "track geometry defect": 15,
+      "OHE snag": 6,
+      "isolator fault": 5,
+      "relay fault": 11,
+      "cable fault": 5,
+      "interlocking snag": 1,
+      "rail fracture": 14,
+      "ballast deficiency": 10,
+      "joint wear": 8,
+      "insulator damage": 6,
+      "point failure": 7,
+      "feeder fault": 1
+    }
+  },
+  "batching_potential": {
+    "corridors_with_tasks": 26,
+    "corridors_with_multiple_departments": 10
+  },
+  "resources": {
+    "count": 102,
+    "by_type": {
+      "crew": 36,
+      "machine": 42,
+      "permission": 24
+    },
+    "depots": 6
+  }
+}

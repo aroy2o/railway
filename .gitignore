@@ -38,6 +38,7 @@ data/processed/*
 !data/raw/MANIFEST.json
 !data/processed/INGESTION_REPORT.json
 !data/processed/TIMETABLE_REPORT.json
+!data/processed/SYNTHETIC_REPORT.json
 
 # --- Editors / OS -----------------------------------------------------------
 .DS_Store

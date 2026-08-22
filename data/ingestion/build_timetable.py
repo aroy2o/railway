@@ -119,10 +119,21 @@ def build() -> dict:
             occupied_minutes_all.append(occupied_minutes)
             free_minutes_all.append(free_minutes)
 
+        # Raw count of each real IR class code observed on this section. Stored
+        # as published codes with NO grouping or interpretation applied - a
+        # consumer that wants "premium share" defines that grouping itself and
+        # owns the judgement. Feeds asset criticality (T4, FR2.1) and
+        # train-impact scoring (T22, PRD 9.6).
+        class_mix = Counter()
+        for number in section_trains.get(key, ()):
+            train = trains.get(number)
+            class_mix[train.type if train and train.type else "(unknown)"] += 1
+
         calendar.append(
             {
                 "_id": section_id,
                 "corridorId": section_id,
+                "trainClassMix": dict(sorted(class_mix.items())),
                 # PRD Section 15 `corridors.maxDailyBlockWindows`, joined in at
                 # seed time. These are the FREE windows - what the solver needs.
                 "maxDailyBlockWindows": [w.as_dict() for w in free],
@@ -226,6 +237,7 @@ def _build_report(
         "trains": {
             "count": len(trains),
             "by_type": dict(typed.most_common()),
+            "sections_with_class_mix": sum(1 for c in calendar if c["trainClassMix"]),
         },
         "modellingChoices": {
             "occupancy": "departure at endpoint A -> arrival at endpoint B",
