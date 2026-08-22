@@ -1,0 +1,75 @@
+"""Typed, validated settings for the optimizer service.
+
+Every tunable lives here - no hardcoded ports, hosts or solver limits anywhere
+else in the service. Values are read from the shared repo-root `.env` (see
+.env.example), overridable by an optimizer-local `.env` and by the real process
+environment, which is what docker-compose injects. See docs/DECISIONS.md D-002.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+SERVICE_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = SERVICE_ROOT.parent
+
+
+class Settings(BaseSettings):
+    """Runtime configuration, validated at import time."""
+
+    # pydantic-settings applies the listed dotenv files in order, with LATER
+    # files winning - so the service-local override comes second.
+    model_config = SettingsConfigDict(
+        env_file=(REPO_ROOT / ".env", SERVICE_ROOT / ".env"),
+        env_file_encoding="utf-8",
+        # The shared .env also carries backend and frontend variables; ignore
+        # anything this service does not declare instead of failing to boot.
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    node_env: str = Field(default="development", alias="NODE_ENV")
+    log_level: str = Field(default="info", alias="LOG_LEVEL")
+
+    optimizer_host: str = Field(default="0.0.0.0", alias="OPTIMIZER_HOST")
+    optimizer_port: int = Field(default=8000, ge=1, le=65535, alias="OPTIMIZER_PORT")
+
+    # Wall-clock ceiling handed to CP-SAT per solve. PRD Section 7 requires a
+    # weekly solve to return in <10s for 50-100 tasks; this is what guarantees
+    # the endpoint answers even when the model cannot prove optimality in time.
+    solver_max_seconds: float = Field(default=10.0, gt=0, le=600, alias="SOLVER_MAX_SECONDS")
+
+    # CP-SAT worker threads; 0 lets OR-Tools choose based on available cores.
+    solver_num_workers: int = Field(default=0, ge=0, le=64, alias="SOLVER_NUM_WORKERS")
+
+    # Consumed by the /explain endpoint (task T18). Empty is valid - the
+    # service must start and serve every other endpoint without it.
+    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+
+    @field_validator("log_level")
+    @classmethod
+    def _normalise_log_level(cls, value: str) -> str:
+        allowed = {"debug", "info", "warning", "warn", "error", "critical"}
+        normalised = value.strip().lower()
+        if normalised not in allowed:
+            raise ValueError(f"LOG_LEVEL must be one of {sorted(allowed)}, got {value!r}")
+        return "warning" if normalised == "warn" else normalised
+
+    @property
+    def is_production(self) -> bool:
+        return self.node_env == "production"
+
+    @property
+    def explain_enabled(self) -> bool:
+        """Whether the LLM explanation layer can run (task T18, PRD 9.2)."""
+        return bool(self.anthropic_api_key)
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Cached accessor - also the FastAPI dependency for injecting settings."""
+    return Settings()

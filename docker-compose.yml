@@ -1,0 +1,73 @@
+# Full-stack demo wiring: Mongo + Node API + Python optimizer + React frontend.
+#
+# STATUS: skeleton (task T1). Each service builds and answers its health check,
+# but the images are not yet tuned for the demo (no seed step, no healthcheck
+# ordering beyond depends_on). Completing this is task TX1.
+#
+#     docker compose up --build
+#
+# Local dev without Docker is the primary path - see README.md. `docker compose`
+# is not installed on the current dev machine, so this file is currently
+# unverified end to end; that verification is part of TX1.
+
+services:
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  optimizer:
+    build: ./optimizer
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OPTIMIZER_HOST: 0.0.0.0
+      OPTIMIZER_PORT: 8000
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Override the localhost defaults from .env with compose service names.
+      MONGODB_URI: mongodb://mongo:27017/railway_block_planning
+      OPTIMIZER_URL: http://optimizer:8000
+      BACKEND_PORT: 5000
+    ports:
+      - "5000:5000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      optimizer:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Vite inlines VITE_* vars at BUILD time, so the API URL the browser
+        # will use has to be passed in as a build arg, not a runtime env var.
+        VITE_API_BASE_URL: http://localhost:5000/api
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:

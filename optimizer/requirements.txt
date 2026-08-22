@@ -1,0 +1,20 @@
+# Optimizer / AI microservice dependencies.
+#
+# Deliberately lean: libraries are added when the task that needs them lands,
+# not up front. Notably absent for now:
+#   scikit-learn / lifelines -> predictive risk model (task T16, PRD 9.1)
+#   anthropic                -> /explain endpoint    (task T18, PRD 9.2)
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+pydantic>=2.9,<3.0
+pydantic-settings>=2.6,<3.0
+
+# Google OR-Tools CP-SAT - the scheduling solver (PRD 10.3, task T6).
+# Installed from task T1 onward so an install failure surfaces now rather than
+# on the day the solver is being written.
+ortools>=9.11,<10.0
+
+# --- dev/test ---
+pytest>=8.3,<9.0
+httpx>=0.27,<1.0

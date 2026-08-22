@@ -1,0 +1,38 @@
+# --- Secrets / local config -------------------------------------------------
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# --- Node -------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.npm/
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Frontend build ---------------------------------------------------------
+frontend/dist/
+frontend/.vite/
+
+# --- Data -------------------------------------------------------------------
+# Downloaded source datasets and generated synthetic output are reproducible
+# from the scripts in /data, so they are not committed. Keep the folders.
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# --- Editors / OS -----------------------------------------------------------
+.DS_Store
+.idea/
+*.swp
