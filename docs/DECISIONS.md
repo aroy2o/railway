@@ -224,3 +224,95 @@ that guards this would be impossible to write.
 is the conventional habit. Rejected: it makes every output differ on every run
 for no informational gain, since the manifest already records fetch time against
 the input hashes that actually determine the output.
+
+---
+
+## D-009 — The occupancy calendar is a separate file, not an edit to `corridors.json`
+
+**Date:** 2026-08-22 · **Task:** T3
+
+**Decision.** T3 writes `data/processed/corridor_calendar.json`, keyed on the
+same `_id` as T2's corridors, and **does not modify `corridors.json`**.
+`maxDailyBlockWindows` lives in the calendar file and is joined onto the
+corridor at seed time (backend, T5/T10).
+
+**Why.** Populating the field in place would have made the two stages
+order-dependent in a way that silently breaks: re-running `build_corridors`
+alone would blank the windows T3 had written, and T2's own idempotency test —
+which hashes `corridors.json` before and after a rebuild — would start failing
+the moment T3 had ever run. Each stage now owns exactly one output file and
+each rebuilds byte-identically in isolation.
+
+**Alternative considered.** Mutating `corridors.json` in place, which is what
+the task description offered as the default. Rejected for the coupling above.
+The cost is one join at seed time, on a key that already exists.
+
+---
+
+## D-010 — Occupancy is the transit window over one representative 24-hour day
+
+**Date:** 2026-08-22 · **Task:** T3
+
+**Decision.** A train occupies a corridor section from its **departure at one
+endpoint to its arrival at the next**. All trains are projected onto a single
+representative 24-hour clock. Free windows are the complement, widened by a
+5-minute clearance margin either side, keeping only gaps of 30 minutes or more.
+
+**Why — and what is a fact versus a choice.** The departure and arrival times
+are published data. Everything else here is a model:
+
+- Real signalling occupies a *block*, which is not the same thing as a
+  station-to-station section, and the published data has no block granularity.
+  Transit time is the closest defensible approximation available.
+- The source has **no day-of-week or running-days field** in either
+  `schedules.json` or `trains.json`, so a weekly calendar cannot be built from
+  it. Treating every train as daily deliberately **over**-estimates occupancy —
+  weekly specials get counted as daily — which errs towards reporting *less*
+  free time. For maintenance planning that is the safe direction: the system
+  should never promise a window that is not really there.
+- The clearance margin and the 30-minute floor are planning policy, not
+  measurements. Both are module constants, and both are echoed into the output
+  file's `model` block so a reader of the data sees them without reading code.
+
+The result is corroborated by domain reality: the sections that come out
+saturated are the ones that genuinely are. Barkhera–Budni (87%, zero usable
+windows) is on the Itarsi ghat, Khandala–Palasdari (77%) is the Bhor Ghat
+incline, and Ghaziabad–Sahibabad carries 281 trains a day and yields a single
+54-minute window at 01:08. That scarcity *is* the problem statement.
+
+**Alternative considered.** Treating a stop as an instantaneous point
+occupancy. Rejected — it would have reported almost every section as free
+almost all day, which is both wrong and useless to the solver.
+
+---
+
+## D-011 — Clock-wrap beats the published `day` field for transit duration
+
+**Date:** 2026-08-22 · **Task:** T3
+
+**Decision.** Transit duration is `arrival - departure`, adding 24 hours when
+the result is negative (a midnight crossing). The published `day` field is
+consulted **only** when that value is already implausible.
+
+**Why.** Measured across all 376,704 usable stop pairs, the two methods agree
+on 99.86%. On the disagreements, day-delta arithmetic produces **308 negative
+durations and 196 longer than 24 hours** — both physically impossible between
+adjacent stations — while clock-wrap produces neither (min 0, max 1439).
+
+**The `day`-null question resolved itself.** The 22,561 records with a null
+`day` turn out to be *exactly* the 22,561 records that have no arrival and no
+departure either — the co-occurrence is exact, not approximate. They are
+route-sequence-only records: they legitimately define stop order for T2's
+adjacency derivation, and they simply cannot define occupancy. So there was
+never an independent day-handling policy to decide. Every record carrying a
+usable time also carries a day.
+
+**Alternative considered.** Trusting `day` as primary, since it is the field
+that nominally exists for this purpose. Rejected on the evidence above.
+
+**Guard rail.** Transits longer than 180 minutes are discarded rather than
+clamped (99.92% of observed transits fall below it; median is 7 minutes). 318
+pairs are dropped this way, and they are counted in
+`TIMETABLE_REPORT.json.stopPairAccounting` — where the pipeline asserts that
+every one of the 411,680 stop pairs is accounted for as either used or skipped
+with a named reason.

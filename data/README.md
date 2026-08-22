@@ -33,19 +33,34 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-## Running the ingestion (task T2)
+## Running the ingestion
 
 ```bash
 cd data
-.venv/bin/python -m ingestion.download          # ~98 MB, skips files already present
-.venv/bin/python -m ingestion.build_corridors   # ~2 s
-.venv/bin/python -m pytest                      # 28 tests
+.venv/bin/python -m ingestion.download          # T2: ~98 MB, skips files already present
+.venv/bin/python -m ingestion.build_corridors   # T2: corridors.json          (~2 s)
+.venv/bin/python -m ingestion.build_timetable   # T3: calendar + trains.json  (~5 s)
+.venv/bin/python -m pytest                      # 69 tests
 ```
 
+Stages are ordered but independent: `build_timetable` reads `corridors.json`
+and never writes to it, so either stage can be re-run on its own without
+disturbing the other (`docs/DECISIONS.md` D-009).
+
 `download` writes `raw/MANIFEST.json` with each file's URL, byte size, SHA-256
-and fetch time. `build_corridors` reads only from `raw/` and is **deterministic**
+and fetch time. Both build steps read only from `raw/` and are **deterministic**
 — identical inputs produce byte-identical outputs, which is why no wall-clock
 timestamp is written into them. Re-running is always safe.
+
+### Processed outputs
+
+| File | Task | Contents |
+|---|---|---|
+| `stations.json` | T2 | 8,990 stations: code, name, zone, state, lat/lon |
+| `corridors.json` | T2 | 10,149 corridor sections + structural facts |
+| `corridor_calendar.json` | T3 | Per-section occupied and free windows |
+| `trains.json` | T3 | 5,208 trains: real class code and accommodation flags |
+| `INGESTION_REPORT.json` / `TIMETABLE_REPORT.json` | T2 / T3 | Coverage and validation stats (committed) |
 
 ---
 
@@ -212,14 +227,177 @@ clear in the data: the longest flagged section, `PSA-VZM` (Palasa – Vizianagra
 
 ---
 
+---
+
+# T3 — the occupancy calendar
+
+## What "occupied" means (a modelling choice, not a published fact)
+
+**A train occupies a corridor section from its departure at one endpoint to its
+arrival at the next.** That transit window is what the calendar records.
+
+This has to be stated plainly because it is a *model*, not something read out of
+the data:
+
+- Real signalling occupies a **block**, which is not the same unit as a
+  station-to-station section. The published data has no block granularity, so
+  transit time is the closest defensible approximation available.
+- The alternative — treating a stop as an instantaneous point — would report
+  nearly every section as free nearly all day. Wrong, and useless to the solver.
+
+Three further choices, all declared in the output file's own `model` block and
+configurable at the top of `ingestion/timetable.py`:
+
+| Choice | Value | Status |
+|---|---|---|
+| Horizon | one representative 24-hour day | forced by the data — see below |
+| Clearance margin around each occupancy | 5 min each side | planning policy |
+| Shortest reportable free window | 30 min | planning policy |
+| Maximum plausible transit | 180 min | data-derived (p99 = 32 min) |
+
+### Why a single 24-hour day, not a week
+
+**Neither `schedules.json` nor `trains.json` has a day-of-week or running-days
+field.** A weekly calendar cannot be derived from this data, so every train is
+projected onto one representative day.
+
+This deliberately **over**-estimates occupancy — a weekly special is counted as
+if it ran daily — which means free windows are conservative. For maintenance
+planning that is the safe direction: the system should never promise a window
+that is not really there. PRD NG2 already scopes occupancy to daily/weekly
+granularity, so this is within the stated non-goals.
+
+## The `day` field — a trap that dissolved
+
+T2 flagged 22,561 stop records with a null `day`, and it looked like it would
+need a judgement call. It did not, and the reason is worth recording.
+
+Those 22,561 records are **exactly** the records that have no `arrival` and no
+`departure` either. The co-occurrence is exact:
+
+| arrival null | departure null | day null | records |
+|---|---|---|---|
+| no | no | no | 384,107 (92.1%) — complete |
+| **yes** | **yes** | **yes** | **22,561 (5.4%)** — no time information at all |
+| yes | no | no | 5,146 — run origins (a train does not arrive at its start) |
+| no | yes | no | 5,138 — run termini |
+| yes | yes | no | 128 — small residue |
+
+So there was never an independent day-handling policy to decide. Those records
+are **route-sequence-only**: they legitimately define stop order for T2's
+adjacency derivation, and they cannot define occupancy. They are skipped here
+and counted, never silently dropped. The origin/terminus nulls are semantically
+correct, not defects.
+
+### And `day` is not the best signal anyway
+
+Transit duration is computed as `arrival - departure`, adding 24 hours when the
+result is negative (a midnight crossing). Measured across all 376,704 usable
+stop pairs, that agrees with day-delta arithmetic on 99.86% of them — and on the
+disagreements, **day-delta yields 308 negative durations and 196 longer than 24
+hours**, both impossible between adjacent stations, while clock-wrap yields
+neither. `day` is therefore consulted only as a fallback when the wrapped value
+is already implausible. (`docs/DECISIONS.md` D-011.)
+
+## Nothing is dropped silently
+
+The pipeline asserts that every one of the 411,680 stop pairs is accounted for,
+and `TIMETABLE_REPORT.json` carries the breakdown:
+
+| Outcome | Pairs |
+|---|---:|
+| Used to build occupancy | 376,385 |
+| Skipped — no time information | 34,976 |
+| Skipped — implausible transit (>180 min) | 318 |
+| Skipped — self-loop | 1 |
+| **Total seen** | **411,680** |
+| Windows emitted (midnight crossings split in two) | 378,297 |
+| — of which midnight splits | 1,912 |
+
+A transit crossing midnight is split into two windows on the representative day
+(23:50 + 20 min becomes `23:50–24:00` and `00:00–00:10`), never left as an
+interval running backwards.
+
+## Honouring T2's findings
+
+T3 reuses `datameet.split_train_runs`, so the duplicate-stop-list and
+missing-stop rules from T2 apply unchanged — **a phantom adjacency must not
+become a phantom occupancy.** There is a dedicated test for train 04857.
+
+Sections are marked `lowConfidence` with a stated reason, rather than deleted:
+
+| Reason | Sections |
+|---|---:|
+| `longHop` — derived from a skip-halt pair, so not a single maintainable unit | 81 |
+| `no timed traffic` — every stop record for the pair lacks times | 1,695 |
+| **Total flagged** | **1,775** |
+
+## What came out
+
+Computed from an actual run; regenerated into `TIMETABLE_REPORT.json` each time.
+
+- **8,454 of 10,149 sections** have timed traffic.
+- **Median utilisation 13.8%**, median 199 occupied minutes and 942 free minutes
+  per section per day.
+- **66 sections have no usable block window at all** — fully saturated.
+
+The saturated sections are the ones that genuinely are saturated on Indian
+Railways, which is the strongest available check that the model is sane:
+
+| Section | Utilisation | Trains | Usable windows | |
+|---|---:|---:|---:|---|
+| `BKA-BNI` Barkhera – Budni | 87.2% | 163 | **0** | Itarsi ghat |
+| `BDI-BSL` Bhadli – Bhusaval Jn | 82.7% | 214 | **0** | Mumbai–Howrah trunk |
+| `GZB-SBB` Ghaziabad – Sahibabad | 82.2% | 281 | 1 (54 min, 01:08–02:02) | Delhi approach |
+| `KAD-PDI` Khandala – Palasdari | 77.4% | 81 | 2 | Bhor Ghat incline |
+
+That scarcity *is* the problem statement — a corridor carrying 281 trains a day
+with one 54-minute maintenance window is exactly the conflict this system exists
+to schedule around.
+
+## `trains.json` — real class codes, no invented priority
+
+5,208 trains, 100% field coverage, joining exactly to the 5,208 train numbers in
+`schedules.json`. The `type` field is the real Indian Railways class code:
+
+| Code | Count | Code | Count | Code | Count |
+|---|---:|---|---:|---|---:|
+| `Pass` | 2,459 | `Hyd` | 121 | `Shtb` | 31 |
+| `Exp` | 1,288 | `GR` | 52 | `Mail` | 19 |
+| `SF` | 719 | `Raj` | 48 | `Toy` | 14 |
+| `MEMU` | 297 | `Drnt` | 48 | `Del` | 8 |
+| | | `SKr` | 42 | `DEMU` | 4 |
+| | | `JShtb` | 40 | `Klkt` | 3 |
+
+15 trains have no `type` value.
+
+**No priority score is assigned in T3, deliberately.** Mapping a class code to
+an objective-function weight is a policy decision that belongs to the optimizer
+(task T22), and doing it once in the place that owns it is better than
+scattering an interpretation through the data layer. The codes are emitted
+verbatim, alongside the published accommodation flags (`first_ac`, `second_ac`,
+`third_ac`, `sleeper`, `chair_car`, `first_class`) which give T22 a second,
+independent signal for what counts as a premium service.
+
+Codes are left unexpanded in the data for the same reason. For reference,
+`Raj`/`Shtb`/`JShtb`/`Drnt`/`SF`/`Exp`/`Pass`/`Mail` are Rajdhani, Shatabdi, Jan
+Shatabdi, Duronto, Superfast, Express, Passenger and Mail; `MEMU`/`DEMU` are
+electric and diesel multiple units. `GR`, `SKr`, `Hyd`, `Del` and `Klkt` are
+less certain and are **not** guessed at anywhere in the code.
+
+---
+
 ## Status
 
-- **T2 — done.** `ingestion/` extracts stations and derives corridor sections.
-- **T3 — next.** Build the per-corridor occupied-window calendar from the real
-  arrival/departure times in `schedules.json` and the ISL CSV, and populate
-  `maxDailyBlockWindows`. `trains.json` supplies train type for priority
-  weighting (PRD 9.6).
-- **T4 — after that.** `generators/` produces synthetic assets, tasks, resources
-  and dependencies against these real corridors, using the skewed distributions
-  in PRD 5.2 (severity is Beta-distributed, not uniform — realistic skew is part
-  of what makes the dataset credible).
+- **T2 — done.** Stations and corridor sections from real route data.
+- **T3 — done.** Occupancy calendar, free block windows, and train class metadata.
+- **T4 — next.** `generators/` produces synthetic assets, tasks, resources and
+  dependencies against these real corridors, using the skewed distributions in
+  PRD 5.2 (severity is Beta-distributed, not uniform — realistic skew is part of
+  what makes the dataset credible).
+
+  T4 now has both real anchors it needs: **which** sections exist, and **when**
+  each is actually free. Prefer sections with `lowConfidence == false` and a
+  healthy `distinctTrains` count; the saturated four above make the most
+  compelling demo corridors, since they are where maintenance genuinely competes
+  with traffic.

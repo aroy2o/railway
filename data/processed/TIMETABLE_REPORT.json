@@ -1,0 +1,59 @@
+{
+  "task": "T3 - timetable occupancy calendar (PRD FR1.2)",
+  "inputs": {
+    "stop_records": 417080,
+    "trains": 5208,
+    "sections_from_T2": 10149
+  },
+  "stopPairAccounting": {
+    "pairs_seen": 411680,
+    "pairs_used": 376385,
+    "skipped_self_loop": 1,
+    "skipped_unknown_section": 0,
+    "skipped_missing_time": 34976,
+    "skipped_implausible_transit": 318,
+    "windows_emitted": 378297,
+    "midnight_splits": 1912
+  },
+  "occupancy": {
+    "sections_with_traffic": 8454,
+    "sections_without_timed_traffic": 1695,
+    "sections_low_confidence": 1775,
+    "transit_windows_total": 378297,
+    "transit_method_counts": {
+      "clock-wrap": 378297
+    },
+    "median_occupied_minutes": 199.0,
+    "median_free_minutes": 942.5,
+    "median_utilisation_pct": 13.82,
+    "sections_with_no_usable_block_window": 66
+  },
+  "trains": {
+    "count": 5208,
+    "by_type": {
+      "Pass": 2459,
+      "Exp": 1288,
+      "SF": 719,
+      "MEMU": 297,
+      "Hyd": 121,
+      "GR": 52,
+      "Raj": 48,
+      "Drnt": 48,
+      "SKr": 42,
+      "JShtb": 40,
+      "Shtb": 31,
+      "Mail": 19,
+      "(missing)": 15,
+      "Toy": 14,
+      "Del": 8,
+      "DEMU": 4,
+      "Klkt": 3
+    }
+  },
+  "modellingChoices": {
+    "occupancy": "departure at endpoint A -> arrival at endpoint B",
+    "horizon": "one representative 24-hour day; no day-of-week in source",
+    "clearanceMarginMin": 5,
+    "minBlockWindowMin": 30
+  }
+}
