@@ -255,6 +255,62 @@ export interface BaselineResult {
   contestableTaskIds?: string[]
 }
 
+/** Where a task sits, or sat, in a plan. */
+export interface OverrideAssignment {
+  corridorId: string
+  date: string
+  windowIndex: number
+  start: string
+  end: string
+  startMinute: number
+  endMinute: number
+  capacityMinutes: number
+}
+
+export interface RevalidationCheck {
+  check: string
+  passed: boolean
+  detail: string
+}
+
+/** FR6.2 - what was verified when the override was accepted. */
+export interface RevalidationResult {
+  constraintsSatisfied: boolean
+  checks: RevalidationCheck[]
+  /** Null until train-impact scoring exists (T22) - not "no impact". */
+  trainImpactDelta: null
+}
+
+export interface ScheduleOverride {
+  _id: string
+  scheduleId: string
+  taskId: string
+  action: 'move' | 'defer'
+  /** The solver's own placement, preserved across repeated overrides. */
+  originalAiAssignment: OverrideAssignment | null
+  fromAssignment: OverrideAssignment | null
+  newAssignment: OverrideAssignment | null
+  reason: string
+  revalidation: RevalidationResult
+  actorRole: string
+  createdAt: string
+}
+
+/** A window a task could legally move into, per the same validator. */
+export interface OverrideTarget {
+  date: string
+  windowIndex: number
+  start: string
+  end: string
+  freeMinutes: number
+}
+
+/** The solver's plan with manual overrides replayed on top (D-043). */
+export interface EffectivePlan {
+  blocks: ScheduleBlock[]
+  deferredTaskIds: string[]
+}
+
 export interface Schedule {
   _id: string
   horizon: string
@@ -284,6 +340,14 @@ export interface Schedule {
   inputSummary: { taskCount: number; corridorCount: number; prioritySource: string }
   /** Best-effort optimizer calls that failed (D-036). Surfaced, not swallowed. */
   generationErrors: Array<{ call: string; message: string; code: string }>
+  /** Manual amendments, appended never edited (FR6.2). Present on detail reads. */
+  overrides?: ScheduleOverride[]
+  /**
+   * `blocks` is what the solver produced and what `decisionLog` explains.
+   * This is that plan with overrides applied - what the Controller is looking
+   * at. Render this where it exists.
+   */
+  effectivePlan?: EffectivePlan
 }
 
 export interface Resource {
@@ -353,7 +417,9 @@ export const api = createApi({
     timeout: 30_000,
   }),
   // Cache invalidation tags, extended as CRUD endpoints are added (T10-T11).
-  tagTypes: ['Health', 'Task', 'Corridor', 'Asset', 'Resource', 'Provenance', 'Schedule'],
+  tagTypes: [
+    'Health', 'Task', 'Corridor', 'Asset', 'Resource', 'Provenance', 'Schedule', 'Override',
+  ],
   endpoints: (builder) => ({
     /**
      * Cross-service wiring probe: React -> Express -> MongoDB + Python
@@ -428,6 +494,41 @@ export const api = createApi({
      * scores back onto task documents (D-035), so the priority queue is stale
      * the moment this succeeds.
      */
+    /** Windows a task can legally move into - same validator as the write path. */
+    getOverrideTargets: builder.query<
+      { data: OverrideTarget[] },
+      { scheduleId: string; taskId: string }
+    >({
+      query: ({ scheduleId, taskId }) =>
+        `/schedules/${encodeURIComponent(scheduleId)}/override-targets/${encodeURIComponent(taskId)}`,
+      providesTags: ['Override'],
+    }),
+
+    /**
+     * FR6.2 - move a task to a different free window, or defer it.
+     *
+     * A refused override comes back as a 409 carrying the specific check that
+     * failed; the UI shows that rather than a generic error.
+     */
+    applyOverride: builder.mutation<
+      { data: ScheduleOverride },
+      {
+        scheduleId: string
+        taskId: string
+        action: 'move' | 'defer'
+        targetDate?: string
+        targetWindowIndex?: number
+        reason: string
+      }
+    >({
+      query: ({ scheduleId, ...body }) => ({
+        url: `/schedules/${encodeURIComponent(scheduleId)}/override`,
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: ['Schedule', 'Override'],
+    }),
+
     generateSchedule: builder.mutation<
       { data: Schedule },
       { horizonStart?: string; horizonDays?: number } | void
@@ -448,6 +549,8 @@ export const {
   useGetProvenanceQuery,
   useGetLatestScheduleQuery,
   useGenerateScheduleMutation,
+  useGetOverrideTargetsQuery,
+  useApplyOverrideMutation,
 } = api
 
 /**

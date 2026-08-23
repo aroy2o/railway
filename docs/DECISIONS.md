@@ -1386,3 +1386,92 @@ caveats beneath it, which is what FR9.3 literally describes. Rejected: a table
 sorts the eye toward the largest difference, which here is utilisation — the one
 number that reads backwards. Grouping by *what the number means* rather than by
 metric type is what keeps the reading honest.
+
+---
+
+## D-043 — Overrides are a separate append-only log; the schedule is never mutated
+
+**Date:** 2026-08-23 · **Task:** T15
+
+**Decision.** A manual override (FR6.2) is stored in its own
+`schedule_overrides` collection. The schedule document is never edited. The plan
+a Controller sees is `effectivePlan` = the solver's blocks with every override
+replayed in creation order.
+
+**Why not mutate the schedule.** Two reasons; the second decided it.
+
+1. D-034 treats a schedule as an event — what the solver decided at a moment.
+   An override is also an event, so it gets the same treatment.
+2. **`schedule.decisionLog` explains the SOLVER's decisions**, and T17 will
+   build grounded explanations from it under a hard rule that the LLM never
+   invents numbers (PRD Section 18). Mutating `blocks` would leave the log
+   saying a task runs at 01:00 while the blocks say 14:00 — the explanation
+   layer would then be grounded in something no longer true. Keeping the two
+   separate means "what the AI decided" and "what the plan is now" are both
+   answerable, which is exactly what an audit needs.
+
+The cost is replaying overrides on read. That is a pure function over plain
+data, unit-tested, and the plans are small.
+
+**Scope of a move.** Same corridor, different free window — or defer. A
+**cross-corridor move is refused outright**, not treated as a capacity
+question: the defect is on that corridor's asset, and moving the paperwork does
+not move the cracked rail. That check runs first and says so.
+
+**Repeated overrides.** A task can be overridden any number of times; each acts
+on the placement the previous one produced. FR6.2 asks for the "original AI
+assignment", which after the second override is no longer the previous
+placement — so both are recorded: `fromAssignment` (immediately before) and
+`originalAiAssignment` (what the solver decided), preserved indefinitely.
+
+**Regeneration.** Overrides are keyed to a schedule id, and a regeneration
+produces a new schedule. Amendments therefore belong to the plan they amended
+and do not silently follow the Controller onto a different one — correct, since
+a new solve may have placed the task somewhere the override no longer makes
+sense.
+
+**`task.status` is deliberately left alone.** It is currently `pending` on all
+89 tasks and is written by nothing except the seed — generation does not set it
+either. Making it partially accurate here (updating it on override while
+scheduling leaves it stale) would be worse than uniformly wrong. Noted as a
+follow-up for whichever task takes on the full FR6.1 workflow.
+
+---
+
+## D-044 — Re-validation is written against the failure that is silent
+
+**Date:** 2026-08-23 · **Task:** T15
+
+**Decision.** Every override runs six named checks, each reported pass or fail,
+and capacity is measured against the **effective plan** — never the solver's
+original blocks.
+
+**The asymmetry that shaped this.** A validator that wrongly *rejects* fails
+loudly: a Controller sees an error and complains. A validator that wrongly
+*accepts* fails silently, producing a plan that looks valid and cannot be
+executed, discovered when a crew is standing on a corridor. The whole design is
+aimed at the second.
+
+**The specific trap, and the test for it.** If capacity were measured against
+the solver's original blocks, work that an earlier override moved into the
+target window would be invisible, and an over-filling move would be accepted.
+`ADVERSARIAL: an over-fill hidden behind a prior override is still caught`
+stages exactly that: a window the solver left empty, filled by a first override
+to 150 of 200 minutes, then a second override attempting to add 100 more.
+
+That test was mutation-checked rather than trusted. Injecting the exact bug it
+guards against — measuring capacity against a base-only view — makes it fail,
+along with six others. A test that cannot fail is not evidence.
+
+**Why `duration-fits-window` and `window-capacity` are separate checks.** They
+answer different questions and the live rejection shows why: a 140-minute task
+into a 152-minute window *fits the window* (that check passes) but the window
+already held 118 minutes of another department's work, leaving 34 (that check
+fails). A single "does it fit" check would have accepted it.
+
+**The UI cannot offer an option the API would refuse.**
+`GET /override-targets/:taskId` runs the same validator as the write path, so
+the window list a Controller picks from is exactly the set that would be
+accepted. The refusal path is still fully implemented, because validity can
+change between opening the panel and confirming — demonstrated live by staging
+that race.

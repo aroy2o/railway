@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { ScheduleBlock } from '../api/apiSlice.ts'
-import { blockPosition, corridorRowsForDay, summariseDays } from './gantt.ts'
+import { blockKey, blockPosition, corridorRowsForDay, summariseDays } from './gantt.ts'
 
 function block(overrides: Partial<ScheduleBlock> = {}): ScheduleBlock {
   return {
@@ -110,5 +110,19 @@ describe('blockPosition', () => {
     const position = blockPosition(block({ startMinute: 0, endMinute: 1 }))
 
     expect(position.width).toBe('1.2%')
+  })
+})
+
+describe('blockKey', () => {
+  it('identifies a block by where and when, not by array position', () => {
+    expect(blockKey(block())).toBe('A-B|2026-08-24|0')
+  })
+
+  it('distinguishes the same window on different days', () => {
+    expect(blockKey(block({ date: '2026-08-25' }))).not.toBe(blockKey(block()))
+  })
+
+  it('distinguishes different windows on the same day', () => {
+    expect(blockKey(block({ windowIndex: 3 }))).not.toBe(blockKey(block()))
   })
 })

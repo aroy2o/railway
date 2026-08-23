@@ -3,6 +3,9 @@
  *
  * Collections still to come as their tasks land:
  *   decision_logs (T17), audit_logs (T19), conflicts (T21)
+ *
+ * `schedule_overrides` (FR6.2) is T15's; T19's formal audit_logs will likely
+ * subsume or reference it when the full approval workflow lands.
  */
 export { Corridor } from './Corridor.js';
 export type { ICorridor, CorridorDocument, StationRef, OccupancySummary } from './Corridor.js';
@@ -25,6 +28,15 @@ export type { IResource, ResourceDocument, ResourceType } from './Resource.js';
 
 export { DatasetProvenance } from './DatasetProvenance.js';
 export type { IDatasetProvenance, FieldProvenance } from './DatasetProvenance.js';
+
+export { ScheduleOverride } from './ScheduleOverride.js';
+export type {
+  IScheduleOverride,
+  ScheduleOverrideDocument,
+  OverrideAssignment,
+  RevalidationCheck,
+  RevalidationResult,
+} from './ScheduleOverride.js';
 
 export { Schedule } from './Schedule.js';
 export type {

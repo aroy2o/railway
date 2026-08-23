@@ -138,6 +138,21 @@ reason a first-class outcome, and on the real corpus it is the larger half of
 the answer — 53 of 89 tasks. The solver's own `detail` text is rendered verbatim;
 it already names the remedy.
 
+**Manual override (FR6.2).** Clicking a block on the timeline opens an override
+panel: pick a task, pick a different window, give a reason, confirm. Click-driven
+rather than drag-and-drop — a drag target on a 24-hour axis is imprecise, and the
+Controller needs to choose from windows the timetable actually leaves free.
+
+The window list comes from `/override-targets`, which runs the same validator as
+the write path, so nothing offered can be refused. The refusal path is still
+fully built, because validity can change between opening the panel and
+confirming. Both outcomes render the full six-check re-validation, not a bare
+verdict. `OverrideHistory` shows every amendment with the solver's original
+placement kept alongside it.
+
+The Gantt renders `effectivePlan.blocks` where present — the plan as amended —
+while `blocks` stays untouched as what the solver produced (D-043).
+
 **Known limitations** renders `knownGaps` — the constraints the solver does not
 enforce (T24, T25) — plus any `generationErrors`. That report has now survived
 four hops: dataclass, HTTP, MongoDB, and screen.

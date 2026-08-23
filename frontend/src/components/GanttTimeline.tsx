@@ -14,7 +14,7 @@
  */
 import { useMemo, useState } from 'react'
 import type { Department, ScheduleBlock } from '../api/apiSlice.ts'
-import { HOUR_TICKS, blockPosition, corridorRowsForDay, summariseDays } from '../lib/gantt.ts'
+import { HOUR_TICKS, blockKey, blockPosition, corridorRowsForDay, summariseDays } from '../lib/gantt.ts'
 
 /** Reuses the DepartmentPill palette so colour means the same thing everywhere. */
 const DEPARTMENT_BAR: Record<Department, string> = {
@@ -32,9 +32,18 @@ interface GanttTimelineProps {
   blocks: ScheduleBlock[]
   horizonStart: string
   horizonDays: number
+  /** When given, blocks become clickable to start a manual override (FR6.2). */
+  onSelectBlock?: (block: ScheduleBlock) => void
+  selectedBlockKey?: string | null
 }
 
-export function GanttTimeline({ blocks, horizonStart, horizonDays }: GanttTimelineProps) {
+export function GanttTimeline({
+  blocks,
+  horizonStart,
+  horizonDays,
+  onSelectBlock,
+  selectedBlockKey,
+}: GanttTimelineProps) {
   const days = useMemo(
     () => summariseDays(blocks, horizonStart, horizonDays),
     [blocks, horizonStart, horizonDays],
@@ -135,7 +144,12 @@ export function GanttTimeline({ blocks, horizonStart, horizonDays }: GanttTimeli
                       />
                     ))}
                     {row.blocks.map((block) => (
-                      <BlockBar key={`${block.windowIndex}-${block.startMinute}`} block={block} />
+                      <BlockBar
+                        key={`${block.windowIndex}-${block.startMinute}`}
+                        block={block}
+                        onSelect={onSelectBlock}
+                        isSelected={selectedBlockKey === blockKey(block)}
+                      />
                     ))}
                   </div>
                 </div>
@@ -160,8 +174,19 @@ export function GanttTimeline({ blocks, horizonStart, horizonDays }: GanttTimeli
  * to demonstrate - so it has to be legible to someone who has never seen the
  * project, not merely encoded in a colour they would have to decode.
  */
-function BlockBar({ block }: { block: ScheduleBlock }) {
+function BlockBar({
+  block,
+  onSelect,
+  isSelected,
+}: {
+  block: ScheduleBlock
+  onSelect?: (block: ScheduleBlock) => void
+  isSelected?: boolean
+}) {
   const position = blockPosition(block)
+  const clickable = Boolean(onSelect)
+  const interaction = clickable ? 'cursor-pointer hover:brightness-110' : ''
+  const selectedRing = isSelected ? ' ring-2 ring-slate-900 ring-offset-1' : ''
   const departments = [...new Set(block.departments)] as Department[]
   const title =
     `${block.corridorId} · ${block.start}-${block.end} (${block.usedMinutes}/${block.capacityMinutes} min)\n` +
@@ -170,11 +195,12 @@ function BlockBar({ block }: { block: ScheduleBlock }) {
   if (!block.isCrossDepartmentBatch) {
     return (
       <div
-        title={title}
+        title={clickable ? `${title}\n\nClick to override` : title}
         style={position}
+        onClick={() => onSelect?.(block)}
         className={`absolute top-1 flex h-7 items-center overflow-hidden rounded px-1.5 ${
           DEPARTMENT_BAR[departments[0]] ?? 'bg-slate-500'
-        }`}
+        } ${interaction}${selectedRing}`}
       >
         <span className="truncate text-[10px] font-medium text-white">
           {block.taskIds.length} task{block.taskIds.length > 1 ? 's' : ''}
@@ -193,9 +219,10 @@ function BlockBar({ block }: { block: ScheduleBlock }) {
 
   return (
     <div
-      title={`SHARED BLOCK — ${title}`}
+      title={clickable ? `SHARED BLOCK — ${title}\n\nClick to override` : `SHARED BLOCK — ${title}`}
       style={position}
-      className="absolute -top-0.5 flex h-10 overflow-hidden rounded-md ring-2 ring-violet-600 ring-offset-1"
+      onClick={() => onSelect?.(block)}
+      className={`absolute -top-0.5 flex h-10 overflow-hidden rounded-md ring-2 ring-violet-600 ring-offset-1 ${interaction}`}
     >
       {perDepartment.map(({ department, share }) => (
         <div
@@ -255,6 +282,7 @@ function Legend() {
           Shared block — one possession, two departments
         </span>
       </span>
+      <span className="ml-auto text-slate-400">Click a block to override its placement</span>
     </div>
   )
 }

@@ -20,6 +20,12 @@ import {
   findScheduleById,
   generateSchedule,
 } from '../services/scheduleOrchestrator.js';
+import {
+  getEffectivePlan,
+  listOverrides,
+  listValidTargets,
+  recordOverride,
+} from '../services/scheduleOverrides.js';
 import { ApiError } from '../utils/ApiError.js';
 
 const router = Router();
@@ -88,7 +94,11 @@ router.get('/latest', async (_req: Request, res: Response, next: NextFunction) =
     if (!schedule) {
       throw ApiError.notFound('No schedule has been generated yet. POST /api/schedules/generate');
     }
-    res.json({ data: schedule });
+    // `blocks` stays exactly as the solver produced it - the decision log
+    // explains those. `effectivePlan` is that plan with manual overrides
+    // replayed on top, which is what a Controller is looking at (D-043).
+    const { overrides, effectivePlan } = await getEffectivePlan(schedule._id);
+    res.json({ data: { ...schedule, overrides, effectivePlan } });
   } catch (err) {
     next(err);
   }
@@ -103,7 +113,94 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = validated<IdParam>(req.params);
-      res.json({ data: await findScheduleById(id) });
+      const schedule = await findScheduleById(id);
+      const { overrides, effectivePlan } = await getEffectivePlan(id);
+      res.json({ data: { ...schedule, overrides, effectivePlan } });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/* -------------------------------------------------------------------------- */
+/* Manual override - FR6.2                                                     */
+/* -------------------------------------------------------------------------- */
+
+const overrideSchema = z
+  .object({
+    taskId: z.string().min(1).max(64),
+    action: z.enum(['move', 'defer']),
+    targetDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'targetDate must be an ISO date (YYYY-MM-DD)')
+      .optional(),
+    targetWindowIndex: z.coerce.number().int().min(0).max(200).optional(),
+    // FR6.2 makes the reason mandatory: an unexplained override is not
+    // auditable, and a minimum length keeps "x" from satisfying it.
+    reason: z.string().min(8, 'A reason of at least 8 characters is required').max(500),
+    actorRole: z.enum(['controller', 'drm']).default('controller'),
+  })
+  .refine(
+    (body) =>
+      body.action !== 'move' || (body.targetDate !== undefined && body.targetWindowIndex !== undefined),
+    { message: 'A move requires targetDate and targetWindowIndex' },
+  );
+type OverrideBody = z.infer<typeof overrideSchema>;
+
+/**
+ * POST /api/schedules/:id/override
+ *
+ * Move a task to a different free window on its own corridor, or defer it.
+ * Re-validated against the same constraints the solver honoured; an invalid
+ * move is refused with the specific check that failed, never a generic error.
+ */
+router.post(
+  '/:id/override',
+  validate({ params: idParamSchema, body: overrideSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = validated<IdParam>(req.params);
+      const body = validated<OverrideBody>(req.body);
+      const override = await recordOverride({ scheduleId: id, ...body });
+      res.status(201).json({ data: override });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/** The audit trail for one plan: what was changed, by whom, and why (FR6.2). */
+router.get(
+  '/:id/overrides',
+  validate({ params: idParamSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = validated<IdParam>(req.params);
+      res.json({ data: await listOverrides(id) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * Windows a given task could legally move into.
+ *
+ * Computed with the same validator the write path uses, so the UI can never
+ * offer an option that would then be refused.
+ */
+router.get(
+  '/:id/override-targets/:taskId',
+  validate({
+    params: z.object({
+      id: z.string().min(1).max(64),
+      taskId: z.string().min(1).max(64),
+    }),
+  }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id, taskId } = validated<{ id: string; taskId: string }>(req.params);
+      res.json({ data: await listValidTargets(id, taskId) });
     } catch (err) {
       next(err);
     }

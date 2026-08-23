@@ -15,6 +15,7 @@
  *   What-if simulation         T20
  *   Policy sliders             T23  (policyWeights stays null; no faked control)
  */
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import {
@@ -23,12 +24,16 @@ import {
   useGetTasksQuery,
 } from '../api/apiSlice.ts'
 import { describeApiError } from '../api/apiSlice.ts'
+import type { ScheduleBlock } from '../api/apiSlice.ts'
 import DeferredTasksPanel from '../components/DeferredTasksPanel.tsx'
 import GanttTimeline from '../components/GanttTimeline.tsx'
+import OverrideHistory from '../components/OverrideHistory.tsx'
+import OverridePanel from '../components/OverridePanel.tsx'
 import KnownLimitations from '../components/KnownLimitations.tsx'
 import KpiStrip from '../components/KpiStrip.tsx'
 import PriorityQueue from '../components/PriorityQueue.tsx'
 import QueryState from '../components/QueryState.tsx'
+import { blockKey } from '../lib/gantt.ts'
 import { PageHeader } from '../components/Table.tsx'
 
 /** The dataset's reference week, so a demo run is reproducible. */
@@ -38,8 +43,13 @@ export function ControllerDashboard() {
   const schedule = useGetLatestScheduleQuery()
   const tasks = useGetTasksQuery({ limit: 200 })
   const [generate, generation] = useGenerateScheduleMutation()
+  const [selected, setSelected] = useState<ScheduleBlock | null>(null)
 
   const plan = schedule.data?.data
+  // `blocks` is the solver's plan and what `decisionLog` explains; the
+  // effective plan is that with manual overrides replayed on top (D-043).
+  // The Controller is looking at the latter.
+  const visibleBlocks = plan?.effectivePlan?.blocks ?? plan?.blocks ?? []
   // A 404 means "none generated yet", which is an empty state rather than an
   // error - the difference matters on first run.
   const noScheduleYet =
@@ -136,15 +146,31 @@ export function ControllerDashboard() {
               <div className="grid gap-6 xl:grid-cols-4">
                 <div className="space-y-6 xl:col-span-3">
                   <GanttTimeline
-                    blocks={plan.blocks}
+                    blocks={visibleBlocks}
                     horizonStart={plan.horizonStart}
                     horizonDays={plan.horizonDays}
+                    onSelectBlock={setSelected}
+                    selectedBlockKey={selected ? blockKey(selected) : null}
                   />
+
+                  {selected && (
+                    <OverridePanel
+                      scheduleId={plan._id}
+                      // Re-read from the current plan so the panel never acts on
+                      // a placement a previous override has already changed.
+                      block={
+                        visibleBlocks.find((b) => blockKey(b) === blockKey(selected)) ?? selected
+                      }
+                      onClose={() => setSelected(null)}
+                    />
+                  )}
+
                   <DeferredTasksPanel deferred={plan.deferredTasks} />
                 </div>
 
                 <div className="space-y-6">
                   <PriorityQueue tasks={tasks.data?.data ?? []} schedule={plan} />
+                  <OverrideHistory overrides={plan.overrides ?? []} />
                   <KnownLimitations
                     knownGaps={plan.knownGaps}
                     generationErrors={plan.generationErrors}

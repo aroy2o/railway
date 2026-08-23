@@ -94,6 +94,9 @@ with supertest and never bind a socket.
 | `GET` | `/api/schedules/latest` | The most recent plan, in full. |
 | `GET` | `/api/schedules/:id` | One plan by id. |
 | `POST` | `/api/tasks/reprioritize` | FR2.4 re-rank without running a solve. |
+| `POST` | `/api/schedules/:id/override` | **FR6.2** — move a task to another free window on its corridor, or defer it. Re-validated; refused with the specific failing check. |
+| `GET` | `/api/schedules/:id/overrides` | The FR6.2 audit trail for one plan. |
+| `GET` | `/api/schedules/:id/override-targets/:taskId` | Windows a task can legally move into, from the same validator the write path uses. |
 
 Every list endpoint answers `{ data, pagination }` and is bounded — `limit`
 defaults to 50 and is capped at 200, so no route can return all 10,149
@@ -134,6 +137,34 @@ a missing comparison is distinguishable from a comparison of zero (D-036).
 
 Schedules are **appended, never replaced** — FR6.3 needs prior plans viewable
 for audit (D-034).
+
+## Manual override (FR6.2)
+
+`GET /api/schedules/:id` and `/latest` return three things: `blocks` (the plan
+exactly as the solver produced it, which `decisionLog` explains), `overrides`
+(the amendments), and `effectivePlan` (the two combined). **The schedule
+document is never mutated** — see D-043 for why that matters to T17's
+explanation layer.
+
+Re-validation runs six named checks and reports every one, passed or failed:
+
+| Check | Refuses |
+|---|---|
+| `same-corridor` | A cross-corridor move — the defect is on that corridor's asset |
+| `within-horizon` | A date outside the plan |
+| `window-exists` | A window the timetable does not leave free |
+| `different-placement` | A move to where the task already is |
+| `duration-fits-window` | A task longer than the window |
+| `window-capacity` | A task longer than what is *left* in the window |
+
+The last two are separate on purpose: a 140-minute task fits a 152-minute
+window but not one already holding 118 minutes of someone else's work.
+
+**Capacity is measured against the effective plan, never the base blocks** — a
+validator reading the solver's original blocks would not see work a prior
+override moved in, and would silently accept an over-fill. `overrideEngine.ts`
+is pure and carries an adversarial test for exactly that, which was
+mutation-checked to confirm it can fail (D-044).
 
 ```bash
 curl -X POST localhost:5000/api/schedules/generate \

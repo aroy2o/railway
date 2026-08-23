@@ -90,5 +90,16 @@ export function blockPosition(block: ScheduleBlock): { left: string; width: stri
   }
 }
 
+/**
+ * Stable identity for a block across renders.
+ *
+ * A block has no id of its own - it is defined by where and when it is - so
+ * corridor + date + window index is the natural key. Used to keep an override
+ * selection pointing at the right block after the plan changes underneath it.
+ */
+export function blockKey(block: Pick<ScheduleBlock, 'corridorId' | 'date' | 'windowIndex'>): string {
+  return `${block.corridorId}|${block.date}|${block.windowIndex}`
+}
+
 /** Hour ticks for the axis. Every 3 hours keeps the labels legible at width. */
 export const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21, 24]

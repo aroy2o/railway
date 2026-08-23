@@ -70,7 +70,13 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 - [ ] `todo` — **T14**: Baseline vs AI comparison screen (FR9.3) — real computed metrics table
       <br>_⚠️ **Read D-031 first.** Draw the comparison from `structurally_contestable()` (36 tasks), not all 89. Do not lead with task count — both engines schedule 36/36. Lead with conflicts (6 → 0) and batching (0 → 2)._
       <br>_⚠️ Utilisation must never appear without the conflict count: the baseline's 77.01% beats the AI's 74.33% purely by over-subscribing windows._
-- [ ] `todo` — **T15**: Manual override UI + backend re-validation against constraints (FR6.2/FR3)
+- [x] `done` — **T15**: Manual override UI + backend re-validation against constraints (FR6.2/FR3)
+      <br>_`schedule_overrides` collection, append-only; **the schedule document is never mutated** because `decisionLog` explains the solver's plan and T17 must stay grounded in something true (D-043). Reads return `blocks` (solver), `overrides`, and `effectivePlan` (the two combined)._
+      <br>_Six named re-validation checks, every one reported pass or fail. **Capacity is measured against the effective plan, never the base blocks** — a validator reading the solver's original blocks would not see work a prior override moved in and would silently accept an over-fill (D-044)._
+      <br>_The adversarial test for that was **mutation-checked**: injecting the exact bug it guards against makes it fail (plus 6 others), so it demonstrably has teeth._
+      <br>_Verified live in a real browser: an accepted move (TSK-00033, 6 checks green) and a refused one staged as a genuine race — `duration-fits-window` passes (140 min into a 152 min window) while `window-capacity` fails (only 34 min left). A single "does it fit" check would have accepted it._
+      <br>_Cross-corridor moves refused outright — the defect is on that corridor's asset. `task.status` deliberately untouched (D-043)._
+      <br>_**Not included:** the full FR6.1 Accept/Modify/Reject workflow with published-plan versioning (T19), and what-if simulation (T20)._
 
 ## 🟠 Strong differentiators (start only once all 🔴 above is `done`)
 
@@ -124,6 +130,7 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 _Append a dated one-line entry here each session — what was completed, what's next._
 
+- **2026-08-23** — T15 complete. **All 🔴 must-build tasks are now done.** Manual override with real re-validation, stored as an append-only log rather than by mutating the plan. The adversarial capacity test was mutation-checked to prove it can fail. Next: 🟠 differentiators.
 - **2026-08-23** — T14 complete. `/comparison` renders the FR9.3 metrics table with D-031's framing built into the layout rather than appended as small print, and the real conflict report as evidence. Backend TypeScript conversion re-verified clean beforehand (0 `any`, strict proven enforced, all four suites green) and `CLAUDE.md` corrected. Next: **T15 — manual override**, or T16–T23 differentiators.
 - **2026-08-23** — T12 + T13 complete. First judge-facing screen: Controller Dashboard at `/dashboard`, now the landing route. Cross-department batch visualisation verified to read clearly. Generate trigger and the optimizer-down error state both verified by driving a real browser click. Next: **T14 — Baseline vs AI comparison**, the strongest judging screen, building on `comparisonToBaseline` which this task deliberately left alone.
 - **2026-08-22** — T10 orchestration slice complete. The four-layer loop runs end to end for the first time; priority scores persist; schedules are stored append-only. One real bug found in the seam between two already-tested components (5xx message masking). Next: **T11 auth/routing or T13/T14 dashboard** — see the tradeoff note in the session report.
