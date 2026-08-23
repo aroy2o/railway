@@ -102,6 +102,14 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 ---
 
+## Maintenance
+
+- **2026-08-23** — `/backend` migrated from JavaScript to TypeScript at the owner's request,
+  superseding the backend half of D-001 (see D-041). ~3,200 lines across 32 files, no behaviour
+  change; all 34 backend tests pass and the real-corpus loop reproduces exactly. The migration
+  surfaced four latent looseness bugs — a `Mixed`-typed field with a known shape, a loosely typed
+  wire/stored block mismatch, a dead import, and unchecked `null` from `.lean()` in tests.
+
 ## Integration checkpoints
 
 - **2026-08-22 @ `d4910eb`** — T10 orchestration slice landed on top of the checkpoint. The

@@ -1265,3 +1265,63 @@ of the work, ringed in violet with an explicit "shared block" label. A colour
 alone would require the viewer to decode a legend; this reads without one, which
 is the bar it has to clear given it is the single most important visual moment in
 the demo.
+
+---
+
+## D-041 — The backend moves to TypeScript, superseding half of D-001
+
+**Date:** 2026-08-23 · **Task:** maintenance
+
+**Decision.** `/backend` is now TypeScript. This reverses the backend half of
+D-001, which chose plain JavaScript. D-001's frontend reasoning stands
+unchanged; its backend reasoning is superseded by this entry rather than edited,
+so the record shows what was thought at the time and why it changed.
+
+**Why D-001 said JavaScript.** The backend was "mostly thin routing and
+orchestration where Zod already validates every boundary at runtime, so a
+compile step would add friction without adding much safety". That was true when
+it was written — T1's backend was a health endpoint and an error handler.
+
+**Why that no longer holds.** Requested by the project owner, and the codebase
+has moved a long way from what D-001 described:
+
+- Seven Mongoose models with nested shapes, and a `schedules` document that
+  stores the optimizer's full output.
+- An orchestration layer that gathers from MongoDB, maps onto a wire contract
+  the optimizer enforces with `extra="forbid"`, and persists the response.
+- Exactly the seams D-032 and T10 identified as the risky part — `startMin` →
+  `startMinute`, `_id` → `taskId` — which are field-name mappings, precisely
+  what a type checker is good at and Zod is not, because Zod validates what
+  arrives at runtime rather than what this code sends.
+
+**What the migration actually caught**, none of which was failing at runtime but
+all of which was latent:
+
+1. `Schedule.generationErrors` was typed `Mixed` despite having a known shape.
+   It now has a real sub-schema.
+2. `OptimizedSchedule.blocks` was loosely typed where the persisted block is
+   stored verbatim — so the wire type and the stored type are now one type,
+   removing somewhere for them to drift apart.
+3. An unused `Schedule` import in the seed script, kept honest by
+   `noUnusedLocals`.
+4. In the tests, `Task.findById().lean()` returning `null` was never handled.
+   Correct in practice, unchecked in principle.
+
+**Toolchain.** Node 20 has no native type stripping (that arrives in 22.6+), so
+`tsx` runs the dev server, the seed and the tests directly from source, while
+`tsc` emits `dist/` for production. The Dockerfile builds then prunes dev
+dependencies, so tsc and tsx never reach the runtime image.
+
+`strict` is on, including `noUnusedLocals` and `noUnusedParameters`. Most of the
+value of this migration is lost the moment implicit `any` is allowed back in.
+
+**One deliberate looseness.** `validate()` replaces `req.body`/`query`/`params`
+with the parsed value, which Express's own types cannot express. Rather than
+scatter bare `as` expressions through the routes, there is a single named helper
+— `validated<T>(req.query)` — so the assumption is visible at every call site
+instead of hidden.
+
+**Cost.** ~3,200 lines across 32 files, no behaviour change. The full real-corpus
+loop reproduces exactly: 36/53, 2 batches, 6 baseline double-bookings across 605
+minutes, knownGaps 11/5, and the 502 path still reports "Could not reach the
+optimizer service".

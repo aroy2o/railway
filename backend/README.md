@@ -1,17 +1,23 @@
-# `/backend` — Express API
+# `/backend` — Express API (TypeScript)
 
 Auth, CRUD and orchestration for the block planning system. This service owns
 MongoDB and is the **only** client of the Python optimizer — it never runs
 OR-Tools itself (PRD 10.3).
 
+TypeScript throughout, `strict` on. Node 20 has no native type stripping, so
+`tsx` runs the dev server, the seed and the tests straight from source while
+`tsc` emits `dist/` for production (D-041).
+
 ## Run
 
 ```bash
 npm install
-npm run dev     # watch mode
-npm start       # once
-npm run seed    # load data/processed/*.json into MongoDB (~20 s)
-npm test        # node --test
+npm run dev        # tsx watch, straight from src/
+npm run build      # tsc -> dist/
+npm start          # node dist/server.js  (needs build first)
+npm run typecheck  # tsc --noEmit, includes tests
+npm run seed       # load data/processed/*.json into MongoDB (~20 s)
+npm test           # node --test via tsx
 ```
 
 ### Seeding
@@ -49,8 +55,8 @@ src/
     env.js          Zod-validated config — the only source of tunables
     db.js           Mongo connection lifecycle + readiness status
   middleware/
-    errorHandler.js notFound + terminal error handler (one error envelope)
-    validate.js     Zod request-validation factory for body/query/params
+    errorHandler.ts notFound + terminal error handler (one error envelope)
+    validate.ts     Zod request-validation factory, plus `validated<T>()`
   models/           Mongoose schemas (task T5, PRD Section 15)
   routes/
     index.js        mounts the API at /api
@@ -149,7 +155,9 @@ two files' fixtures wipe each other mid-run.
 - **One router file per resource**, mounted in `routes/index.js`.
 - **Validate at the boundary.** Routes that accept input use
   `validate({ body, query, params })`; the parsed value replaces the raw one, so
-  no handler ever sees unvalidated data.
+  no handler ever sees unvalidated data. Read it back with
+  `validated<z.infer<typeof schema>>(req.query)` — a single named cast, because
+  Express's types cannot express that the middleware replaced the value.
 - **One error envelope.** Handlers throw `ApiError`; the terminal handler shapes
   every failure as `{ error: { code, message, details? } }` and logs 5xx with a
   stack. Nothing is swallowed. Internal exception text is never sent to a client.

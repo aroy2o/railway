@@ -1,0 +1,176 @@
+/**
+ * `schedules` collection - PRD Section 15.
+ *
+ * Stores a generated plan together with everything needed to explain and audit
+ * it. The PRD's shape is honoured, and the optimizer's richer output is kept
+ * rather than trimmed - the same choice T2-T4 made with the pipeline data, for
+ * the same reason: discarding a field that already exists means a later task
+ * has to recompute or re-request it.
+ *
+ * Schedules are APPENDED, never replaced. FR6.3 requires published plans to be
+ * versioned with prior versions viewable for audit, so each generation is a new
+ * document. That is deliberately the opposite of the seed script's
+ * replace-everything strategy (D-019): the seed mirrors deterministic source
+ * files, while a schedule is an event that happened at a point in time.
+ * See docs/DECISIONS.md D-034.
+ */
+import mongoose, { Schema, type HydratedDocument, type Model } from 'mongoose';
+import type { Department } from './Asset.js';
+
+export interface ScheduleBlock {
+  corridorId: string;
+  date: string;
+  windowIndex: number;
+  start?: string;
+  end?: string;
+  startMinute?: number;
+  endMinute?: number;
+  capacityMinutes?: number;
+  usedMinutes?: number;
+  unusedMinutes?: number;
+  taskIds: string[];
+  departments: Department[];
+  isCrossDepartmentBatch?: boolean;
+  /** Null until train-impact scoring exists (PRD 9.6, T22) - not "no impact". */
+  trainImpact: unknown | null;
+}
+
+export interface ScheduleDeferredTask {
+  taskId: string;
+  reason?: string;
+  detail?: string;
+}
+
+export interface GenerationError {
+  call: string;
+  message: string;
+  code: string;
+}
+
+export interface ISchedule {
+  /** Readable, sortable, generated: SCH-<compact ISO timestamp>. See D-017. */
+  _id: string;
+
+  // --- PRD Section 15 shape ---------------------------------------------
+  horizon: string;
+  generatedAt: Date;
+  /** Exposed as policy sliders in T23; null until then rather than faked. */
+  policyWeights: unknown | null;
+  blocks: ScheduleBlock[];
+  deferredTasks: ScheduleDeferredTask[];
+  comparisonToBaseline: unknown | null;
+
+  // --- real extensions from the optimizer's response ---------------------
+  horizonStart: string;
+  horizonDays: number;
+  status: string;
+  objectiveValue: number;
+  solveSeconds: number;
+  metrics: Record<string, number>;
+  /** T17 builds grounded explanations from this (PRD Section 18). */
+  decisionLog: unknown[];
+  /** Constraints the solver does not yet enforce (T24, T25). */
+  knownGaps: unknown | null;
+  /** The full FR9.1 baseline result, including its conflict report. */
+  baseline: unknown | null;
+  /** D-031: the comparison denominator, so T14 cannot use the full backlog. */
+  contestableTaskIds: string[];
+
+  inputSummary: {
+    taskCount: number;
+    corridorCount: number;
+    prioritySource: string;
+  };
+  /**
+   * Best-effort calls that failed. Recorded rather than swallowed, so a missing
+   * comparison is distinguishable from a comparison of zero.
+   *
+   * Named `generationErrors` rather than `errors`: Mongoose reserves the latter
+   * as a document pathname and warns that it may break validation.
+   */
+  generationErrors: GenerationError[];
+}
+
+export type ScheduleDocument = HydratedDocument<ISchedule>;
+
+const blockSchema = new Schema<ScheduleBlock>(
+  {
+    corridorId: { type: String, required: true },
+    date: { type: String, required: true },
+    windowIndex: { type: Number, required: true },
+    start: String,
+    end: String,
+    startMinute: Number,
+    endMinute: Number,
+    capacityMinutes: Number,
+    usedMinutes: Number,
+    unusedMinutes: Number,
+    taskIds: [String],
+    departments: [String],
+    isCrossDepartmentBatch: Boolean,
+    trainImpact: { type: Schema.Types.Mixed, default: null },
+  },
+  { _id: false },
+);
+
+/**
+ * A best-effort optimizer call that failed.
+ *
+ * Given a real sub-schema rather than `Mixed`: the shape is known, and the JS
+ * version's `Mixed` typing was looseness the migration surfaced rather than a
+ * deliberate choice.
+ */
+const generationErrorSchema = new Schema<GenerationError>(
+  {
+    call: { type: String, required: true },
+    message: { type: String, required: true },
+    code: { type: String, required: true },
+  },
+  { _id: false },
+);
+
+const deferredSchema = new Schema<ScheduleDeferredTask>(
+  { taskId: { type: String, required: true }, reason: String, detail: String },
+  { _id: false },
+);
+
+const scheduleSchema = new Schema<ISchedule>(
+  {
+    _id: { type: String, required: true },
+
+    horizon: { type: String, required: true },
+    generatedAt: { type: Date, required: true, index: true },
+    policyWeights: { type: Schema.Types.Mixed, default: null },
+    blocks: { type: [blockSchema], default: [] },
+    deferredTasks: { type: [deferredSchema], default: [] },
+    comparisonToBaseline: { type: Schema.Types.Mixed, default: null },
+
+    horizonStart: { type: String, required: true },
+    horizonDays: { type: Number, required: true },
+    status: { type: String, required: true },
+    objectiveValue: Number,
+    solveSeconds: Number,
+    metrics: { type: Schema.Types.Mixed, default: {} },
+    decisionLog: { type: Schema.Types.Mixed, default: [] },
+    knownGaps: { type: Schema.Types.Mixed, default: null },
+    baseline: { type: Schema.Types.Mixed, default: null },
+    contestableTaskIds: { type: [String], default: [] },
+
+    inputSummary: {
+      taskCount: Number,
+      corridorCount: Number,
+      prioritySource: String,
+    },
+    generationErrors: { type: [generationErrorSchema], default: [] },
+  },
+  { versionKey: false, _id: false },
+);
+
+scheduleSchema.index({ generatedAt: -1 });
+
+export const Schedule: Model<ISchedule> = mongoose.model<ISchedule>(
+  'Schedule',
+  scheduleSchema,
+  'schedules',
+);
+export default Schedule;

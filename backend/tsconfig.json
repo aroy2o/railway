@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    /* Node 20 ESM. NodeNext is what makes the existing `.js` import specifiers
+       correct rather than something to rewrite: in ESM TypeScript, a `.js`
+       specifier resolves to the `.ts` source at compile time and to the emitted
+       `.js` at runtime. */
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+
+    "outDir": "dist",
+    "rootDir": "src",
+    "sourceMap": true,
+    "declaration": false,
+
+    /* Strict throughout. The point of the migration is compile-time safety on
+       the Mongoose models and the optimizer contract, and most of that is lost
+       the moment implicit `any` is allowed back in. */
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": false,
+
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

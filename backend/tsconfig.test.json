@@ -1,0 +1,10 @@
+{
+  /* Tests are type-checked but never emitted - they run through tsx. */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}

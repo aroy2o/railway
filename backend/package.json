@@ -7,12 +7,14 @@
   "engines": {
     "node": ">=20"
   },
-  "main": "src/server.js",
+  "main": "dist/server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "test": "node --env-file=tests/.env.test --test tests/",
-    "seed": "node src/scripts/seed.js"
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "seed": "tsx src/scripts/seed.ts",
+    "test": "node --env-file=tests/.env.test --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -22,6 +24,12 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
-    "supertest": "^7.1.4"
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.2.0",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.1.4",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
   }
 }
