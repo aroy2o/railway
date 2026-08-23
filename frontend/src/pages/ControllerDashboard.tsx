@@ -15,6 +15,8 @@
  *   What-if simulation         T20
  *   Policy sliders             T23  (policyWeights stays null; no faked control)
  */
+import { Link } from 'react-router-dom'
+
 import {
   useGenerateScheduleMutation,
   useGetLatestScheduleQuery,
@@ -110,6 +112,26 @@ export function ControllerDashboard() {
                 solveSeconds={plan.solveSeconds}
                 status={plan.status}
               />
+
+              {/* The comparison is computed in the same run as this plan, so a
+                  Controller reviewing one will want the other close by. */}
+              {plan.comparisonToBaseline && (
+                <Link
+                  to="/comparison"
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-300 bg-slate-100 px-5 py-3 transition hover:border-slate-400"
+                >
+                  <span className="text-sm text-slate-700">
+                    The same backlog run through the current departmental process double-books{' '}
+                    <strong className="text-rose-700">
+                      {plan.comparisonToBaseline.baseline.doubleBookings} corridors
+                    </strong>{' '}
+                    and shares{' '}
+                    <strong>{plan.comparisonToBaseline.baseline.crossDepartmentBatches}</strong>{' '}
+                    blocks across departments.
+                  </span>
+                  <span className="text-sm font-medium text-sky-700">Baseline vs AI →</span>
+                </Link>
+              )}
 
               <div className="grid gap-6 xl:grid-cols-4">
                 <div className="space-y-6 xl:col-span-3">

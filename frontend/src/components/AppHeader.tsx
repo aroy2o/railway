@@ -8,6 +8,7 @@ import { NavLink } from 'react-router-dom'
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard' },
+  { to: '/comparison', label: 'Baseline vs AI' },
   { to: '/corridors', label: 'Corridors' },
   { to: '/assets', label: 'Assets' },
   { to: '/tasks', label: 'Backlog' },

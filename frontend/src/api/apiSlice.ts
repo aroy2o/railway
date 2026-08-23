@@ -13,6 +13,7 @@
  */
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
 import { API_BASE_URL } from '../config.ts'
+import type { ComparisonToBaseline } from '../lib/comparison.ts'
 import type { RootState } from '../store/store.ts'
 
 /* -------------------------------------------------------------------------- */
@@ -221,6 +222,39 @@ export interface KnownGaps {
   dependencyViolations: { count: number; note: string; violations: unknown[] }
 }
 
+/** One department pair holding the same corridor at the same time. */
+export interface DoubleBooking {
+  corridorId: string
+  date: string
+  taskIds: string[]
+  departments: string[]
+  overlapStart: string
+  overlapEnd: string
+  overlapMinutes: number
+}
+
+export interface OverSubscribedWindow {
+  corridorId: string
+  date: string
+  windowIndex: number
+  capacityMinutes: number
+  claimedMinutes: number
+  excessMinutes: number
+  departments: string[]
+}
+
+/** The FR9.1 baseline result, stored verbatim by T10. */
+export interface BaselineResult {
+  metrics: Record<string, number>
+  conflicts: {
+    doubleBookings: DoubleBooking[]
+    overSubscribedWindows: OverSubscribedWindow[]
+    /** The solver's own framing: these are the OUTPUT, not a defect. */
+    note: string
+  }
+  contestableTaskIds?: string[]
+}
+
 export interface Schedule {
   _id: string
   horizon: string
@@ -243,8 +277,10 @@ export interface Schedule {
   }>
   knownGaps: KnownGaps
   contestableTaskIds: string[]
-  /** T14's data. Deliberately unused on this screen. */
-  comparisonToBaseline: unknown | null
+  /** FR9.3 comparison, computed once by T10 with D-031's caveats embedded. */
+  comparisonToBaseline: ComparisonToBaseline | null
+  /** The full baseline result, including its real conflict report. */
+  baseline: BaselineResult | null
   inputSummary: { taskCount: number; corridorCount: number; prioritySource: string }
   /** Best-effort optimizer calls that failed (D-036). Surfaced, not swallowed. */
   generationErrors: Array<{ call: string; message: string; code: string }>

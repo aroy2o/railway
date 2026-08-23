@@ -1325,3 +1325,64 @@ instead of hidden.
 loop reproduces exactly: 36/53, 2 batches, 6 baseline double-bookings across 605
 minutes, knownGaps 11/5, and the 502 path still reports "Could not reach the
 optimizer service".
+
+**Post-conversion audit (2026-08-23).** Re-verified before building T14 on top,
+since a rename-only migration would have undermined the entire point:
+
+| Check | Result |
+|---|---|
+| Source files | 32 `.ts`, **0 `.js`** remaining |
+| `: any` / `as any` / `@ts-ignore` | **0 / 0 / 0** |
+| Exported interfaces and types | 65 |
+| `strict`, `noUnusedLocals`, `noUnusedParameters` | all on, and proven — an implicit-`any` probe file is rejected with TS7006 |
+| `tsc --noEmit` including tests | clean |
+| Test suites | backend 34, optimizer 120, data 94, frontend 7 + build + lint |
+
+This is a genuine conversion, not a rename. `CLAUDE.md` was the one document
+still describing the backend as plain Node/Express and has been corrected.
+
+---
+
+## D-042 — On the comparison screen, the layout *is* the honesty mechanism
+
+**Date:** 2026-08-23 · **Task:** T14
+
+**Decision.** D-031's three framing rules are enforced by the structure of the
+comparison screen and by unit-tested logic, not by a disclaimer at the bottom.
+
+**Why this needed deciding at all.** D-031 exists because an earlier session
+nearly shipped a false "the AI schedules more work" claim. The natural instinct
+when building a product comparison page is to lead with the biggest favourable
+number — so the same mistake was available again, now at the pixel level rather
+than the data level. Small print at the foot of a page does not prevent it; the
+reader has already formed an impression from the largest number they saw.
+
+**How each rule became structure:**
+
+| D-031 rule | How the screen enforces it |
+|---|---|
+| Draw from the contestable subset, not the full backlog | A scope band renders **before any metric**, stating that 53 of 89 tasks are impossible for both engines, with a proportional bar. The denominator is read before any number. |
+| Do not lead with a scheduled-task count | Ordering comes from `buildMetricRows()`, which places conflicts and batching first and tags throughput `no-difference`. The screen renders `headlineRows()` and `supportingRows()` — it cannot promote throughput without changing the tested module. |
+| Never show utilisation without its conflict count | Over-subscription is not a sibling row. It is carried **inside** the utilisation row as `pairedWith` and rendered in the same card, so no layout change can separate them. |
+
+The throughput card shows `36 / 36` with an `=` rather than an arrow and a
+"no difference" tag, because on this dataset there is genuinely no advantage to
+claim. The utilisation card is tagged **"reads backwards"** and says plainly
+that the baseline's higher number is the defect showing.
+
+**The rules are executable.** `src/lib/comparison.ts` holds the ordering, the
+verdict classification and the pairing, with tests asserting that throughput is
+never a headline row, that equal throughput is tagged `no-difference`, and that
+utilisation always carries its conflict count. A future edit that headlines
+throughput fails a test rather than a dry run.
+
+**Conflicts are shown, not just counted.** The baseline's real conflict report
+is rendered as a table: corridor, date, which two departments, the overlapping
+window and the minutes. "S&T vs TRD both booked BBPR-SYU from 04:14 to 06:14 on
+the 24th" is evidence in a way that "6 conflicts" is not.
+
+**Alternative considered.** A single side-by-side metrics table with the
+caveats beneath it, which is what FR9.3 literally describes. Rejected: a table
+sorts the eye toward the largest difference, which here is utilisation — the one
+number that reads backwards. Grouping by *what the number means* rather than by
+metric type is what keeps the reading honest.

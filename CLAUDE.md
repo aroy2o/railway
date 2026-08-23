@@ -12,7 +12,7 @@ Within any phase, prefer: get one thing fully working over three things half-wor
 
 ## Repo structure
 ```
-/backend        Node.js + Express API (auth, CRUD, orchestration)
+/backend        Node.js + Express API in TypeScript (auth, CRUD, orchestration)
 /optimizer      Python FastAPI microservice (CP-SAT, risk model, /explain)
 /frontend       React (Vite) dashboard
 /data           synthetic data generator scripts + real dataset ingestion scripts
@@ -21,7 +21,9 @@ Within any phase, prefer: get one thing fully working over three things half-wor
 Each of `/backend`, `/optimizer`, `/frontend` gets its own `package.json`/`requirements.txt` and can run independently in dev. `docker-compose.yml` at the root wires them together for the demo.
 
 ## Tech stack (do not deviate without asking)
-- Backend: Node.js + Express, MongoDB (Mongoose), JWT auth
+- Backend: Node.js + Express in **TypeScript** (strict), MongoDB (Mongoose), JWT auth
+  - `tsx` runs dev/seed/tests from source; `tsc` emits `dist/` for production. See docs/DECISIONS.md D-041,
+    which supersedes D-001's original "backend stays JavaScript" call.
 - Optimizer/AI service: Python + FastAPI, Google OR-Tools (CP-SAT) for scheduling, scikit-learn/lifelines for the risk model, Claude API for the `/explain` endpoint
 - Frontend: React (Vite), TailwindCSS, Recharts or D3 for charts, a custom SVG/CSS Gantt component (or `react-big-calendar` if it's faster to integrate)
 - Communication: Node calls the Python service over internal REST; never call OR-Tools directly from Node

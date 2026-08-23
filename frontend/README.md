@@ -87,14 +87,33 @@ nav; `/` redirects to `/corridors`.
 | `/assets` | Assets ranked by FR2.1 criticality score, with the dominant factor |
 | `/tasks` | The maintenance backlog, filterable by department |
 | `/resources` | Crews, machines and permissions with their depot corridor scope |
+| `/comparison` | **Baseline vs AI** (FR9.3) — what coordination changes, with D-031's framing built into the layout |
 | `/status` | Live service wiring **and** the data provenance record |
 
 `/` redirects to `/dashboard`: PRD Section 8 calls it the primary demo screen
 (D-039). The read-only views remain in the nav — they answer "where did this
 number come from".
 
-Still to come: the Baseline vs AI comparison (T14), manual override (T15), Ask
-the Planner (T18), what-if simulation (T20) and policy sliders (T23).
+Still to come: manual override (T15), Ask the Planner (T18), what-if simulation
+(T20) and policy sliders (T23).
+
+## The comparison screen
+
+Reads `comparisonToBaseline` from the persisted plan — it never re-runs a solve.
+Both plans came from the same backlog in the same run, which is what makes them
+comparable.
+
+**The layout is the honesty mechanism** (D-042). D-031 records how easily this
+screen misleads, so its rules are structural rather than small print:
+
+- a scope band states the contestable denominator **before any metric**;
+- conflicts and batching are the headline, throughput is tagged
+  `no difference` with an `=`;
+- utilisation renders **inside the same card** as the over-subscription count
+  that causes it, tagged "reads backwards".
+
+Ordering, verdicts and the pairing live in `src/lib/comparison.ts` and are unit
+tested, so an edit that headlines throughput fails a test rather than a dry run.
 
 ## The Controller Dashboard
 
@@ -132,8 +151,8 @@ npm run lint
 ```
 
 Frontend coverage is deliberately minimal (CLAUDE.md testing priorities).
-`src/lib/gantt.ts` holds the timeline's arithmetic — day grouping, corridor
-ordering, block positioning — and is unit-tested. Rendering is verified by
+`src/lib/gantt.ts` holds the timeline's arithmetic and `src/lib/comparison.ts`
+holds D-031's framing rules; both are unit-tested. Rendering is verified by
 screenshot.
 
 ## Showing what is real and what is simulated

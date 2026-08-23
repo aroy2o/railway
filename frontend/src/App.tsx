@@ -12,6 +12,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import AppHeader from './components/AppHeader.tsx'
 import PrototypeBanner from './components/PrototypeBanner.tsx'
 import AssetsPage from './pages/AssetsPage.tsx'
+import ComparisonPage from './pages/ComparisonPage.tsx'
 import ControllerDashboard from './pages/ControllerDashboard.tsx'
 import CorridorDetailPage from './pages/CorridorDetailPage.tsx'
 import CorridorsPage from './pages/CorridorsPage.tsx'
@@ -40,6 +41,7 @@ function App() {
               landing route. See docs/DECISIONS.md D-039. */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<ControllerDashboard />} />
+          <Route path="/comparison" element={<ComparisonPage />} />
           <Route path="/corridors" element={<CorridorsPage />} />
           <Route path="/corridors/:id" element={<CorridorDetailPage />} />
           <Route path="/assets" element={<AssetsPage />} />
