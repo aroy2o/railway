@@ -1,0 +1,140 @@
+/**
+ * Controller Dashboard - PRD Section 8, the primary decision-maker's screen.
+ *
+ * Reads the most recently generated plan and lets the Controller regenerate it.
+ * Everything on this page comes from one schedule document produced by the
+ * solver; nothing is computed in the browser.
+ *
+ * Deliberately NOT here yet, each because it belongs to a later task rather
+ * than because it was forgotten:
+ *   Baseline-vs-AI comparison  T14  (comparisonToBaseline is in the response
+ *                                    already, left untouched - D-031 shows how
+ *                                    easily that screen misleads)
+ *   Manual override            T15
+ *   Ask the Planner            T18
+ *   What-if simulation         T20
+ *   Policy sliders             T23  (policyWeights stays null; no faked control)
+ */
+import {
+  useGenerateScheduleMutation,
+  useGetLatestScheduleQuery,
+  useGetTasksQuery,
+} from '../api/apiSlice.ts'
+import { describeApiError } from '../api/apiSlice.ts'
+import DeferredTasksPanel from '../components/DeferredTasksPanel.tsx'
+import GanttTimeline from '../components/GanttTimeline.tsx'
+import KnownLimitations from '../components/KnownLimitations.tsx'
+import KpiStrip from '../components/KpiStrip.tsx'
+import PriorityQueue from '../components/PriorityQueue.tsx'
+import QueryState from '../components/QueryState.tsx'
+import { PageHeader } from '../components/Table.tsx'
+
+/** The dataset's reference week, so a demo run is reproducible. */
+const DEFAULT_HORIZON_START = '2026-08-24'
+
+export function ControllerDashboard() {
+  const schedule = useGetLatestScheduleQuery()
+  const tasks = useGetTasksQuery({ limit: 200 })
+  const [generate, generation] = useGenerateScheduleMutation()
+
+  const plan = schedule.data?.data
+  // A 404 means "none generated yet", which is an empty state rather than an
+  // error - the difference matters on first run.
+  const noScheduleYet =
+    schedule.error && (schedule.error as { status?: number }).status === 404
+
+  async function onGenerate() {
+    try {
+      await generate({ horizonStart: DEFAULT_HORIZON_START, horizonDays: 7 }).unwrap()
+    } catch {
+      // Surfaced in the banner below; unwrap() would otherwise reject unhandled.
+    }
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Controller dashboard"
+        subtitle="Generated block plan for the coming week, with the reasoning behind it."
+        meta={
+          <div className="flex items-center gap-3">
+            {plan && (
+              <span className="text-xs text-slate-500">
+                {plan._id} · {new Date(plan.generatedAt).toLocaleString()}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={onGenerate}
+              disabled={generation.isLoading}
+              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {generation.isLoading ? 'Solving…' : 'Generate schedule'}
+            </button>
+          </div>
+        }
+      />
+
+      {/* A CP-SAT run takes a second or two. Saying so beats looking frozen. */}
+      {generation.isLoading && (
+        <div className="mb-5 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          Running the constraint solver over the pending backlog. This usually takes a couple of
+          seconds.
+        </div>
+      )}
+
+      {/* D-037 made this message actionable - render it rather than a generic
+          failure state, because "Could not reach the optimizer service" tells
+          the operator exactly what to do. */}
+      {generation.isError && (
+        <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+          <p className="text-sm font-medium text-rose-900">Could not generate a schedule</p>
+          <p className="mt-0.5 text-sm text-rose-700">{describeApiError(generation.error)}</p>
+        </div>
+      )}
+
+      {noScheduleYet ? (
+        <div className="rounded-xl border border-slate-200 bg-white px-6 py-12 text-center">
+          <h2 className="text-sm font-semibold text-slate-900">No plan generated yet</h2>
+          <p className="mx-auto mt-1 max-w-md text-sm text-slate-500">
+            Generate a schedule to allocate the pending maintenance backlog into the free windows
+            the timetable leaves on each corridor.
+          </p>
+        </div>
+      ) : (
+        <QueryState isLoading={schedule.isLoading} error={noScheduleYet ? null : schedule.error}>
+          {plan && (
+            <div className="space-y-6">
+              <KpiStrip
+                metrics={plan.metrics}
+                solveSeconds={plan.solveSeconds}
+                status={plan.status}
+              />
+
+              <div className="grid gap-6 xl:grid-cols-4">
+                <div className="space-y-6 xl:col-span-3">
+                  <GanttTimeline
+                    blocks={plan.blocks}
+                    horizonStart={plan.horizonStart}
+                    horizonDays={plan.horizonDays}
+                  />
+                  <DeferredTasksPanel deferred={plan.deferredTasks} />
+                </div>
+
+                <div className="space-y-6">
+                  <PriorityQueue tasks={tasks.data?.data ?? []} schedule={plan} />
+                  <KnownLimitations
+                    knownGaps={plan.knownGaps}
+                    generationErrors={plan.generationErrors}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+        </QueryState>
+      )}
+    </>
+  )
+}
+
+export default ControllerDashboard

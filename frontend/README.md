@@ -81,6 +81,7 @@ nav; `/` redirects to `/corridors`.
 
 | Route | Shows |
 |---|---|
+| `/dashboard` | **Controller Dashboard** (default) — KPI strip, corridor possession timeline, priority queue, deferred work, known limitations, and the Generate schedule trigger |
 | `/corridors` | The ~30 real sections carrying maintenance demand — traffic, utilisation, free minutes, block windows, task count |
 | `/corridors/:id` | One section: real infrastructure and occupancy, its free block windows, and the assets, backlog and resources on it |
 | `/assets` | Assets ranked by FR2.1 criticality score, with the dominant factor |
@@ -88,9 +89,52 @@ nav; `/` redirects to `/corridors`.
 | `/resources` | Crews, machines and permissions with their depot corridor scope |
 | `/status` | Live service wiring **and** the data provenance record |
 
-These are deliberately plain tables. The Gantt timeline, KPI strip and
-Controller Dashboard (PRD Section 8) are tasks T12/T13 — there is nothing to
-visualise until the CP-SAT solver exists to produce a schedule.
+`/` redirects to `/dashboard`: PRD Section 8 calls it the primary demo screen
+(D-039). The read-only views remain in the nav — they answer "where did this
+number come from".
+
+Still to come: the Baseline vs AI comparison (T14), manual override (T15), Ask
+the Planner (T18), what-if simulation (T20) and policy sliders (T23).
+
+## The Controller Dashboard
+
+Everything on it comes from one schedule document; nothing is computed in the
+browser. `POST /api/schedules/generate` runs the solver and RTK Query
+invalidates both `Schedule` and `Task`, because generation also rewrites
+priority scores (D-035).
+
+**Corridor possession timeline.** Rows are corridors, the x-axis is one 24-hour
+day, bars are allocated blocks. A day selector rather than seven stacked axes —
+the week's work is very unevenly spread. It opens on the first day carrying a
+cross-department batch, and those blocks are drawn structurally differently:
+split into a segment per department, ringed, and labelled (D-040).
+
+**Unbuilt controls are visibly disabled.** The monthly toggle is greyed with a
+tooltip naming task T28; no policy sliders are drawn at all, because
+`policyWeights` is null. Faking either would be presenting a plan the solver
+never produced.
+
+**Deferred work is a full panel, not a footnote.** FR3.3 makes deferred-with-
+reason a first-class outcome, and on the real corpus it is the larger half of
+the answer — 53 of 89 tasks. The solver's own `detail` text is rendered verbatim;
+it already names the remedy.
+
+**Known limitations** renders `knownGaps` — the constraints the solver does not
+enforce (T24, T25) — plus any `generationErrors`. That report has now survived
+four hops: dataclass, HTTP, MongoDB, and screen.
+
+## Tests
+
+```bash
+npm test        # vitest, pure logic only
+npm run build   # tsc -b && vite build
+npm run lint
+```
+
+Frontend coverage is deliberately minimal (CLAUDE.md testing priorities).
+`src/lib/gantt.ts` holds the timeline's arithmetic — day grouping, corridor
+ordering, block positioning — and is unit-tested. Rendering is verified by
+screenshot.
 
 ## Showing what is real and what is simulated
 

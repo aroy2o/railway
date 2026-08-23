@@ -1,16 +1,18 @@
 /**
  * Application shell and routing.
  *
- * Read-only views over the real + synthetic pipeline output. The Controller
- * Dashboard, Gantt timeline and KPI strip (PRD Section 8, tasks T12/T13) are
- * deliberately not here yet - there is no schedule to visualise until the
- * CP-SAT solver (T6) exists.
+ * The Controller Dashboard (PRD Section 8) is the landing route; the read-only
+ * data views remain reachable from the nav.
+ *
+ * Still to come: the Baseline vs AI comparison (T14), manual override (T15),
+ * Ask the Planner (T18), what-if simulation (T20) and policy sliders (T23).
  */
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import AppHeader from './components/AppHeader.tsx'
 import PrototypeBanner from './components/PrototypeBanner.tsx'
 import AssetsPage from './pages/AssetsPage.tsx'
+import ControllerDashboard from './pages/ControllerDashboard.tsx'
 import CorridorDetailPage from './pages/CorridorDetailPage.tsx'
 import CorridorsPage from './pages/CorridorsPage.tsx'
 import ResourcesPage from './pages/ResourcesPage.tsx'
@@ -33,7 +35,11 @@ function App() {
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
         <Routes>
-          <Route path="/" element={<Navigate to="/corridors" replace />} />
+          {/* PRD Section 8 calls the Controller Dashboard the primary demo
+              screen and its build order puts it first, so it is now the
+              landing route. See docs/DECISIONS.md D-039. */}
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<ControllerDashboard />} />
           <Route path="/corridors" element={<CorridorsPage />} />
           <Route path="/corridors/:id" element={<CorridorDetailPage />} />
           <Route path="/assets" element={<AssetsPage />} />

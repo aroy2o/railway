@@ -1182,3 +1182,86 @@ masked, and still logged in full internally — verified by test.
 client (T1/T9) were tested and correct in isolation. The defect lived in the
 interaction: no test had ever asserted what a 5xx *ApiError* looks like to a
 client, because until T10 nothing routinely produced one.
+
+---
+
+## D-038 — The priority queue reads task documents, not the schedule's decision log
+
+**Date:** 2026-08-23 · **Task:** T13
+
+**Decision.** The Controller Dashboard's priority queue is built from
+`GET /api/tasks`, using the `priorityScore`, `dominantPriorityFactor` and
+`priorityBreakdown` fields T10 persists — not from the schedule's `decisionLog`.
+
+**Why.** The decision log carries a task's priority *value* but not the
+per-factor breakdown or which factor dominated. FR2.4 asks specifically for "a
+visible breakdown of why (which factor dominated)", so the log simply cannot
+answer the question the requirement poses.
+
+There is a second reason that matters as much: the decision log only covers
+tasks that were part of a solve. A priority queue is for the whole backlog —
+including work that has never made it into a plan, which is precisely the work a
+Controller most needs to see.
+
+**Follow-up noted, not taken.** `/api/tasks` sorts by severity and SLA date, and
+its own source comment says that ordering "will replace this ordering once
+scores exist". Scores exist now, so the ranking should move server-side. The
+queue sorts client-side for the moment — 89 tasks, trivially cheap — because
+this task's scope is explicitly frontend-only and reaching into T10's routes
+without flagging it first would be the wrong habit. Worth doing in the next
+backend pass.
+
+---
+
+## D-039 — The Controller Dashboard is the landing route
+
+**Date:** 2026-08-23 · **Task:** T13
+
+**Decision.** `/` now redirects to `/dashboard` rather than `/corridors`.
+
+**Why.** PRD Section 8 names the Controller Dashboard "the primary demo screen"
+and its build order puts it and the comparison view first, ahead of everything
+else. Until this task there was no schedule to show, so `/corridors` was the
+only landing page that made sense. Now there is one, and the first thing a judge
+sees should be the plan and its reasoning rather than a table of source data.
+
+The read-only data views (`/corridors`, `/assets`, `/tasks`, `/resources`,
+`/status`) stay exactly where they were and remain in the nav — they are how you
+answer "where did this number come from", which is a question this project
+expects to be asked.
+
+---
+
+## D-040 — Unbuilt controls are visibly disabled, and the timeline opens on the day that shows the most
+
+**Date:** 2026-08-23 · **Task:** T12
+
+**Two related decisions about not overstating what exists.**
+
+**The monthly toggle is disabled and says why.** PRD FR3.2 promises weekly and
+monthly horizons, and only weekly is real: a monthly plan needs the coarser
+corridor-day reservation model of PRD Section 13, which is task T28. The control
+is rendered greyed with a tooltip naming the task. Stretching weekly data across
+a month would be presenting a plan the solver never produced — the same class of
+dishonesty as a fabricated metric, just wearing a UI.
+
+Policy sliders get the same treatment by omission: `policyWeights` is null on
+every schedule, so no slider is drawn at all rather than a decorative one that
+controls nothing (T23).
+
+**The timeline opens on the first day carrying a cross-department batch**,
+falling back to the busiest day. The first implementation opened on the busiest
+day, which on the real corpus is a Monday with thirteen blocks and **no batch at
+all** — dense, but showing none of the coordination the plan exists to produce.
+
+That is not merely a demo convenience. A shared possession is the thing the
+optimizer did that an uncoordinated process could not, so it is the most
+informative day to review first. The day strip marks every batch day, so
+navigating to the others is one click.
+
+**Cross-department batches are drawn structurally differently**, not just
+tinted: the bar splits into a segment per department, sized by each one's share
+of the work, ringed in violet with an explicit "shared block" label. A colour
+alone would require the viewer to decode a legend; this reads without one, which
+is the bar it has to clear given it is the single most important visual moment in
+the demo.

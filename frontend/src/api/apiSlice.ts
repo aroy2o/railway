@@ -152,12 +152,102 @@ export interface Task {
   requiredResourceIds: string[]
   dependsOnTaskId: string | null
   workflowStage: string | null
-  /** null until T7 scores it - null is "unscored", never "zero". */
+  /**
+   * Populated by T10's orchestration from the FR2.3 engine. Still null on a
+   * freshly seeded database until a schedule has been generated - and null
+   * means "unscored", never "zero".
+   */
   priorityScore: number | null
+  /** FR2.4 - which factor moved the score. Null before generation. */
+  dominantPriorityFactor: string | null
+  /** FR2.4 - the per-factor breakdown behind priorityScore. */
+  priorityBreakdown: {
+    components: Record<string, number>
+    contributions: Record<string, number>
+    daysToDue: number
+    isOverdue: boolean
+    /** False until T16 exists; the flag travels so nobody assumes otherwise. */
+    usesFailureRisk: boolean
+  } | null
   /** null until T16 scores it (PRD 9.1). */
   failureRiskScore: number | null
   status: 'pending' | 'scheduled' | 'deferred'
   synthetic: boolean
+}
+
+/* -------------------------------------------------------------------------- */
+/* Schedules (T10 orchestration)                                               */
+/* -------------------------------------------------------------------------- */
+
+export interface ScheduleBlock {
+  corridorId: string
+  date: string
+  windowIndex: number
+  start: string
+  end: string
+  startMinute: number
+  endMinute: number
+  capacityMinutes: number
+  usedMinutes: number
+  unusedMinutes: number
+  taskIds: string[]
+  departments: Department[]
+  /** The headline capability: one possession serving two departments. */
+  isCrossDepartmentBatch: boolean
+  /** null until train-impact scoring exists (PRD 9.6, T22) - not "no impact". */
+  trainImpact: unknown | null
+}
+
+export interface DeferredTask {
+  taskId: string
+  reason: 'EXCEEDS_LONGEST_WINDOW' | 'NO_CAPACITY' | 'NO_WINDOW_ON_CORRIDOR'
+  /** Human-readable and already good; render it rather than re-wording it. */
+  detail: string
+}
+
+export interface ScheduleMetrics {
+  tasksScheduled: number
+  tasksDeferred: number
+  blocksUsed: number
+  crossDepartmentBatches: number
+  blockMinutesUsed: number
+  blockMinutesCapacity: number
+  blockUtilisationPct: number
+  unusedBlockMinutes: number
+}
+
+export interface KnownGaps {
+  resourceConflicts: { count: number; note: string; conflicts: unknown[] }
+  dependencyViolations: { count: number; note: string; violations: unknown[] }
+}
+
+export interface Schedule {
+  _id: string
+  horizon: string
+  horizonStart: string
+  horizonDays: number
+  generatedAt: string
+  status: string
+  objectiveValue: number
+  solveSeconds: number
+  /** null until T23's policy sliders exist. Do not render as controllable. */
+  policyWeights: unknown | null
+  metrics: ScheduleMetrics
+  blocks: ScheduleBlock[]
+  deferredTasks: DeferredTask[]
+  decisionLog: Array<{
+    taskId: string
+    decision: 'scheduled' | 'deferred'
+    corridorId: string
+    contributingFactors: Record<string, unknown>
+  }>
+  knownGaps: KnownGaps
+  contestableTaskIds: string[]
+  /** T14's data. Deliberately unused on this screen. */
+  comparisonToBaseline: unknown | null
+  inputSummary: { taskCount: number; corridorCount: number; prioritySource: string }
+  /** Best-effort optimizer calls that failed (D-036). Surfaced, not swallowed. */
+  generationErrors: Array<{ call: string; message: string; code: string }>
 }
 
 export interface Resource {
@@ -287,6 +377,28 @@ export const api = createApi({
       query: () => '/provenance',
       providesTags: ['Provenance'],
     }),
+
+    /** The most recently generated plan. 404s until one has been generated. */
+    getLatestSchedule: builder.query<{ data: Schedule }, void>({
+      query: () => '/schedules/latest',
+      providesTags: ['Schedule'],
+    }),
+
+    /**
+     * Run the solver. Slow by API standards - it waits on CP-SAT - so callers
+     * must show a loading state rather than appearing frozen.
+     *
+     * Invalidates Task as well as Schedule: generation writes FR2.3 priority
+     * scores back onto task documents (D-035), so the priority queue is stale
+     * the moment this succeeds.
+     */
+    generateSchedule: builder.mutation<
+      { data: Schedule },
+      { horizonStart?: string; horizonDays?: number } | void
+    >({
+      query: (body) => ({ url: '/schedules/generate', method: 'POST', body: body ?? {} }),
+      invalidatesTags: ['Schedule', 'Task'],
+    }),
   }),
 })
 
@@ -298,6 +410,8 @@ export const {
   useGetTasksQuery,
   useGetResourcesQuery,
   useGetProvenanceQuery,
+  useGetLatestScheduleQuery,
+  useGenerateScheduleMutation,
 } = api
 
 /**
