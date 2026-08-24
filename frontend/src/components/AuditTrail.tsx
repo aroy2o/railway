@@ -87,7 +87,7 @@ export function AuditTrail({ trail }: { trail: AuditTrailData }) {
   const drift = publicationDriftWarning(trail)
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+    <section data-tour="audit-trail" className="rounded-xl border border-slate-200 bg-white shadow-sm">
       <header className="border-b border-slate-100 px-5 py-3">
         <h2 className="text-sm font-semibold text-slate-900">
           Audit trail{' '}

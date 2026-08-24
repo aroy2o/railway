@@ -16,6 +16,8 @@ import {
   useGetTasksQuery,
 } from '../api/apiSlice.ts'
 import { buildKpiHierarchy, type Kpi, type KpiCategory } from '../lib/oversight.ts'
+import { useAutoTour } from '../lib/useAutoTour.ts'
+import { OVERSIGHT_TOUR_ID, OVERSIGHT_TOUR_STEPS } from '../tours/oversightTour.ts'
 import QueryState from '../components/QueryState.tsx'
 import { PageHeader } from '../components/Table.tsx'
 
@@ -53,6 +55,11 @@ export function DrmOversightPage() {
 
   const plan = latest.data?.data
   const noScheduleYet = latest.error && (latest.error as { status?: number }).status === 404
+  useAutoTour(
+    OVERSIGHT_TOUR_ID,
+    OVERSIGHT_TOUR_STEPS,
+    !latest.isLoading && !tasks.isLoading && !assets.isLoading,
+  )
 
   // The most recent OTHER plan built on the SAME horizon - comparing a
   // weekly plan's placements against a monthly one's would be a meaningless
@@ -100,7 +107,11 @@ export function DrmOversightPage() {
                 {plan._id} · {plan.horizon} · generated {new Date(plan.generatedAt).toLocaleString()}
               </p>
               {categories.map(({ category, kpis }) => (
-                <section key={category} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <section
+                  key={category}
+                  data-tour={`oversight-category-${category}`}
+                  className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+                >
                   <h3 className="text-sm font-semibold text-slate-900">{category}</h3>
                   <p className="mb-3 text-xs text-slate-500">{CATEGORY_NOTE[category]}</p>
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

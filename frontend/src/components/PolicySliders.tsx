@@ -31,7 +31,10 @@ export function PolicySliders({
   const moved = hasOverride(values)
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section
+      data-tour="dashboard-policy-sliders"
+      className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+    >
       <h2 className="text-sm font-semibold text-slate-900">Policy weights</h2>
       <p className="mt-1 text-xs text-slate-500">
         These change <span className="font-medium text-slate-700">when</span> work happens and

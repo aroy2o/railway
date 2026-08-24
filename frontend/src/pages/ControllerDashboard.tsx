@@ -25,6 +25,8 @@ import {
 } from '../api/apiSlice.ts'
 import { describeApiError } from '../api/apiSlice.ts'
 import type { ScheduleBlock } from '../api/apiSlice.ts'
+import { useAutoTour } from '../lib/useAutoTour.ts'
+import { DASHBOARD_TOUR_ID, DASHBOARD_TOUR_STEPS } from '../tours/dashboardTour.ts'
 import DeferredTasksPanel from '../components/DeferredTasksPanel.tsx'
 import GanttTimeline from '../components/GanttTimeline.tsx'
 import OverrideHistory from '../components/OverrideHistory.tsx'
@@ -74,6 +76,13 @@ export function ControllerDashboard() {
   const noScheduleYet =
     schedule.error && (schedule.error as { status?: number }).status === 404
 
+  // Guided walkthrough (housekeeping session, docs/DECISIONS.md D-072): a
+  // first-time visitor gets it once, automatically; a returning one gets it
+  // only via "Replay walkthrough" in the header. `!schedule.isLoading` is
+  // "ready" so `visibleSteps` filters against the FINAL rendered DOM (plan
+  // present or genuinely absent), not a half-loaded page.
+  useAutoTour(DASHBOARD_TOUR_ID, DASHBOARD_TOUR_STEPS, !schedule.isLoading)
+
   async function onGenerate(
     policyWeights?: import('../lib/policyWeights.ts').PolicyWeightsInput,
     requestedHorizonDays?: 7 | 30,
@@ -106,6 +115,7 @@ export function ControllerDashboard() {
             {plan && visibleBlocks.length > 0 && (
               <button
                 type="button"
+                data-tour="dashboard-emergency-trigger"
                 onClick={() => setEmergencyOpen((open) => !open)}
                 className="rounded-lg border border-rose-300 px-3 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-50"
               >
@@ -114,6 +124,7 @@ export function ControllerDashboard() {
             )}
             <button
               type="button"
+              data-tour="dashboard-generate"
               onClick={() => onGenerate()}
               disabled={generation.isLoading}
               className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
@@ -154,11 +165,13 @@ export function ControllerDashboard() {
         <QueryState isLoading={schedule.isLoading} error={noScheduleYet ? null : schedule.error}>
           {plan && (
             <div className="space-y-6">
-              <KpiStrip
-                metrics={plan.metrics}
-                solveSeconds={plan.solveSeconds}
-                status={plan.status}
-              />
+              <div data-tour="dashboard-kpis">
+                <KpiStrip
+                  metrics={plan.metrics}
+                  solveSeconds={plan.solveSeconds}
+                  status={plan.status}
+                />
+              </div>
 
               {/* The comparison is computed in the same run as this plan, so a
                   Controller reviewing one will want the other close by. */}

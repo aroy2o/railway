@@ -7,6 +7,8 @@
  */
 import { Link } from 'react-router-dom'
 import { useGetResourcesQuery } from '../api/apiSlice.ts'
+import { useAutoTour } from '../lib/useAutoTour.ts'
+import { RESOURCES_TOUR_ID, RESOURCES_TOUR_STEPS } from '../tours/referenceTours.ts'
 import { DepartmentPill, PageHeader, TableShell, Td, Th } from '../components/Table.tsx'
 import QueryState from '../components/QueryState.tsx'
 import SyntheticBadge from '../components/SyntheticBadge.tsx'
@@ -14,6 +16,7 @@ import SyntheticBadge from '../components/SyntheticBadge.tsx'
 export function ResourcesPage() {
   const resources = useGetResourcesQuery({ limit: 200 })
   const rows = resources.data?.data ?? []
+  useAutoTour(RESOURCES_TOUR_ID, RESOURCES_TOUR_STEPS, !resources.isLoading)
 
   return (
     <>
@@ -22,7 +25,10 @@ export function ResourcesPage() {
         subtitle="Crews, machines and permissions. Each is scoped to a depot covering several
           corridors, so two tasks on different corridors can contend for the same machine."
         meta={
-          <span className="rounded-lg bg-white px-3 py-1.5 text-xs text-slate-600 ring-1 ring-slate-200 ring-inset">
+          <span
+            data-tour="resources-count-badge"
+            className="rounded-lg bg-white px-3 py-1.5 text-xs text-slate-600 ring-1 ring-slate-200 ring-inset"
+          >
             {resources.data?.pagination.total ?? 0} resources
           </span>
         }
@@ -34,6 +40,7 @@ export function ResourcesPage() {
         isEmpty={rows.length === 0}
         emptyMessage="No resources seeded yet."
       >
+        <div data-tour="resources-table">
         <TableShell>
           <thead>
             <tr>
@@ -76,6 +83,7 @@ export function ResourcesPage() {
             ))}
           </tbody>
         </TableShell>
+        </div>
       </QueryState>
     </>
   )

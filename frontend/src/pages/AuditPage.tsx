@@ -13,6 +13,8 @@ import {
   useGetSchedulesQuery,
 } from '../api/apiSlice.ts'
 import { describeState } from '../lib/approval.ts'
+import { useAutoTour } from '../lib/useAutoTour.ts'
+import { AUDIT_TOUR_ID, AUDIT_TOUR_STEPS } from '../tours/auditTour.ts'
 import AuditTrail from '../components/AuditTrail.tsx'
 import WorkflowPanel from '../components/WorkflowPanel.tsx'
 import QueryState from '../components/QueryState.tsx'
@@ -24,6 +26,7 @@ export function AuditPage() {
 
   const scheduleId = picked ?? latest.data?.data._id ?? null
   const trail = useGetAuditTrailQuery(scheduleId ?? '', { skip: !scheduleId })
+  useAutoTour(AUDIT_TOUR_ID, AUDIT_TOUR_STEPS, !versions.isLoading && !latest.isLoading && !trail.isLoading)
 
   return (
     <div className="space-y-6">
@@ -42,7 +45,7 @@ export function AuditPage() {
         emptyMessage="No plan has been generated yet."
       >
         <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
-          <nav className="rounded-xl border border-slate-200 bg-white shadow-sm">
+          <nav data-tour="audit-versions" className="rounded-xl border border-slate-200 bg-white shadow-sm">
             <header className="border-b border-slate-100 px-4 py-3">
               <h2 className="text-sm font-semibold text-slate-900">Plan versions</h2>
               <p className="text-[11px] text-slate-500">
@@ -84,12 +87,14 @@ export function AuditPage() {
             <QueryState isLoading={trail.isLoading} error={trail.error}>
               {trail.data && scheduleId && (
                 <>
-                  <WorkflowPanel
-                    scheduleId={scheduleId}
-                    state={trail.data.data.state}
-                    allowedActions={trail.data.data.allowedActions}
-                    version={trail.data.data.version}
-                  />
+                  <div data-tour="audit-workflow">
+                    <WorkflowPanel
+                      scheduleId={scheduleId}
+                      state={trail.data.data.state}
+                      allowedActions={trail.data.data.allowedActions}
+                      version={trail.data.data.version}
+                    />
+                  </div>
                   <AuditTrail trail={trail.data.data} />
                 </>
               )}

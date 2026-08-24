@@ -3463,3 +3463,146 @@ fixture, one full real-corpus regression) updated to the populated shape -
 the second one re-verified live against the real optimizer service after a
 restart, not just against the pre-fix cached process. 331 optimizer / 114
 backend / 85 frontend tests, all green.
+
+---
+
+## D-072 — Guided walkthrough: hand-built, not a library; one generic mechanism, per-route step arrays reusing each screen's own framing text
+
+**Date:** 2026-08-25 · **Task:** housekeeping (not T-numbered)
+
+**Scope, as it actually ended up.** Requested as a Controller-Dashboard-only
+walkthrough (audit every page and element first, but build content for the
+Dashboard alone this session, leaving the other eight routes as future
+step-array files). Mid-session the owner explicitly widened that to every
+route ("the walkthrough should be of whole app not just the dashboard all
+the routes i want"). The mechanism had been deliberately built generic for
+exactly this - "adding a walkthrough for another page is a new step array" -
+so honouring the wider scope cost one refactor (extracting the per-page
+auto-start effect into `lib/useAutoTour.ts`, since it was about to be
+pasted into nine page components) plus eight more step-array files, not a
+redesign. Recorded here rather than silently treated as the original ask.
+
+**Audit first, same discipline as a T-numbered task.** Every page and
+distinct panel was catalogued before a step was written: Controller
+Dashboard (Gantt + Weekly/Monthly toggle, priority queue + risk badges,
+policy sliders, what-if trigger, emergency trigger, seasonal risk, known
+limitations, plus KPI strip and Generate as orienting steps), Comparison
+(scope band, headline/supporting cards, conflict evidence, caveats),
+Approvals & audit (version list, workflow panel, audit trail), DRM oversight
+(the four PRD Section 14 categories), and the five read-only reference
+pages (Corridors, Assets, Backlog, Resources, Status & provenance).
+Deliberately NOT given a dedicated dashboard step, named explicitly in
+`tours/dashboardTour.ts`'s own coverage comment: the baseline-vs-AI teaser
+link (it leads to the Comparison page's own tour), Ask the Planner,
+Deferred work, the dashboard's own workflow/override-history panels - real
+panels a user finds on their own, not omissions.
+
+**Every step's copy is the app's own existing framing, not a rewrite of
+it.** `RISK_FRAMING` (priority queue), the weather panel's `FRAMING`
+constant, `PolicySliders`' D-061 caption, `KnownLimitations`' "checked and
+none found" language, D-031's three comparison rules, D-046's own
+`CATEGORY_NOTE` text on the oversight page - each tour file names its
+source inline, per step, so a step and the panel it describes can never say
+two different things about the same feature.
+
+**Build, not a library - decided with `registry.npmjs.org` confirmed
+reachable, not ruled out on principle.** `react-joyride`, `driver.js` and
+`shepherd.js` were all real options. Rejected because: (1) none of this
+project's UI uses a component library - every one of them would need its
+own CSS/theming reconciled with plain Tailwind, for a net decrease in
+control over something this visually central to a tour; (2) the actual
+requirement - highlight one element, show a positioned tooltip with
+next/back/skip - is standard rect arithmetic, not a hard problem a library
+meaningfully de-risks; (3) this project's own stack list (`CLAUDE.md`) names
+nothing for this, and adding a dependency "not meaningfully better than
+hand-built" is exactly the case CLAUDE.md's tech-stack discipline says to
+avoid. The hand-built version is ~250 lines total (`lib/tour.ts` +
+`TourOverlay.tsx`), fully unit-tested on its logic half, and needed zero
+CSS reconciliation since it is Tailwind throughout.
+
+**The spotlight is four backdrop rectangles around the target, not a
+`clip-path` hole or an SVG mask.** `computeEdgeRects` returns up to four
+plain divs (above/below/left/right of the padded target) that together
+with the target's own rect tile the whole viewport exactly - proven by an
+area-sum test, not just eyeballed. The highlighted element is never
+painted over by anything, because nothing draws on top of it; it is simply
+the one rectangle none of the four backdrop pieces cover. Verified live: a
+real bounding-box comparison between the computed ring and the actual
+target element's `getBoundingClientRect()` matched to sub-pixel alignment
+for both the Gantt timeline (a large panel) and the Simulate-emergency
+button (a small one).
+
+**First-visit detection is real localStorage, not a mock** (this is the
+deployed app, not a sandboxed Artifact - the prompt's own instruction).
+`lib/tour.ts`'s `hasSeenTour`/`markTourSeen` take an injectable storage
+parameter defaulting to `window.localStorage`, purely so the logic is
+unit-testable under this project's existing plain-Node vitest setup (no
+jsdom is configured anywhere in this codebase, confirmed by running the
+naive version first and hitting `ReferenceError: window is not defined`
+before adding the injection point - not a hypothetical concern). Blocked
+storage (private browsing) degrades to "always offer the tour" rather than
+throwing, the same fail-open direction D-004 applies to health checks.
+
+**Why a Redux slice, not a React Context.** `AppHeader` (the "Replay
+walkthrough" button) and whichever page owns the current tour are SIBLINGS
+under `<App>` (`App.tsx` renders them side by side inside `<Routes>`), not
+parent/child - this cannot be local `useState` on either one. D-003 already
+puts exactly this category of state - cross-cutting, client-only - in a
+hand-written slice beside `authSlice`, so `tourSlice` follows that
+convention rather than introducing a second state-management mechanism for
+one feature.
+
+**Replay is page-relative, not dashboard-relative, once every route has a
+tour.** The header button does not navigate anywhere - it only raises a
+`replayRequested` flag in the store; whichever page is currently mounted
+consumes it through its own `useAutoTour` call and restarts ITS OWN tour.
+A judge doing a second demo replays whatever screen they are actually
+looking at. (An earlier version forced navigation to `/dashboard`, written
+before the scope widened to every route - superseded, not left as dead
+code, once "every page has a tour" made that necessary.)
+
+**A tour ends on navigation, deliberately, guarded against firing on
+mount.** `TourOverlay` ends the active tour whenever the route changes
+while one is running, since every tour's steps target elements on the page
+it started on. The obvious implementation - a `useEffect` keyed on
+`location.pathname` - fires once on the app's own first mount too (a path
+"changing" from nothing to its initial value), which would have killed a
+tour a page's own mount-effect had just started in the same pass. Caught
+before shipping by reasoning through mount order, not by a live bug; a
+`useRef` guard skips exactly that first firing.
+
+**Two real bugs found in the live-browser verification itself, not the
+app.** A rect-alignment check compared the wrong step's spotlight against
+the Gantt panel's target (an off-by-one step index in the driver script);
+a "closing step visible" check used a smart apostrophe against the app's
+plain one. Both were script bugs, confirmed by re-running the corrected
+checks and by direct visual inspection of the resulting screenshots - the
+app itself was correct throughout. Recorded because a test bug that looks
+like a real failure is exactly the kind of false accusation D-054/D-059/
+D-063 caught in this project's other verifier layers, now in a browser
+driver instead of a grounding verifier.
+
+**Verified live end to end**, not just via unit tests: fresh localStorage
+auto-starts the Dashboard tour; stepping through to "Done" and reloading
+does NOT re-auto-start it; every other one of the eight remaining routes
+auto-starts ITS OWN tour on ITS OWN first visit, independently (proven by
+never having cleared storage between them - each fired only because ITS
+specific key was still unset); "Replay walkthrough" restarts the tour for
+whichever page is currently open without navigating away; zero browser
+console errors across the full run. Screenshots confirm the spotlight ring
+and tooltip render correctly against real data on both a dense page
+(Dashboard) and a plain reference table (Corridors).
+
+**Tests.** `lib/tour.ts`: 15 (first-visit persistence including a blocked-
+storage case, `visibleSteps`' DOM-presence filter including the "fresh
+install, no schedule yet" degrade, and the edge-rect/spotlight/tooltip-
+position geometry, including an area-sum tiling proof and both edge-flush
+and off-screen clamping cases). `store/slices/tourSlice.ts`: 6 (start/
+advance/back/end, and that a replay request is a flag the target page
+consumes rather than an auto-start). Frontend suite: 105 passed (up from
+85), plus the pre-existing, unrelated `oversight.test.ts` type-checking gap
+confirmed present before this session's changes too (not introduced here,
+not fixed here - out of this session's scope). Step CONTENT and the actual
+render are verified live rather than snapshot-tested, matching this
+project's standing frontend-coverage practice for anything at this level
+(`gantt.ts`, `conflicts.ts`, `whatif.ts`).

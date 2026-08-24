@@ -7,6 +7,8 @@
  * from the API. Nothing on this page is written by the UI.
  */
 import { useGetProvenanceQuery } from '../api/apiSlice.ts'
+import { useAutoTour } from '../lib/useAutoTour.ts'
+import { STATUS_TOUR_ID, STATUS_TOUR_STEPS } from '../tours/referenceTours.ts'
 import ServiceStatusPanel from '../components/ServiceStatusPanel.tsx'
 import { PageHeader } from '../components/Table.tsx'
 import QueryState from '../components/QueryState.tsx'
@@ -34,6 +36,7 @@ function ProvenanceList({ title, entries }: { title: string; entries?: Record<st
 export function StatusPage() {
   const provenance = useGetProvenanceQuery()
   const entries = provenance.data?.data ?? []
+  useAutoTour(STATUS_TOUR_ID, STATUS_TOUR_STEPS, !provenance.isLoading)
 
   return (
     <>
@@ -42,7 +45,7 @@ export function StatusPage() {
         subtitle="Live service wiring, and where every collection's data actually came from."
       />
 
-      <div className="mb-8 max-w-2xl">
+      <div data-tour="status-service-panel" className="mb-8 max-w-2xl">
         <ServiceStatusPanel />
       </div>
 
@@ -59,7 +62,7 @@ export function StatusPage() {
         isEmpty={entries.length === 0}
         emptyMessage="No provenance recorded. Run npm run seed in /backend."
       >
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div data-tour="status-provenance" className="grid gap-4 lg:grid-cols-2">
           {entries.map((entry) => (
             <section
               key={entry._id}

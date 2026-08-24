@@ -25,7 +25,10 @@ export function WeatherRiskPanel({ weatherRisk }: WeatherRiskPanelProps) {
   if (!weatherRisk) return null
 
   return (
-    <section className="rounded-xl border border-sky-200 bg-sky-50/40 px-5 py-4">
+    <section
+      data-tour="dashboard-weather-risk"
+      className="rounded-xl border border-sky-200 bg-sky-50/40 px-5 py-4"
+    >
       <h2 className="text-sm font-semibold text-slate-900">Seasonal risk (PRD 9.9)</h2>
       <p className="mt-1 text-xs text-slate-600">
         <span className="rounded bg-white px-1.5 py-0.5 font-semibold tabular-nums text-sky-800 ring-1 ring-sky-200 ring-inset">

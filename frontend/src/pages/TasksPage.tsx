@@ -9,6 +9,8 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Department } from '../api/apiSlice.ts'
 import { useGetTasksQuery } from '../api/apiSlice.ts'
+import { useAutoTour } from '../lib/useAutoTour.ts'
+import { TASKS_TOUR_ID, TASKS_TOUR_STEPS } from '../tours/referenceTours.ts'
 import { DepartmentPill, PageHeader, SeverityPill, TableShell, Td, Th } from '../components/Table.tsx'
 import QueryState from '../components/QueryState.tsx'
 import SyntheticBadge from '../components/SyntheticBadge.tsx'
@@ -22,6 +24,7 @@ export function TasksPage() {
     department: department === 'All' ? undefined : department,
   })
   const rows = tasks.data?.data ?? []
+  useAutoTour(TASKS_TOUR_ID, TASKS_TOUR_STEPS, !tasks.isLoading)
 
   return (
     <>
@@ -29,7 +32,10 @@ export function TasksPage() {
         title="Maintenance backlog"
         subtitle="Pending defect and maintenance tasks awaiting a block allocation."
         meta={
-          <div className="flex gap-1 rounded-lg bg-white p-1 ring-1 ring-slate-200 ring-inset">
+          <div
+            data-tour="tasks-department-filter"
+            className="flex gap-1 rounded-lg bg-white p-1 ring-1 ring-slate-200 ring-inset"
+          >
             {DEPARTMENTS.map((option) => (
               <button
                 key={option}
@@ -58,6 +64,7 @@ export function TasksPage() {
           Showing {rows.length} of {tasks.data?.pagination.total ?? 0}. Priority score is empty
           until the priority engine (T7) computes it — empty means unscored, not zero.
         </p>
+        <div data-tour="tasks-table">
         <TableShell>
           <thead>
             <tr>
@@ -109,6 +116,7 @@ export function TasksPage() {
             ))}
           </tbody>
         </TableShell>
+        </div>
       </QueryState>
     </>
   )

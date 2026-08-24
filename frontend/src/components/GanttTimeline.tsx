@@ -86,7 +86,10 @@ export function GanttTimeline({
   const rows = useMemo(() => corridorRowsForDay(blocks, selected), [blocks, selected])
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+    <section
+      data-tour="dashboard-gantt"
+      className="rounded-xl border border-slate-200 bg-white shadow-sm"
+    >
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
         <div>
           <h2 className="text-sm font-semibold text-slate-900">
@@ -425,7 +428,10 @@ function HorizonToggle({
   }
 
   return (
-    <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+    <div
+      data-tour="dashboard-horizon-toggle"
+      className="flex items-center gap-1 rounded-lg bg-slate-100 p-1"
+    >
       <Option label="Weekly" active={!isMonthly} horizonDays={7} />
       <Option label="Monthly" active={isMonthly} horizonDays={30} />
       {isGenerating && <span className="px-1.5 text-[11px] text-slate-400">solving…</span>}

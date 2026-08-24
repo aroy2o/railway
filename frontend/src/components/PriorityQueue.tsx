@@ -74,7 +74,10 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
   )
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+    <section
+      data-tour="dashboard-priority-queue"
+      className="rounded-xl border border-slate-200 bg-white shadow-sm"
+    >
       <header className="border-b border-slate-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-slate-900">Priority queue</h2>
         <p className="text-xs text-slate-500">
@@ -146,6 +149,7 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
                     {onWhatIf && schedule && (
                       <button
                         type="button"
+                        data-tour={index === 0 ? 'dashboard-whatif-trigger' : undefined}
                         onClick={() => onWhatIf(task._id)}
                         className="rounded px-1.5 py-0.5 text-[10px] font-medium text-violet-700 ring-1 ring-violet-200 ring-inset hover:bg-violet-50"
                       >

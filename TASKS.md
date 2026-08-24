@@ -666,6 +666,47 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 _Append a dated one-line entry here each session — what was completed, what's next._
 
+- **2026-08-25** — Guided-walkthrough session (not T-numbered): a first-time
+  guided tour plus a persistent "Replay walkthrough" control in
+  `AppHeader.tsx`. Started scoped to the Controller Dashboard only (per the
+  prompt's own audit-first discipline); widened mid-session to every route
+  at the owner's explicit request. Audited every page and panel before
+  writing a step (same discipline as a T-numbered task), then built one
+  generic mechanism - `lib/tour.ts` (first-visit localStorage persistence +
+  hand-built spotlight/tooltip geometry), `store/slices/tourSlice.ts`
+  (cross-cutting client state, since the header button and whichever page
+  owns the tour are siblings under `<App>`, not parent/child),
+  `TourOverlay.tsx`, and `lib/useAutoTour.ts` (extracted once the same
+  auto-start effect was about to be pasted into nine page components) - and
+  nine step-array files, one per route, each reusing that page's OWN
+  existing explanatory text (`RISK_FRAMING`, the weather panel's `FRAMING`,
+  D-061's policy-slider caption, D-031's comparison rules, D-046's
+  oversight `CATEGORY_NOTE`s) rather than restating features in new words.
+  Decided hand-built over a library (`react-joyride`/`driver.js` considered,
+  `registry.npmjs.org` confirmed reachable) since the actual requirement -
+  highlight one element, positioned tooltip, next/back/skip - is plain rect
+  arithmetic with no CSS-reconciliation cost against this project's
+  library-free Tailwind UI. Verified live end to end: fresh localStorage
+  auto-starts the Dashboard tour and does not re-trigger after completion;
+  every one of the other eight routes auto-starts its OWN tour on its OWN
+  first visit, independently, proven without ever re-clearing storage
+  between them; Replay restarts whichever page is currently open without
+  navigating away; zero console errors across the full run; a real
+  bounding-box comparison confirmed the spotlight ring aligns to sub-pixel
+  precision with the actual highlighted element on both a dense page
+  (Dashboard) and a plain table (Corridors). Two bugs were found in the
+  verification SCRIPT itself (wrong step index, a smart-quote mismatch),
+  not the app - both traced and confirmed before being ruled out.
+  Coverage: Controller Dashboard, Comparison, Approvals & audit, DRM
+  oversight, and all five read-only reference pages - every route now has
+  a walkthrough. Frontend tests: 105 (up from 85; 21 new, covering
+  `lib/tour.ts`'s persistence and geometry and `tourSlice`'s reducer logic
+  - step content and rendering verified live, matching this project's
+  standing frontend-coverage practice). Noted, not fixed (pre-existing,
+  unrelated to this session): `oversight.test.ts` has a real type-checking
+  gap (`Kpi` union narrowing) that predates this session and was confirmed
+  present before any of today's changes. See docs/DECISIONS.md D-072.
+
 - **2026-08-24** — Audit-and-fix session (not T-numbered): the
   "checked-and-zero vs never-computed" bug pattern that D-046 (T25) and
   D-070 (T28) each independently found and patched two/three layers away

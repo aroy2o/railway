@@ -14,11 +14,13 @@ import { configureStore } from '@reduxjs/toolkit'
 import { setupListeners } from '@reduxjs/toolkit/query'
 import { api } from '../api/apiSlice.ts'
 import authReducer from './slices/authSlice.ts'
+import tourReducer from './slices/tourSlice.ts'
 
 export const store = configureStore({
   reducer: {
     [api.reducerPath]: api.reducer,
     auth: authReducer,
+    tour: tourReducer,
   },
   middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(api.middleware),
 })

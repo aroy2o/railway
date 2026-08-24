@@ -7,6 +7,8 @@
  */
 import { Link } from 'react-router-dom'
 import { useGetAssetsQuery } from '../api/apiSlice.ts'
+import { useAutoTour } from '../lib/useAutoTour.ts'
+import { ASSETS_TOUR_ID, ASSETS_TOUR_STEPS } from '../tours/referenceTours.ts'
 import { DepartmentPill, PageHeader, TableShell, Td, Th } from '../components/Table.tsx'
 import QueryState from '../components/QueryState.tsx'
 import SyntheticBadge from '../components/SyntheticBadge.tsx'
@@ -14,6 +16,7 @@ import SyntheticBadge from '../components/SyntheticBadge.tsx'
 export function AssetsPage() {
   const assets = useGetAssetsQuery({ limit: 100 })
   const rows = assets.data?.data ?? []
+  useAutoTour(ASSETS_TOUR_ID, ASSETS_TOUR_STEPS, !assets.isLoading)
 
   return (
     <>
@@ -22,7 +25,10 @@ export function AssetsPage() {
         subtitle="Physical assets with an asset criticality score. The score is a weighted average
           of five factors; two of them are real measurements, three are simulated."
         meta={
-          <span className="rounded-lg bg-white px-3 py-1.5 text-xs text-slate-600 ring-1 ring-slate-200 ring-inset">
+          <span
+            data-tour="assets-count-badge"
+            className="rounded-lg bg-white px-3 py-1.5 text-xs text-slate-600 ring-1 ring-slate-200 ring-inset"
+          >
             {assets.data?.pagination.total ?? 0} assets
           </span>
         }
@@ -34,6 +40,7 @@ export function AssetsPage() {
         isEmpty={rows.length === 0}
         emptyMessage="No assets seeded yet."
       >
+        <div data-tour="assets-table">
         <TableShell>
           <thead>
             <tr>
@@ -82,6 +89,7 @@ export function AssetsPage() {
             ))}
           </tbody>
         </TableShell>
+        </div>
       </QueryState>
     </>
   )

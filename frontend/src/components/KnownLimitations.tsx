@@ -57,7 +57,10 @@ export function KnownLimitations({
   ]
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-4">
+    <section
+      data-tour="dashboard-known-limitations"
+      className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-4"
+    >
       <h2 className="text-sm font-semibold text-slate-900">Known limitations of this plan</h2>
       <p className="mb-3 text-xs text-slate-500">
         Reported by the solver itself, so the plan is never presented as more constrained than it

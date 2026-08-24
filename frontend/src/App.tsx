@@ -10,6 +10,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 
 import AppHeader from './components/AppHeader.tsx'
 import PrototypeBanner from './components/PrototypeBanner.tsx'
+import TourOverlay from './components/TourOverlay.tsx'
 import AssetsPage from './pages/AssetsPage.tsx'
 import AuditPage from './pages/AuditPage.tsx'
 import ComparisonPage from './pages/ComparisonPage.tsx'
@@ -58,6 +59,8 @@ function App() {
       <footer className="mx-auto max-w-7xl px-4 pb-10 text-xs text-slate-400 sm:px-6">
         Decision-support prototype — not a certified safety system (PRD non-goal NG3).
       </footer>
+
+      <TourOverlay />
     </div>
   )
 }

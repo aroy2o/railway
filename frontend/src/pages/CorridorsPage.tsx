@@ -7,6 +7,8 @@
  */
 import { Link } from 'react-router-dom'
 import { useGetCorridorsQuery, useGetTasksQuery } from '../api/apiSlice.ts'
+import { useAutoTour } from '../lib/useAutoTour.ts'
+import { CORRIDORS_TOUR_ID, CORRIDORS_TOUR_STEPS } from '../tours/referenceTours.ts'
 import { PageHeader, TableShell, Td, Th } from '../components/Table.tsx'
 import QueryState from '../components/QueryState.tsx'
 
@@ -30,6 +32,7 @@ export function CorridorsPage() {
   }
 
   const rows = corridors.data?.data ?? []
+  useAutoTour(CORRIDORS_TOUR_ID, CORRIDORS_TOUR_STEPS, !corridors.isLoading)
 
   return (
     <>
@@ -38,7 +41,10 @@ export function CorridorsPage() {
         subtitle="Real corridor sections derived from published route data. Occupancy and free
           block windows are computed from real timetable arrival/departure times."
         meta={
-          <span className="rounded-lg bg-white px-3 py-1.5 text-xs text-slate-600 ring-1 ring-slate-200 ring-inset">
+          <span
+            data-tour="corridors-demand-badge"
+            className="rounded-lg bg-white px-3 py-1.5 text-xs text-slate-600 ring-1 ring-slate-200 ring-inset"
+          >
             {rows.length} with demand&nbsp;·&nbsp;10,149 in network
           </span>
         }
@@ -50,6 +56,7 @@ export function CorridorsPage() {
         isEmpty={rows.length === 0}
         emptyMessage="No corridors seeded yet. Run npm run seed in /backend."
       >
+        <div data-tour="corridors-table">
         <TableShell>
           <thead>
             <tr>
@@ -90,6 +97,7 @@ export function CorridorsPage() {
             })}
           </tbody>
         </TableShell>
+        </div>
       </QueryState>
     </>
   )

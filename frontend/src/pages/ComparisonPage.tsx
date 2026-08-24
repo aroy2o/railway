@@ -30,6 +30,8 @@ import { useGetLatestScheduleQuery } from '../api/apiSlice.ts'
 import type { DoubleBooking, OverSubscribedWindow } from '../api/apiSlice.ts'
 import { groupConflicts, type ConflictReport } from '../lib/conflicts.ts'
 import { buildMetricRows, headlineRows, supportingRows, type MetricRow } from '../lib/comparison.ts'
+import { useAutoTour } from '../lib/useAutoTour.ts'
+import { COMPARISON_TOUR_ID, COMPARISON_TOUR_STEPS } from '../tours/comparisonTour.ts'
 import { PageHeader, TableShell, Td, Th } from '../components/Table.tsx'
 import QueryState from '../components/QueryState.tsx'
 
@@ -38,6 +40,7 @@ export function ComparisonPage() {
   const plan = schedule.data?.data
   const comparison = plan?.comparisonToBaseline ?? null
   const noScheduleYet = schedule.error && (schedule.error as { status?: number }).status === 404
+  useAutoTour(COMPARISON_TOUR_ID, COMPARISON_TOUR_STEPS, !schedule.isLoading)
 
   if (noScheduleYet) {
     return (
@@ -97,7 +100,7 @@ export function ComparisonPage() {
                   The optimizer's advantage is that its plan can be executed — not that it
                   schedules more work.
                 </p>
-                <div className="grid gap-4 lg:grid-cols-2">
+                <div data-tour="comparison-headline" className="grid gap-4 lg:grid-cols-2">
                   {headlineRows(rows).map((row) => (
                     <HeadlineCard key={row.key} row={row} />
                   ))}
@@ -106,7 +109,7 @@ export function ComparisonPage() {
                 <h2 className="mt-8 mb-3 text-sm font-semibold text-slate-900">
                   Numbers that need their context
                 </h2>
-                <div className="grid gap-4 lg:grid-cols-2">
+                <div data-tour="comparison-supporting" className="grid gap-4 lg:grid-cols-2">
                   {supportingRows(rows).map((row) => (
                     <SupportingCard key={row.key} row={row} />
                   ))}
@@ -144,7 +147,7 @@ export function ComparisonPage() {
 function ScopeBand({ contestable, impossible }: { contestable: number; impossible: number }) {
   const total = contestable + impossible
   return (
-    <div className="rounded-xl border border-slate-300 bg-slate-100 px-5 py-4">
+    <div data-tour="comparison-scope-band" className="rounded-xl border border-slate-300 bg-slate-100 px-5 py-4">
       <h2 className="text-sm font-semibold text-slate-900">What this comparison covers</h2>
       <p className="mt-1 max-w-4xl text-sm text-slate-700">
         Of {total} pending tasks, <strong>{impossible} fit no window on their corridor</strong> and
@@ -332,7 +335,7 @@ function ConflictEvidence({
   const overSubscriptionType = byType.get('WINDOW_OVER_SUBSCRIPTION')
 
   return (
-    <section className="mt-8">
+    <section data-tour="comparison-conflict-evidence" className="mt-8">
       <h2 className="mb-1 text-sm font-semibold text-slate-900">The conflicts themselves</h2>
       <p className="mb-3 max-w-3xl text-xs text-slate-500">{note}</p>
 
@@ -439,7 +442,7 @@ function ConflictEvidence({
  */
 function Caveats({ caveats }: { caveats: string[] }) {
   return (
-    <section className="mt-8 rounded-xl border border-slate-300 bg-slate-100 px-5 py-4">
+    <section data-tour="comparison-caveats" className="mt-8 rounded-xl border border-slate-300 bg-slate-100 px-5 py-4">
       <h2 className="text-sm font-semibold text-slate-900">How to read this comparison</h2>
       <p className="mb-2 text-xs text-slate-500">
         Stored with the comparison by the system that computed it, not written by this page.
