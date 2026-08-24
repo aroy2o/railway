@@ -22,6 +22,7 @@ import {
   generateSchedule,
 } from '../services/scheduleOrchestrator.js';
 import { explainSchedule } from '../services/explainService.js';
+import { runWhatIf } from '../services/whatIfService.js';
 import {
   findPublishedSchedule,
   getAuditTrail,
@@ -284,6 +285,33 @@ router.post(
       const { id } = validated<IdParam>(req.params);
       const { question } = validated<ExplainBody>(req.body);
       res.json({ data: await explainSchedule({ scheduleId: id, question }) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+const whatIfSchema = z.object({
+  taskId: z.string().min(1).max(64),
+});
+type WhatIfBody = z.infer<typeof whatIfSchema>;
+
+/**
+ * POST /api/schedules/:id/whatif - FR5, 9.4.
+ *
+ * A real re-solve of the real CP-SAT model with one task's placement forced,
+ * using the current backlog and this schedule's own objective weights.
+ * Nothing here is persisted (D-064): the response is the entire effect of
+ * the call.
+ */
+router.post(
+  '/:id/whatif',
+  validate({ params: idParamSchema, body: whatIfSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = validated<IdParam>(req.params);
+      const { taskId } = validated<WhatIfBody>(req.body);
+      res.json({ data: await runWhatIf({ scheduleId: id, taskId }) });
     } catch (err) {
       next(err);
     }

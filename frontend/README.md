@@ -95,7 +95,7 @@ nav; `/` redirects to `/corridors`.
 (D-039). The read-only views remain in the nav — they answer "where did this
 number come from".
 
-Still to come: what-if simulation (T20).
+No routes still to come — T20 was the last 🟠 differentiator (see below).
 
 ## The comparison screen
 
@@ -224,6 +224,37 @@ while `blocks` stays untouched as what the solver produced (D-043).
 **Known limitations** renders `knownGaps` — the constraints the solver does not
 enforce (T24, T25) — plus any `generationErrors`. That report has now survived
 four hops: dataclass, HTTP, MongoDB, and screen.
+
+## What-if simulation (PRD FR5, 9.4, T20)
+
+`WhatIfPanel` opens from a "What if?" button on each `PriorityQueue` row —
+not a new page, since PRD Section 8 places this as a panel on the existing
+Controller Dashboard. Deliberately triggered from the priority queue rather
+than the Gantt: a deferred task has no block to click, and T20 works
+identically for both.
+
+Running it fires a REAL re-solve on the optimizer (several real CP-SAT
+solves — the loading state says so rather than looking frozen). The result
+renders 2+ real options side by side (FR5.1), each showing its consequence as
+a short badge — `summariseConsequence` in `lib/whatif.ts` collapses a
+reshuffle into a count, never every affected task's row, because the
+optimizer found that ANY perturbation on the real corpus reshuffles a large
+and variable number of unrelated tasks (0 to 25 of 35, in testing) — a full
+list would bury the one thing the Controller actually asked about. An option
+the solver could not prove optimal within its (deliberately short) time
+budget is labelled `not proven optimal (FEASIBLE)` rather than shown
+identically to one that was.
+
+**"Apply this option" reuses the exact FR6.2 override flow T15 already
+built** — the same mutation `OverridePanel` uses, with the same mandatory
+reason field. No new write path exists (D-065). Confirmed live: applying an
+option whose diff showed 14 reshuffled tasks was correctly REFUSED by that
+same re-validation — the window it targets is only free in the hypothetical
+fully-re-solved world, not the current one — and a zero-side-effect option
+succeeded cleanly.
+
+Nothing about the panel persists anything itself (D-064); it is a thin
+presentation over one `POST /:id/whatif` call.
 
 ## Traffic-block cost (PRD 9.6, T22)
 

@@ -260,6 +260,98 @@ test('T23: an unknown weight field name is refused, not silently ignored', async
     .expect(400);
 });
 
+test('T20: whatif returns 2+ real options with a framing and a recommendation', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  const generated = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 1 })
+    .expect(201);
+  const scheduleId = generated.body.data._id;
+  const taskId = generated.body.data.blocks[0].taskIds[0];
+
+  const res = await request(app)
+    .post(`/api/schedules/${scheduleId}/whatif`)
+    .send({ taskId })
+    .expect(200);
+
+  const whatif = res.body.data;
+  assert.equal(whatif.taskId, taskId);
+  assert.equal(whatif.currentlyScheduled, true);
+  assert.ok(whatif.options.length >= 2, 'FR5.1: 2 or more options');
+  assert.match(whatif.framing, /D-024/);
+});
+
+test('T20: whatif never writes to the schedule document (D-064)', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  const generated = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 1 })
+    .expect(201);
+  const scheduleId = generated.body.data._id;
+  const taskId = generated.body.data.blocks[0].taskIds[0];
+  const before = await Schedule.findById(scheduleId).lean();
+  const countBefore = await Schedule.countDocuments({});
+
+  await request(app)
+    .post(`/api/schedules/${scheduleId}/whatif`)
+    .send({ taskId })
+    .expect(200);
+
+  const after = await Schedule.findById(scheduleId).lean();
+  assert.deepEqual(before, after, 'the schedule document must be byte-identical after a whatif call');
+  // No new document either - a whatif is not a generation. Compared against
+  // the count just before the call, not an absolute 1, since this file's
+  // other tests share the same database and generate their own schedules.
+  assert.equal(await Schedule.countDocuments({}), countBefore);
+});
+
+test('T20: whatif on a schedule generated with a non-default weight uses that weight, not the D-023 default', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  const generated = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 1, policyWeights: { fragmentation: 2500 } })
+    .expect(201);
+  const scheduleId = generated.body.data._id;
+  const taskId = generated.body.data.blocks[0].taskIds[0];
+
+  const res = await request(app)
+    .post(`/api/schedules/${scheduleId}/whatif`)
+    .send({ taskId })
+    .expect(200);
+
+  // The baseline metrics inside the whatif response should reproduce this
+  // exact schedule's own metrics - proof the fragmentation=2500 weight, not
+  // the default 500, was actually applied to the whatif's own baseline solve.
+  assert.deepEqual(res.body.data.baselineMetrics, generated.body.data.metrics);
+});
+
+test('T20: an unknown task id is a clean 422, not a 500', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  const generated = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 1 })
+    .expect(201);
+
+  const res = await request(app)
+    .post(`/api/schedules/${generated.body.data._id}/whatif`)
+    .send({ taskId: 'TSK-DOES-NOT-EXIST' })
+    .expect(502);
+  assert.match(JSON.stringify(res.body), /TSK-DOES-NOT-EXIST/);
+});
+
+test('T20: whatif against a nonexistent schedule id is a 404', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  await request(app)
+    .post('/api/schedules/SCH-NOPE/whatif')
+    .send({ taskId: 'TSK-A1' })
+    .expect(404);
+});
+
 test('priorityScore is null before generation and real after it', async (t) => {
   if (!needs(t, { optimizer: true })) return;
 

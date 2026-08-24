@@ -223,6 +223,22 @@ class SolveRequest(ScenarioIn):
     policy_weights: PolicyWeightsIn | None = None
 
 
+class WhatIfRequest(ScenarioIn):
+    """T20 (PRD FR5, 9.4) - "what if this task were placed differently?"
+
+    Deliberately the SAME scenario shape as `SolveRequest` - a what-if is a
+    real re-solve of the real model, not a lighter parallel endpoint, so it
+    needs exactly the inputs a solve needs.
+    """
+
+    horizon_start: date
+    horizon_days: int = Field(default=7, ge=1)
+    max_seconds: float | None = Field(default=None, gt=0)
+    policy_weights: PolicyWeightsIn | None = None
+    #: The task the Controller is asking about.
+    task_id: str = Field(min_length=1, max_length=64)
+
+
 class PrioritizeRequest(ApiModel):
     """FR2.4 ranked-queue request."""
 

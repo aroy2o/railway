@@ -186,9 +186,10 @@ runs (D-022).
 | `POST` | `/prioritize` | FR2.4 ranked queue with per-factor breakdowns. |
 | `POST` | `/optimize` | FR3 CP-SAT block schedule (PRD Section 13). |
 | `POST` | `/baseline` | FR9.1 naive per-department schedule (PRD Section 12). |
+| `POST` | `/whatif` | FR5, 9.4 — a real re-solve with one task's placement forced, 2+ options diffed against the baseline. Nothing persisted (D-064). |
+| `POST` | `/explain` | PRD 9.2, FR8.2 — Ask the Planner. |
+| `POST` | `/risk` | FR2.2 predictive failure risk (PRD 9.1). |
 | `GET` | `/docs`, `/openapi.json` | Generated API contract. |
-
-`/whatif` lands with T20 and `/explain` with T18.
 
 ### The scheduling endpoints
 
@@ -635,6 +636,80 @@ Reporting "0 trains" alone would have called that free, which is why
 `TRAIN_IMPACT_CONFLICT` is now **checked, not undetectable** — count 0, earned by
 checking every block against observed occupancy rather than assumed.
 
+
+---
+
+## What-if simulation (`app/core/whatif.py`) — PRD FR5, 9.4, T20
+
+A real re-solve of the same `solve_schedule` model, with one task's placement
+forced via a new `Pin` (in `scheduler.py`): `Pin(task_id, window_key)` adds a
+hard `assign[...] == 1` constraint; `Pin(task_id, None)` excludes the task
+entirely. Batching, capacity and the T23 objective run unchanged, so a
+what-if answer is exactly as trustworthy as a real generation — never a
+simplified estimate.
+
+### What was checked before any option-generation code existed
+
+Two questions, run directly against the real corpus:
+
+1. **Does excluding a scheduled task ever rescue a deferred one?** Sampled 15
+   exclusions. Zero rescues — D-024 generalises from weights (T23) to
+   exclusion too: deferral on this corpus is never a capacity contest, so
+   freeing a window never helps a task that fits no window at all.
+2. **Does moving or excluding one task disturb anything else?** Yes, and by a
+   lot: 0 to 25 of the other 35 scheduled tasks shifted DAY as a side effect,
+   depending on how much day-tie-breaking their own corridor was already
+   subject to (the same volatility T23/D-061 found from a weight nudge
+   alone). The diff design follows directly: the candidate task's own outcome
+   in full, everything else as a `reshuffledCount` plus a 5-item sample —
+   never every affected task, which would bury the one thing the Controller
+   asked about.
+
+### Per-task options
+
+**Currently scheduled** — up to `MAX_OPTIONS` (3): real alternate windows on
+the task's OWN corridor (never cross-corridor, same D-043 reasoning as T15's
+overrides), each a genuine re-solve; a "defer this task" option fills any
+remaining slot.
+
+**Currently deferred** — exactly ONE option: the T22 traffic-block cost
+already computed in the baseline solve's own `DeferredTask.displacement`,
+reused verbatim. No alternate window exists to re-solve into (D-024's
+ceiling, reached directly), so there is nothing to compare it against — a
+padded "2+" would be a second option in name only.
+
+### A real timing issue found only at real-corpus scale
+
+An extreme-but-T23-legal weight combination (`fragmentation` at its 10x
+ceiling) made a single `/optimize`-equivalent solve take 8-9s to PROVE
+optimal. Four of those in one `/whatif` request (baseline + `MAX_OPTIONS`)
+measured 27.7s total — close enough to the 30s `OPTIMIZER_TIMEOUT_MS` default
+that a slightly harder corpus would exceed it. Fixed with a dedicated,
+shorter `whatif_solver_max_seconds` (4s, vs. `solver_max_seconds`'s 10s) and
+a matching `WHATIF_TIMEOUT_MS` (45s) on the Node side; the same real case now
+completes in ~15s. A solve cut short reports its genuine CP-SAT `status`
+(`FEASIBLE`, never falsely `OPTIMAL`) on the option, so the UI can show a
+Controller which options were proven best and which merely met the time
+budget.
+
+### No persistence (D-064)
+
+`generate_whatif` and `POST /whatif` write nothing. Same scenario, same task
+id, same answer, every time — proven, not assumed, by
+`test_whatif_never_mutates_the_scenario_it_was_given`, which calls the real
+endpoint twice and diffs the results (D-022's fixed-seed determinism is what
+makes this a provable equality).
+
+### Tests
+
+`tests/test_whatif.py` — hand-built scenarios for the option set, the
+side-effect diff (including the real batching-follows-the-move case found
+against the real corpus, reproduced by hand), the recommendation ordering
+(mutation-tested — the first version of that test had a blind spot where both
+fixture options shared `reshuffled_count`, making the mutation invisible
+until the fixture was fixed to differentiate on both ranking axes), the
+structurally-deferred path (one option, zero solve time), and endpoint
+fidelity over HTTP.
 
 ---
 

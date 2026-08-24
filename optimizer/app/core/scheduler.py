@@ -179,6 +179,29 @@ class WindowInstance:
 # Outputs                                                                      #
 # --------------------------------------------------------------------------- #
 
+@dataclass(frozen=True)
+class Pin:
+    """T20 - force one task's placement, or its exclusion, before the solve
+    runs. The mechanism behind what-if simulation: everything else in the
+    model - batching, capacity, the real objective - runs exactly as it does
+    for a normal solve, so a pinned solve is a real CP-SAT answer, not a
+    simplified stand-in.
+
+    `window_key` is a `WindowInstance.key` (`corridorId|isoDate|windowIndex`)
+    on the task's OWN corridor. A cross-corridor pin is refused for the same
+    reason D-043 already refuses a cross-corridor override: the defect is on
+    that corridor's asset, and moving the paperwork does not move the cracked
+    rail.
+
+    `window_key=None` means "exclude this task from the model entirely" - the
+    what-if question "what if we deferred this instead, to free the
+    capacity?"
+    """
+
+    task_id: str
+    window_key: str | None
+
+
 class DeferralReason:
     """Machine-readable deferral codes (FR3.3).
 
@@ -380,6 +403,9 @@ def solve_schedule(
     max_seconds: float = 10.0,
     num_workers: int = 1,
     random_seed: int = 20260822,
+    #: T20 - force one task's placement or exclusion. Everything else in the
+    #: model is unchanged, so this is a real answer, not an approximation.
+    pin: Pin | None = None,
 ) -> ScheduleResult:
     """Build and solve the CP-SAT block-allocation model.
 
@@ -488,6 +514,38 @@ def solve_schedule(
             assign[(task.task_id, window.key)] = model.new_bool_var(
                 f"assign[{task.task_id}][{window.key}]"
             )
+
+    # --- T20: the what-if pin, if one was given ------------------------------
+    #
+    # Validated here rather than trusted, because a pin naming a window that
+    # does not exist or does not fit would otherwise build a model that is
+    # silently infeasible for a reason nobody can see - the CP-SAT equivalent
+    # of D-025's "a rewarded indicator must be free to be zero".
+    if pin is not None:
+        if pin.window_key is None:
+            if pin.task_id in candidates_for_task:
+                model.add(
+                    sum(
+                        assign[(pin.task_id, window.key)]
+                        for window in candidates_for_task[pin.task_id]
+                    )
+                    == 0
+                )
+            # A task already outside `schedulable` (structurally deferred) is
+            # already excluded - pinning it out again is a no-op, not an error.
+        else:
+            if pin.task_id not in candidates_for_task:
+                raise ValueError(
+                    f"cannot pin {pin.task_id} to {pin.window_key}: this task fits no "
+                    f"window in the {horizon} horizon at all (structurally deferred), so "
+                    f"there is no placement to force it into"
+                )
+            if (pin.task_id, pin.window_key) not in assign:
+                raise ValueError(
+                    f"cannot pin {pin.task_id} to {pin.window_key}: that window is not "
+                    f"a real, fitting, same-corridor candidate for this task"
+                )
+            model.add(assign[(pin.task_id, pin.window_key)] == 1)
 
     # --- constraint: each task in at most one window ------------------------
     # "At most", not "exactly": zero means deferred, which FR3.3 requires to be

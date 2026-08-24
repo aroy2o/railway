@@ -97,6 +97,7 @@ with supertest and never bind a socket.
 | `POST` | `/api/schedules/:id/override` | **FR6.2** — move a task to another free window on its corridor, or defer it. Re-validated; refused with the specific failing check. |
 | `GET` | `/api/schedules/:id/overrides` | The FR6.2 audit trail for one plan. |
 | `GET` | `/api/schedules/:id/override-targets/:taskId` | Windows a task can legally move into, from the same validator the write path uses. |
+| `POST` | `/api/schedules/:id/whatif` | **FR5, 9.4** — a real re-solve with one task's placement forced, for 2+ alternatives diffed against the committed plan. Nothing persisted (D-064). |
 | `POST` | `/api/schedules/:id/workflow` | **FR6.1** — one transition: `submit`, `approve`, `reject` or `publish`. An illegal one is a 409 naming the state and the actions that *are* legal. |
 | `GET` | `/api/schedules/:id/approvals` | The approval/rejection history alone. |
 | `GET` | `/api/schedules/:id/audit` | **FR6.2** — the merged trail: what generated the plan, every override, every sign-off, in time order. |
@@ -341,6 +342,46 @@ curl localhost:5000/api/schedules/latest
 it skips cleanly without either. It uses its own database (`..._schedules`)
 because `node --test` runs files in parallel and sharing one test database let
 two files' fixtures wipe each other mid-run.
+
+## What-if simulation (FR5, 9.4)
+
+`POST /:id/whatif` runs the SAME real CP-SAT model `/generate` runs — a
+baseline solve of the current backlog, then up to 3 more with the candidate
+task's placement forced (`Pin` in `scheduler.py`), diffed against the
+baseline. Not an estimate: everything else in the model (batching, capacity,
+the T23 objective) runs exactly as it does for a real generation.
+
+`runWhatIf` (`whatIfService.ts`) gathers the CURRENT real backlog — the same
+one `/generate` would use today — and sends the REFERENCED schedule's own
+`policyWeights`, so the what-if's own baseline solve reproduces the committed
+plan when nothing has changed since, and is honestly different rather than
+silently wrong on the rare occasion something has.
+
+**Nothing is persisted** (D-064). Same scenario, same task id, same answer,
+every time; no field, no fold, no side collection. The schedule id is only
+there to supply the current backlog and the right weights to solve against.
+
+**A structurally deferred task gets one option, not a padded "2+".** No
+alternate window exists to re-solve into — D-024's ceiling, reached directly
+— so the only honest option is T22's own traffic-block cost, reused verbatim
+from the baseline solve's deferral entry rather than recomputed.
+
+**Applying an option is exactly a T15 override, not a new write path**
+(D-065). "Move to X" becomes the identical `POST /:id/override` body T15's
+own panel sends; every re-validation check and every T19 workflow gate runs
+identically because it is the identical code path. Confirmed live: an option
+whose diff showed 14 reshuffled tasks was correctly REFUSED by that
+re-validation, because the window it targets is only free in the
+hypothetical fully-re-solved world, not the current one — and a
+zero-side-effect option succeeded cleanly with `schedule.blocks` staying
+byte-identical.
+
+Each sub-solve is capped by `WHATIF_SOLVER_MAX_SECONDS` (4s default on the
+optimizer), shorter than a normal solve's budget — found necessary directly
+against the real corpus, where an extreme T23 weight combination took a
+single solve 8-9s to prove optimal, and four of those risked the request's
+own `WHATIF_TIMEOUT_MS` (45s). A solve cut short reports its real CP-SAT
+`status` (`FEASIBLE`, not falsely `OPTIMAL`) rather than hiding the trade-off.
 
 ## Conventions
 

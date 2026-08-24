@@ -196,7 +196,57 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
   - **Tests:** 5 mutations caught (illegal transition made legal, freeze removed,
     capacity check blinded, digest ignoring dates, reconciliation disabled).
     Backend 98, optimizer 260, frontend 55.
-- [ ] `todo` — **T20**: What-if simulation endpoint + UI panel (FR5)
+- [x] `done` — **T20**: What-if simulation endpoint + UI panel (FR5, 9.4)
+  - **Solver extended, not stood-in for.** `solve_schedule` gained a `Pin`
+    parameter (force one task's placement, or exclusion) - a hard constraint
+    added to the SAME model T6-T23 already build; batching, capacity and the
+    real T23 objective run unchanged. A what-if answer is exactly as
+    trustworthy as a real generation, never a simplified estimate.
+  - **Two real findings from the real corpus, checked before any UI code
+    existed.** (1) D-024 generalises to exclusion, not only to weights:
+    excluding any of 15 sampled scheduled tasks never rescued a single
+    deferred one - deferral here is never a capacity contest, so freeing
+    capacity never helps a task that fits no window at all. (2) ANY
+    perturbation - move OR exclude - reshuffles a large, variable number of
+    OTHER already-scheduled tasks' days as a side effect (0 to 25 of 35
+    sampled), the same under-determined-day volatility T23/D-061 found from a
+    weight nudge alone. The diff design follows directly: the candidate task's
+    own outcome in full, everything else as a COUNT plus a small sample -
+    never a wall of rows - with the framing stating this plainly.
+  - **A structurally deferred task gets exactly one option, reused, not
+    recomputed.** No alternate window exists to re-solve into (D-024's
+    ceiling, reached directly), so the one honest option is T22's own
+    traffic-block cost, taken verbatim from the baseline solve's own deferral
+    entry - zero extra solve time, and no second implementation of a cost T22
+    already computes correctly.
+  - **A second real timing issue found only by testing at real-corpus scale.**
+    An extreme-but-T23-legal weight combination (fragmentation at its 10x
+    ceiling) made a single solve take 8-9s to PROVE optimal - four of those in
+    one what-if request risked the interactive call itself timing out (27.7s
+    observed against a 30s default). Fixed with a dedicated, shorter
+    `whatif_solver_max_seconds` (4s) and a matching `WHATIF_TIMEOUT_MS` on
+    Node; a cut-short solve now reports its real CP-SAT `status` (`FEASIBLE`,
+    not falsely `OPTIMAL`) and the UI shows that honestly rather than
+    presenting every option as equally proven.
+  - **No persistence, of any kind** (D-064) - not a field, not a fold. A
+    what-if is a pure function of the backlog, the referenced schedule's own
+    `policyWeights`, and the candidate task id; proven, not assumed, by a test
+    that calls the real endpoint twice and asserts an identical plan.
+  - **Applying an option reuses T15's override endpoint unchanged** (D-065) -
+    no new write path, no shortcut around FR6.2. Confirmed LIVE, not just
+    reasoned through: applying a heavily-reshuffled option was correctly
+    REFUSED by T15's own re-validation (the window is only free in the
+    hypothetical fully-re-solved world, not the current one), while a
+    zero-side-effect option succeeded with all six checks passing and
+    `schedule.blocks` staying byte-identical.
+  - **Tests:** optimizer 288 (14 new, including a mutation test whose first
+    version had a blind spot - both fixture options shared `reshuffled_count`,
+    so the mutation was invisible until the fixture was fixed to actually
+    differentiate on both ranking axes), backend 107 (5 new), frontend 70
+    (8 new). Verified live end to end in a real browser: a scheduled task's
+    "What if?" opened 3 real options side by side with a recommendation, a
+    deferred task's opened the single traffic-block option, and the apply
+    flow was driven to both outcomes above.
 - [x] `done` — **T21**: Conflict detection + typed classification (corridor/train-impact/resource/dependency) + display (FR4)
   - `optimizer/app/core/conflicts.py`: the PRD 9.5 taxonomy. Four detectable types
     (`CORRIDOR_DOUBLE_BOOKING`, `WINDOW_OVER_SUBSCRIPTION`, `RESOURCE_CONTENTION`,
@@ -337,6 +387,26 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 ## Session log
 
 _Append a dated one-line entry here each session — what was completed, what's next._
+
+- **2026-08-24** — T20 complete. What-if simulation, built as a real re-solve
+  of the same CP-SAT model (a `Pin` constraint forcing one task's placement),
+  never a simplified estimate. Two findings checked against the real corpus
+  before any UI existed: D-024's structural-impossibility finding generalises
+  to exclusion (freeing a scheduled task's window never rescues a deferred
+  one), and any perturbation reshuffles a large, variable number of unrelated
+  tasks' days as a side effect - so the diff design collapses that into a
+  count, never a wall of rows. A second real timing bug was found only by
+  testing at real-corpus scale: an extreme-but-T23-legal weight combination
+  made whatif's four solves risk the interactive request's own timeout: fixed
+  with a shorter dedicated solver budget and an honestly-surfaced `FEASIBLE`
+  (not falsely `OPTIMAL`) status. No persistence, of any kind (D-064) -
+  proven by a test that calls the endpoint twice and gets an identical plan.
+  Applying an option reuses T15's override endpoint unchanged (D-065),
+  confirmed live: a heavily-reshuffled option was correctly REFUSED by T15's
+  own re-validation, a clean one succeeded with `blocks` staying
+  byte-identical. **The 🟠 tier is now exhausted.** Remaining work is T24-28
+  (🟡 stretch), or - per the standing plan - moving to auth once every
+  T-numbered task is verified complete.
 
 - **2026-08-24** — T23 complete. Policy sliders wired to the real D-023 objective
   weights, built only after auditing what a slider could honestly claim on the

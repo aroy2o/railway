@@ -43,9 +43,11 @@ interface PriorityQueueProps {
   tasks: Task[]
   schedule?: Schedule
   limit?: number
+  /** T20: renders a "What if?" trigger per row when the caller wants one. */
+  onWhatIf?: (taskId: string) => void
 }
 
-export function PriorityQueue({ tasks, schedule, limit = 12 }: PriorityQueueProps) {
+export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: PriorityQueueProps) {
   const scheduledIds = useMemo(
     () => new Set(schedule?.blocks.flatMap((block) => block.taskIds) ?? []),
     [schedule],
@@ -129,17 +131,28 @@ export function PriorityQueue({ tasks, schedule, limit = 12 }: PriorityQueueProp
                       <span className="ml-1 font-medium text-rose-600">· overdue</span>
                     )}
                   </span>
-                  {schedule && (
-                    <span
-                      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                        isScheduled
-                          ? 'bg-emerald-50 text-emerald-700'
-                          : 'bg-slate-100 text-slate-500'
-                      }`}
-                    >
-                      {isScheduled ? 'scheduled' : 'deferred'}
-                    </span>
-                  )}
+                  <span className="flex shrink-0 items-center gap-1">
+                    {schedule && (
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          isScheduled
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {isScheduled ? 'scheduled' : 'deferred'}
+                      </span>
+                    )}
+                    {onWhatIf && schedule && (
+                      <button
+                        type="button"
+                        onClick={() => onWhatIf(task._id)}
+                        className="rounded px-1.5 py-0.5 text-[10px] font-medium text-violet-700 ring-1 ring-violet-200 ring-inset hover:bg-violet-50"
+                      >
+                        What if?
+                      </button>
+                    )}
+                  </span>
                 </div>
               </li>
             )

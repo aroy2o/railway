@@ -2547,3 +2547,119 @@ id-shaped field this system starts surfacing in an answer (a future
 `resourceId`, an asset id used more heavily once T16's per-asset framing grows)
 should get the same fifteen-minute check before it ships, not after it fails
 live in front of a judge.
+
+---
+
+## D-064 — A what-if result needs no persistence at all, not even a derived one
+
+**Date:** 2026-08-24 · **Task:** T20
+
+**The question, framed by D-057's own checklist rather than answered by
+analogy.** D-057 decided FR6.1's workflow state needed a *fold* over an
+append-only log because it changes after the schedule document exists.
+D-062 decided `policyWeights` needed no fold, only a plain field, because it
+is decided once and never changes afterwards. T20's what-if result is a third
+case, and the honest way to place it is to ask the same question D-057 first
+asked: does anything here change after it is computed?
+
+**Decision: no persistence, of any kind.** Not a field, not a fold, not a
+side collection. `POST /whatif` (optimizer) and `POST
+/api/schedules/:id/whatif` (Node) are pure request/response computations.
+Nothing is written to MongoDB. A what-if result exists for the duration of one
+HTTP response and then is gone, by design.
+
+**Why this is the correct generalisation, not a shortcut.** A what-if answer
+is a pure function of five inputs: the task backlog, the corridor calendar,
+the horizon, the objective weights, and the candidate task id. Given the same
+five, `generate_whatif` returns the same answer, proven directly by
+`test_whatif_never_mutates_the_scenario_it_was_given` running the real
+endpoint twice and diffing the results (D-022's fixed-seed determinism is
+what makes this a provable equality, not merely a likely one). There is
+nothing for a later read to need that a fresh computation cannot reproduce
+exactly - which is the one condition under which D-057's "derive, don't
+store" principle collapses all the way to "don't store at all, not even
+derived."
+
+**This also settles PRD FR5's own framing.** The PRD calls this feature
+*simulation* deliberately - a Controller is asking a hypothetical, not
+recording an event. D-034 made a schedule an append-only record of something
+that happened; D-043 made an override the same for an amendment that
+happened; D-057 made an approval the same for a decision that happened. A
+what-if never happens to anything - it is asked and answered, and the
+schedule this scenario describes is exactly as it was before the question,
+which is the property FR5 needs in order to be safe to explore freely.
+
+**What this means for the route.** `POST /api/schedules/:id/whatif` still
+takes a schedule id - not because anything is read from or written to that
+document, but because it is where the CURRENT tasks, corridors and (critically)
+the ORIGINAL `policyWeights` come from, so the what-if's baseline solve
+reproduces the same plan the schedule already records, and the comparison is
+against something real rather than a freshly-guessed baseline.
+
+---
+
+## D-065 — Applying a what-if option reuses T15's override unchanged, scoped to only the task asked about
+
+**Date:** 2026-08-24 · **Task:** T20
+
+**The question.** A Controller who likes a what-if option should be able to
+keep it. FR5.3 lets them pick *any* option, not only the recommended one. How
+does "keep it" reach the live schedule, given the task's own scope boundary:
+*"no shortcut around FR6.2 just because this feature is new"*?
+
+**Decision.** There is no new commit path. "Apply this option" on the
+frontend calls the SAME `POST /api/schedules/:id/override` T15 already built
+and T19 already gates - unchanged, not extended, not bypassed. A what-if
+"move" option becomes exactly the override request T15's panel already sends
+(`taskId`, `targetDate`, `targetWindowIndex`, a reason); a "defer" option
+becomes exactly T15's defer request. Every re-validation check T15 runs,
+every workflow-state gate T19 added in front of it, runs identically, because
+it is the identical code path.
+
+**Why applying is scoped to ONLY the candidate task, never the side effects
+shown alongside it.** A what-if's diff can show OTHER tasks reshuffling days
+as a side effect of the re-solve (T23/D-061's volatility, confirmed to apply
+here too - see the `whatif.py` module docstring). Those are shown for
+information: "here is what re-optimising around this change would also move."
+They are never applied automatically. Two reasons.
+
+First, consent: a Controller asked about ONE task and should not have several
+others silently moved as a rider on that answer - FR6.2's mandatory reason
+field exists precisely so every change is deliberate and attributable, and an
+auto-applied side effect would have no reason of its own.
+
+Second, honesty about what "applying" even means here: the side-effect tasks'
+NEW placements are only optimal in the hypothetical world where the candidate
+task was ALSO moved via a full re-solve. T15's override mechanism does not
+re-solve anything - it replays a delta on top of the existing plan (D-043). If
+the side-effect moves were applied as a batch of separate overrides, the
+result would not be the coherent re-optimized plan the what-if showed; it
+would be an approximation of it, achieved by a mechanism that was never
+designed to produce it. The one action that DOES produce the real re-optimized
+plan is Generate schedule (T10, extended by T23) - already built, and already
+the correct tool for "I want the whole plan re-solved," which is a different
+request from "I want to override one task."
+
+**What this rules out, on purpose.** No new `apply-whatif` endpoint, no new
+persisted "pending what-if" state, no batch-override mechanism. The feature's
+entire write surface is the override endpoint that already existed before
+this task began.
+
+**Confirmed live, not just reasoned through.** Driving the real UI end to
+end: applying TSK-00058's recommended move (which the diff had already
+flagged as reshuffling 14 other tasks' days) was correctly REFUSED by T15's
+own re-validation - *"Window 11:02-13:02 on 2026-08-24 already holds 95 min
+of work, leaving 25 min. Task needs 100 min."* That window is only free in
+the hypothetical world where the other 14 tasks also moved; T15's override
+replays a delta on the CURRENT plan, where it is not. This is the reasoning
+above ceasing to be theoretical: a Controller applying a heavily-reshuffled
+option hits a real, correctly-explained rejection, not a silent corruption of
+the plan.
+
+The clean path was confirmed too, on a different task whose two move options
+both showed zero reshuffle: the override succeeded, all six T15 checks
+passed, `originalAiAssignment` correctly preserved the solver's own
+placement, `schedule.blocks` stayed byte-identical (D-043 held), and
+`effectivePlan` reflected the new placement through the replay - exactly the
+D-043 mechanism already in production, doing exactly what it has always
+done, now reached from a second entry point.

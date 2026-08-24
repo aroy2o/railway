@@ -50,6 +50,12 @@ const envSchema = z.object({
   // its own budget. Sharing the solver's 30s would either cut off a slow
   // generation or make a hung LLM call hold a request far too long.
   EXPLAIN_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+  // T20: up to 4 real CP-SAT solves in one request (baseline + MAX_OPTIONS).
+  // Each is capped at the optimizer's own WHATIF_SOLVER_MAX_SECONDS (4s
+  // default), so the worst case is ~16s of solving plus network overhead -
+  // 45s leaves comfortable headroom without inheriting /optimize's 30s
+  // budget, which was sized for exactly one solve.
+  WHATIF_TIMEOUT_MS: z.coerce.number().int().positive().default(45000),
 
   // Where the seed script reads the pipeline output from. Relative paths are
   // resolved against the repo root, so the default works from any cwd.
@@ -85,6 +91,7 @@ export interface AppConfig {
     readonly baseUrl: string;
     readonly timeoutMs: number;
     readonly explainTimeoutMs: number;
+    readonly whatIfTimeoutMs: number;
   };
   readonly paths: { readonly repoRoot: string; readonly processedData: string };
 }
@@ -106,6 +113,7 @@ export const config: AppConfig = Object.freeze({
     baseUrl: raw.OPTIMIZER_URL.replace(/\/+$/, ''),
     timeoutMs: raw.OPTIMIZER_TIMEOUT_MS,
     explainTimeoutMs: raw.EXPLAIN_TIMEOUT_MS,
+    whatIfTimeoutMs: raw.WHATIF_TIMEOUT_MS,
   }),
   paths: Object.freeze({
     repoRoot: REPO_ROOT,

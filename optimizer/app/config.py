@@ -43,6 +43,22 @@ class Settings(BaseSettings):
     # the endpoint answers even when the model cannot prove optimality in time.
     solver_max_seconds: float = Field(default=10.0, gt=0, le=600, alias="SOLVER_MAX_SECONDS")
 
+    # T20: what-if runs up to 4 real solves in one request (a baseline plus
+    # MAX_OPTIONS alternatives). PRD Section 7's <10s budget was written for
+    # ONE solve; reused unchanged here it would let a single interactive
+    # request run to 40s. Found directly against the real corpus at an
+    # extreme (but T23-legal) weight combination: fragmentation at its 10x
+    # ceiling made a single solve take 8-9s to PROVE optimal, even though a
+    # feasible answer existed almost immediately - CP-SAT keeps searching for
+    # proof of optimality, not just a good answer, until its time budget runs
+    # out. A shorter per-solve ceiling here trades "provably optimal" for
+    # "responsive", honestly: a solve that hits this ceiling reports its real
+    # `status` (FEASIBLE, not OPTIMAL) rather than pretending to have proven
+    # what it did not, and the UI is expected to show that status as it is.
+    whatif_solver_max_seconds: float = Field(
+        default=4.0, gt=0, le=60, alias="WHATIF_SOLVER_MAX_SECONDS"
+    )
+
     # CP-SAT worker threads; 0 lets OR-Tools choose based on available cores.
     solver_num_workers: int = Field(default=0, ge=0, le=64, alias="SOLVER_NUM_WORKERS")
 

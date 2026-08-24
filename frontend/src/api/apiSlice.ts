@@ -602,6 +602,23 @@ export const api = createApi({
     }),
 
     /**
+     * T20 (PRD FR5, 9.4) - a real re-solve with one task's placement forced,
+     * for 2+ alternatives, diffed against the committed plan. NOT tagged for
+     * invalidation: a whatif changes nothing (D-064), so there is nothing for
+     * any other query to need to refetch afterwards.
+     */
+    runWhatIf: builder.mutation<
+      { data: import('../lib/whatif.ts').WhatIfResult },
+      { scheduleId: string; taskId: string }
+    >({
+      query: ({ scheduleId, taskId }) => ({
+        url: `/schedules/${encodeURIComponent(scheduleId)}/whatif`,
+        method: 'POST',
+        body: { taskId },
+      }),
+    }),
+
+    /**
      * The full FR6.2 audit trail: generation, every override, every sign-off,
      * in one time-ordered list.
      */
@@ -670,6 +687,7 @@ export const {
   useAskThePlannerMutation,
   useGetAuditTrailQuery,
   useRunWorkflowActionMutation,
+  useRunWhatIfMutation,
 } = api
 
 /**

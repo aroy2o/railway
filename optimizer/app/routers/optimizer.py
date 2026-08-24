@@ -46,7 +46,15 @@ from app.core.scheduler import (
     MaintenanceTask,
     solve_schedule,
 )
-from app.models.scheduling import CorridorIn, PrioritizeRequest, ScenarioIn, SolveRequest, TaskIn
+from app.core.whatif import generate_whatif
+from app.models.scheduling import (
+    CorridorIn,
+    PrioritizeRequest,
+    ScenarioIn,
+    SolveRequest,
+    TaskIn,
+    WhatIfRequest,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["scheduling"])
@@ -268,6 +276,60 @@ def optimize(request: SolveRequest, settings: Settings = Depends(get_settings)) 
         "fragmentation": weights.fragmentation,
     }
     return payload
+
+
+@router.post("/whatif")
+def whatif(request: WhatIfRequest, settings: Settings = Depends(get_settings)) -> dict:
+    """FR5 (PRD 9.4) - "what if this task were placed differently?"
+
+    Runs the SAME real CP-SAT model `/optimize` runs - a baseline solve, then
+    up to `MAX_OPTIONS` more with the candidate task's placement forced
+    (`whatif.py`'s `Pin`, `scheduler.py`) - so an answer is exactly as
+    trustworthy as a real generation, not a simplified estimate.
+
+    Nothing here is persisted (D-064): same inputs, same task id, same
+    answer, every time, and the schedule this scenario describes is
+    untouched by asking the question.
+    """
+    _guard_size(request, settings)
+    if request.horizon_days > settings.max_horizon_days:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"horizonDays {request.horizon_days} exceeds {settings.max_horizon_days}",
+        )
+
+    # Each option is its own solve (up to 1 baseline + MAX_OPTIONS = 4), so
+    # this uses the SHORTER `whatif_solver_max_seconds` ceiling, not
+    # /optimize's - found to matter directly against the real corpus: at an
+    # extreme (but T23-legal) weight combination, a single solve took 8-9s to
+    # PROVE optimal, and four of those would risk the interactive request
+    # itself timing out. See the config field's own comment.
+    budget = min(
+        request.max_seconds or settings.whatif_solver_max_seconds,
+        settings.whatif_solver_max_seconds,
+    )
+    weights = _resolve_weights(request.policy_weights)
+
+    try:
+        result = generate_whatif(
+            _to_tasks(request.tasks, request.horizon_start),
+            _to_corridors(request.corridors),
+            horizon_start=request.horizon_start,
+            horizon_days=request.horizon_days,
+            task_id=request.task_id,
+            weights=weights,
+            max_seconds=budget,
+        )
+    except ValueError as exc:
+        # Either expand_windows rejecting a bad corridor, or "no such task" -
+        # both are a bad request, not a server failure.
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    logger.info(
+        "whatif: task=%s, %d option(s), recommended=%s",
+        request.task_id, len(result.options), result.recommended_index,
+    )
+    return result.as_dict()
 
 
 @router.post("/baseline")

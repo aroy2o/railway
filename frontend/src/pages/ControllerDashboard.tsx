@@ -29,6 +29,7 @@ import DeferredTasksPanel from '../components/DeferredTasksPanel.tsx'
 import GanttTimeline from '../components/GanttTimeline.tsx'
 import OverrideHistory from '../components/OverrideHistory.tsx'
 import WorkflowPanel from '../components/WorkflowPanel.tsx'
+import WhatIfPanel from '../components/WhatIfPanel.tsx'
 import PolicySliders from '../components/PolicySliders.tsx'
 import { OVERRIDABLE_STATES } from '../lib/approval.ts'
 import OverridePanel from '../components/OverridePanel.tsx'
@@ -48,6 +49,9 @@ export function ControllerDashboard() {
   const tasks = useGetTasksQuery({ limit: 200 })
   const [generate, generation] = useGenerateScheduleMutation()
   const [selected, setSelected] = useState<ScheduleBlock | null>(null)
+  // T20: independent of the override selection above - a what-if works on a
+  // deferred task too, which has no block on the Gantt to select at all.
+  const [whatIfTaskId, setWhatIfTaskId] = useState<string | null>(null)
 
   const plan = schedule.data?.data
   // `blocks` is the solver's plan and what `decisionLog` explains; the
@@ -182,6 +186,14 @@ export function ControllerDashboard() {
                   {/* Sits under the timeline, in the wide column: a Controller
                       asks about the plan they are looking at, and the grounding
                       list needs room to be readable rather than truncated. */}
+                  {whatIfTaskId && (
+                    <WhatIfPanel
+                      scheduleId={plan._id}
+                      taskId={whatIfTaskId}
+                      onClose={() => setWhatIfTaskId(null)}
+                    />
+                  )}
+
                   <AskThePlanner scheduleId={plan._id} />
 
                   <DeferredTasksPanel deferred={plan.deferredTasks} />
@@ -197,7 +209,11 @@ export function ControllerDashboard() {
                     version={null}
                   />
                   <PolicySliders onRegenerate={onGenerate} isLoading={generation.isLoading} />
-                  <PriorityQueue tasks={tasks.data?.data ?? []} schedule={plan} />
+                  <PriorityQueue
+                    tasks={tasks.data?.data ?? []}
+                    schedule={plan}
+                    onWhatIf={setWhatIfTaskId}
+                  />
                   <OverrideHistory overrides={plan.overrides ?? []} />
                   <KnownLimitations
                     knownGaps={plan.knownGaps}

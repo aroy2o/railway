@@ -272,6 +272,52 @@ export interface PriorityQueueResponse {
   queue: PriorityQueueEntry[];
 }
 
+/**
+ * T20 (PRD FR5, 9.4) - "what if this task were placed differently?"
+ *
+ * Sent alongside `policyWeights` from the SCHEDULE being asked about, not the
+ * D-023 default - the what-if's own baseline solve must reproduce the plan
+ * already committed, or the diff it shows is against something that never
+ * existed (D-064).
+ */
+export interface WhatIfScenario extends OptimizerScenario {
+  taskId: string;
+}
+
+export interface WhatIfTaskOutcome {
+  placed: boolean;
+  corridorId: string | null;
+  date: string | null;
+  windowIndex: number | null;
+}
+
+export interface WhatIfDiff {
+  newlyScheduled: string[];
+  newlyDeferred: string[];
+  reshuffledCount: number;
+  reshuffledSample: string[];
+}
+
+export interface WhatIfOption {
+  label: string;
+  kind: 'move' | 'defer' | 'traffic-block';
+  taskOutcome: WhatIfTaskOutcome;
+  diff: WhatIfDiff | null;
+  metrics: Record<string, unknown>;
+  reason: string;
+  solveSeconds: number | null;
+}
+
+/** The optimizer's own result shape - returned verbatim, never reshaped. */
+export interface WhatIfResult {
+  taskId: string;
+  currentlyScheduled: boolean;
+  baselineMetrics: Record<string, number>;
+  options: WhatIfOption[];
+  recommendedIndex: number | null;
+  framing: string;
+}
+
 /** FR3 - run the CP-SAT optimizer (PRD Section 13). */
 export async function requestOptimizedSchedule(
   payload: OptimizerScenario,
@@ -280,6 +326,23 @@ export async function requestOptimizedSchedule(
     method: 'POST',
     body: payload,
   })) as OptimizedSchedule;
+}
+
+/**
+ * T20 - a real re-solve of the same CP-SAT model, with one task's placement
+ * forced, diffed against the plan without that constraint. Nothing about this
+ * call persists anywhere (D-064): same scenario, same answer, every time.
+ */
+export async function requestWhatIf(payload: WhatIfScenario): Promise<WhatIfResult> {
+  return (await requestOptimizer('/whatif', {
+    method: 'POST',
+    // Up to 4 real solves in one request - see WHATIF_TIMEOUT_MS's own
+    // comment for the arithmetic. Sharing /optimize's 30s budget (sized for
+    // exactly one solve) risked the request timing out before the optimizer's
+    // own shorter per-solve ceiling could even finish all four.
+    timeoutMs: config.optimizer.whatIfTimeoutMs,
+    body: payload,
+  })) as WhatIfResult;
 }
 
 /** FR9.1 - run the naive per-department baseline (PRD Section 12). */
