@@ -88,6 +88,7 @@ async function loadJson<T extends ProcessedFile>(filename: string): Promise<T> {
           `  cd data && .venv/bin/python -m ingestion.download\n` +
           `  .venv/bin/python -m ingestion.build_corridors\n` +
           `  .venv/bin/python -m ingestion.build_timetable\n` +
+          `  .venv/bin/python -m ingestion.build_seasonal_risk\n` +
           `  .venv/bin/python -m generators.build_synthetic`,
       );
     }
@@ -135,6 +136,9 @@ export async function seed(): Promise<{ counts: Record<string, number>; corridor
   const calendarFile = await loadJson<ProcessedFile & { calendar: ICorridorCalendar[] }>(
     'corridor_calendar.json',
   );
+  const seasonalRiskFile = await loadJson<
+    ProcessedFile & { corridorSeasonalRisk: Array<{ _id: string; seasonalRiskFlag: string | null }> }
+  >('corridor_seasonal_risk.json');
   const assetsFile = await loadJson<ProcessedFile & { assets: IAsset[] }>('assets.json');
   const tasksFile = await loadJson<ProcessedFile & { tasks: ITask[] }>('tasks.json');
   const resourcesFile = await loadJson<ProcessedFile & { resources: IResource[] }>(
@@ -162,10 +166,20 @@ export async function seed(): Promise<{ counts: Record<string, number>; corridor
     ]),
   );
 
+  // T26: real Ministry of Jal Shakti flood-risk state data, joined by
+  // corridor id the same way T3's occupancy summary is (D-016) - a separate
+  // real-data stage, not baked into T2's own corridors.json (D-009's reason
+  // applies just as much here: `seasonalRiskFlag` needs data T2's own
+  // sources do not carry).
+  const seasonalRiskById = new Map(
+    seasonalRiskFile.corridorSeasonalRisk.map((entry) => [entry._id, entry.seasonalRiskFlag]),
+  );
+
   const corridorDocuments = corridorsFile.corridors.map((corridor) => ({
     ...corridor,
     hasSyntheticDemand: corridorsWithDemand.has(corridor._id),
     occupancySummary: summaryById.get(corridor._id) ?? ({} as ICorridor['occupancySummary']),
+    seasonalRiskFlag: seasonalRiskById.get(corridor._id) ?? null,
   }));
 
   // --- load ---------------------------------------------------------------
@@ -198,6 +212,16 @@ export async function seed(): Promise<{ counts: Record<string, number>; corridor
     provenanceDoc('assets', 'assets.json', assetsFile, counts.assets!, true),
     provenanceDoc('tasks', 'tasks.json', tasksFile, counts.tasks!, true),
     provenanceDoc('resources', 'resources.json', resourcesFile, counts.resources!, true),
+    // Not its own collection - denormalised onto `corridors.seasonalRiskFlag`
+    // above (D-016) - but the source citation still has to survive the join,
+    // the same D-015 reasoning as every other record here.
+    provenanceDoc(
+      'corridor_seasonal_risk',
+      'corridor_seasonal_risk.json',
+      seasonalRiskFile,
+      seasonalRiskFile.corridorSeasonalRisk.length,
+      false,
+    ),
   ].map((doc) => ({ ...doc, seededAt }));
 
   counts.dataset_provenance = await replaceCollection(

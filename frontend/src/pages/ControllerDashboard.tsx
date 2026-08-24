@@ -35,6 +35,7 @@ import { OVERRIDABLE_STATES } from '../lib/approval.ts'
 import OverridePanel from '../components/OverridePanel.tsx'
 import AskThePlanner from '../components/AskThePlanner.tsx'
 import KnownLimitations from '../components/KnownLimitations.tsx'
+import WeatherRiskPanel from '../components/WeatherRiskPanel.tsx'
 import KpiStrip from '../components/KpiStrip.tsx'
 import PriorityQueue from '../components/PriorityQueue.tsx'
 import QueryState from '../components/QueryState.tsx'
@@ -215,6 +216,7 @@ export function ControllerDashboard() {
                     onWhatIf={setWhatIfTaskId}
                   />
                   <OverrideHistory overrides={plan.overrides ?? []} />
+                  <WeatherRiskPanel weatherRisk={plan.knownGaps?.weatherRisk} />
                   <KnownLimitations
                     knownGaps={plan.knownGaps}
                     conflictReport={plan.conflictReport}

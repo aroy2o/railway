@@ -55,6 +55,7 @@ from datetime import date, timedelta
 from ortools.sat.python import cp_model
 
 from app.core.trains import cheapest_displacement
+from app.core.weather import detect_weather_risk
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,11 @@ class CorridorAvailability:
     #: The corridor's observed train-class counts (T3), for apportioning the
     #: class split of a displacement. See `app.core.trains`.
     train_class_mix: dict[str, int] | None = None
+    #: T26, PRD 9.9. `"monsoon-risk"` | `"none"` | `None` (state unknown -
+    #: never guessed). Real, from Ministry of Jal Shakti flood-risk state
+    #: data joined at seed time - see `app.core.weather` and D-068. Unused
+    #: by the CP-SAT model; advisory only, like `occupied_windows` above.
+    seasonal_risk_flag: str | None = None
 
 
 @dataclass(frozen=True)
@@ -896,7 +902,23 @@ def _build_result(
         ),
         "conflicts": train_impacts[:20],
     }
+    # T26, PRD 9.9: real, not a live constraint. Advisory only - see
+    # app.core.weather's module docstring and D-068 for why this stops at
+    # reporting rather than an objective term, the same call T22 made for
+    # train-delay impact.
+    weather_risk = detect_weather_risk(result.blocks, corridors)
+    result.known_gaps["weatherRisk"] = {
+        "count": len(weather_risk),
+        "note": (
+            "Scheduled blocks on a corridor real Ministry of Jal Shakti flood-risk data "
+            "flags as monsoon-risk (T26), falling inside India's real IMD monsoon window "
+            "(~June 1 - ~October 15). Advisory only - the solver does not avoid or move "
+            "these blocks; a Controller decides whether to act on the flag."
+        ),
+        "blocks": weather_risk[:20],
+    }
     annotate_conflicts(result.decision_log, result.known_gaps)
+    annotate_weather_risk(result.decision_log, weather_risk)
 
     # FR3.3 as an invariant, not an aspiration: no task may vanish.
     accounted = result.scheduled_task_ids | {d.task_id for d in result.deferred}
@@ -1101,6 +1123,27 @@ def annotate_conflicts(decision_log: list[dict], known_gaps: dict) -> None:
 
     for entry in decision_log:
         entry["conflictTypes"] = sorted(by_task.get(entry["taskId"], ()))
+
+
+def annotate_weather_risk(decision_log: list[dict], weather_risk: list[dict]) -> None:
+    """Cross-reference each task to whether it sits in a real weather-risk
+    block (T26). Same pattern as `annotate_conflicts`, and for the same
+    reason: computed once here so the decision log and the report can never
+    drift apart. `None` (not a missing key) for a task with nothing to
+    report, matching T16's "no data" convention.
+    """
+    by_task: dict[str, dict] = {}
+    for record in weather_risk:
+        for task_id in record["taskIds"]:
+            by_task[task_id] = record
+
+    for entry in decision_log:
+        record = by_task.get(entry["taskId"])
+        entry["weatherRisk"] = (
+            {"seasonalRiskFlag": record["seasonalRiskFlag"], "inMonsoonWindow": True}
+            if record
+            else None
+        )
 
 
 def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:

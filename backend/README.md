@@ -384,6 +384,23 @@ single solve 8-9s to prove optimal, and four of those risked the request's
 own `WHATIF_TIMEOUT_MS` (45s). A solve cut short reports its real CP-SAT
 `status` (`FEASIBLE`, not falsely `OPTIMAL`) rather than hiding the trade-off.
 
+## Seasonal / monsoon risk (PRD 9.9, T26)
+
+`Corridor.seasonalRiskFlag` is real, not a placeholder: `"monsoon-risk"`,
+`"none"` (checked, not flagged) or `null` (no station-state data at all - the
+minority of the real corpus this feature can honestly say nothing about).
+Denormalised onto `Corridor` at seed time from `corridor_seasonal_risk.json`
+(T26's own ingestion stage), the same D-016 pattern T3's `occupancySummary`
+already established - never joined at request time, and never baked into
+T2's own `corridors.json` (D-009).
+
+`gatherScenario` threads the field straight into the optimizer payload with
+no extra query, since it already lives on `Corridor` itself. The optimizer
+reports back `knownGaps.weatherRisk` - real blocks, on the real corpus, that
+sit on a flagged corridor inside India's real monsoon window - purely
+advisory. It is never wired into scheduling: `metrics.tasksScheduled` is
+byte-identical with the flag present or absent. See docs/DECISIONS.md D-068.
+
 ## Conventions
 
 - **One router file per resource**, mounted in `routes/index.js`.

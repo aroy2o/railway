@@ -80,6 +80,8 @@ def _to_corridors(payload: list[CorridorIn]) -> dict[str, CorridorAvailability]:
                 for window in sorted(corridor.occupied_windows, key=lambda w: w.start_minute)
             ),
             train_class_mix=corridor.train_class_mix,
+            # T26: advisory only, carried straight through - see app.core.weather.
+            seasonal_risk_flag=corridor.seasonal_risk_flag,
         )
         for corridor in payload
     }

@@ -164,6 +164,9 @@ export interface OptimizerCorridor {
   /** T22 costing input. Optional so an older caller still validates. */
   occupiedWindows?: OptimizerOccupiedWindow[];
   trainClassMix?: Record<string, number> | null;
+  /** T26, PRD 9.9. Real, from Ministry of Jal Shakti flood-risk state data.
+   * Advisory only - never a scheduling constraint. */
+  seasonalRiskFlag?: 'monsoon-risk' | 'none' | 'flood-prone' | null;
 }
 
 export interface OptimizerTask {

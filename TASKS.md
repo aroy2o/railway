@@ -446,7 +446,56 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
     was caught and fixed via live browser verification, which is how it was
     found in the first place). Verified live end to end against a freshly
     regenerated schedule.
-- [ ] `todo` — **T26**: Weather/monsoon risk flagging (9.9)
+- [x] `done` — **T26**: Weather/monsoon risk flagging (9.9)
+  - **Audited before writing anything.** PRD 5.1 names two REAL sources for
+    this field (IMD rainfall, publicly known flood-prone rail sections) -
+    not synthetic. Real, section-specific flood data exists (Konkan
+    Railway's own named vulnerable locations) but touches ZERO of this
+    project's 26 real corridors. Real state-level flood-risk data
+    (Ministry of Jal Shakti) exists and IS usable, but only 8 of 26
+    corridors have any station `state` metadata at all - a real gap in the
+    underlying `datameet/railways` data, not something this task could fill.
+  - **Built narrow and honest rather than not built or faked wider.** Three-
+    way real classification: `"monsoon-risk"` (2 of 26 corridors - DGU-PNB/
+    Assam, HGJ-SUNM/Uttar Pradesh, both named on the Jal Shakti list),
+    `"none"` (6 of 26, known state, genuinely not flagged), `null` (18 of
+    26, no state data - never guessed safe, T16's honesty pattern exactly).
+    `"flood-prone"` (PRD's third enum value) is never emitted - no
+    section-specific data exists for this corpus, and a test pins that.
+  - **Architecture follows D-009 exactly, for the same reason.** A separate
+    ingestion stage (`build_seasonal_risk.py`) producing a separate file,
+    joined onto `Corridor.seasonalRiskFlag` at seed time like T3's
+    `occupancySummary` (D-016) - never a rewrite of T2's own corridors.json.
+  - **Reporting only - the same call T22 made for train-impact.** PRD 9.9's
+    own wording is ambiguous between a soft objective term and a hard rule;
+    given the real signal covers only 2 of 26 corridors, wiring it into the
+    objective would let a thin, coarse flag silently steer the solver.
+    `app/core/weather.py` only ever reports after the solve. A mutation-
+    style test proves it: the identical scenario, solved with and without
+    the flag, produces the IDENTICAL plan either way.
+  - **Real corpus result: 7 live blocks, on the actual demo horizon.** All 7
+    tasks on the two flagged corridors are scheduled, and this project's own
+    reference date (2026-08-24) genuinely falls inside IMD's real Southwest
+    Monsoon window (~June 1 - ~October 15) - not a contrived date. Confirmed
+    live: 35/54 scheduled/deferred and 45.42% utilisation are UNCHANGED from
+    before this feature existed, proving "advisory only" by observation.
+  - **Baseline checked the same way T24/T25 checked it, softer finding.**
+    Reusing the same detector against the baseline's own output (no new
+    baseline code) finds it schedules essentially the same monsoon-risk work
+    - not a "violation" (weather isn't a rule), just something only the
+    optimizer can tell anyone about. Documented, not built into new UI, the
+    same restraint T24/T25 applied where there was no existing false claim
+    to correct.
+  - **UI:** a small dedicated `WeatherRiskPanel.tsx`, mirroring T16's
+    `RISK_FRAMING` pattern rather than T21's conflict-taxonomy machinery -
+    PRD 9.9 is a different section from PRD 9.5 and forcing them together
+    would blur a distinction this codebase otherwise keeps carefully
+    separate (D-045). Verified live: 7 real blocks with corridor/date/task
+    detail and the honest caveat, above Known Limitations on the sidebar.
+  - **Tests:** data layer 11 new (105 total), optimizer 9 new (308 total),
+    backend 1 new + real-corpus assertions extended (108 total), frontend
+    unchanged (71 total; verified live instead, matching CLAUDE.md's
+    frontend-coverage guidance for a component this small).
 - [ ] `todo` — **T27**: Emergency rolling re-optimization (9.10)
 - [ ] `todo` — **T28**: Monthly planning polish + DRM oversight view KPI hierarchy (Section 14)
 
@@ -482,6 +531,26 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 ## Session log
 
 _Append a dated one-line entry here each session — what was completed, what's next._
+
+- **2026-08-24** — T26 complete. Weather/monsoon risk flagging (PRD 9.9),
+  built only after auditing whether real data even applies to this corpus -
+  it does, but narrowly: real, section-specific flood data (Konkan Railway's
+  own named vulnerable locations) touches zero of the 26 real corridors this
+  project uses, while real Ministry of Jal Shakti state-level flood-risk
+  data usably flags exactly 2 of 26 (DGU-PNB/Assam, HGJ-SUNM/Uttar Pradesh) -
+  the rest genuinely lack station-state metadata, a real gap in the
+  underlying data, not something to paper over. Built honest and narrow
+  rather than skipped or faked wider: three-way real classification
+  (flagged / checked-clear / genuinely unknown), architecture following
+  D-009's separate-stage reasoning exactly, and reporting-only (never wired
+  into the CP-SAT objective) - the same call T22 made for train-impact,
+  proven this time by a mutation test showing the identical plan comes out
+  whether the flag is set or not. Real corpus result: 7 live blocks, and the
+  project's own reference date genuinely falls inside India's real monsoon
+  season, so this isn't a hypothetical that only fires on a contrived date.
+  105 data / 308 optimizer / 108 backend / 71 frontend tests, verified live
+  end to end. Next: **T27** (emergency rolling re-optimization) or **T28**
+  (monthly polish), the last two 🟡 stretch tasks.
 
 - **2026-08-24** — T25 complete. Resource no-overlap (PRD 9.8) is now a hard
   CP-SAT constraint, same discipline as T24: audited the real corpus first

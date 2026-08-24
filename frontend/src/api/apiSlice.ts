@@ -100,6 +100,10 @@ export interface Corridor {
   sources: string[]
   hasSyntheticDemand: boolean
   occupancySummary: OccupancySummary
+  /** T26, PRD 9.9. Real, from Ministry of Jal Shakti flood-risk state data,
+   * joined at seed time. `null` when neither station has a known state -
+   * never guessed as "not at risk". */
+  seasonalRiskFlag: 'monsoon-risk' | 'none' | 'flood-prone' | null
 }
 
 export interface CorridorDetail extends Corridor {
@@ -247,9 +251,20 @@ export interface ScheduleMetrics {
 /** PRD 9.5 typed taxonomy, derived by the optimizer (see lib/conflicts.ts). */
 export type { ConflictReport, TypedConflict } from '../lib/conflicts.ts'
 
+/** One scheduled block on a real monsoon-risk corridor, inside the real IMD
+ * monsoon window (T26, PRD 9.9). Advisory only - see KnownLimitations.tsx. */
+export interface WeatherRiskBlock {
+  corridorId: string
+  date: string
+  taskIds: string[]
+  departments: string[]
+  seasonalRiskFlag: string
+}
+
 export interface KnownGaps {
   resourceConflicts: { count: number; note: string; conflicts: unknown[] }
   dependencyViolations: { count: number; note: string; violations: unknown[] }
+  weatherRisk?: { count: number; note: string; blocks: WeatherRiskBlock[] }
 }
 
 /** One department pair holding the same corridor at the same time. */

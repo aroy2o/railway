@@ -2906,3 +2906,129 @@ verification instead, which found it in the first place). Verified live end
 to end: Known Limitations panel shows the empty-state line plus all three
 `checkedAndClear` types with correct reasons, and the comparison screen shows
 45.42% utilisation and the unchanged 35/36 figure, both freshly regenerated.
+
+---
+
+## D-068 — Seasonal risk is a real, narrow flag from real data - reporting only, and honest about how little of the corpus it can speak to
+
+**Date:** 2026-08-24 · **Task:** T26
+
+**The question, settled before any code was written.** PRD Section 5.1 names
+two real sources for `seasonalRiskFlag`: "IMD open rainfall data" and
+"publicly known flood-prone rail sections" - not synthetic data, unlike
+T4's demand generation. Two things had to be checked before deciding
+whether this feature could honestly be built at all: does real, citable data
+exist, and does it actually touch this project's real 26-corridor operative
+corpus?
+
+**Real section-specific flood data exists, and does not touch this corpus at
+all.** Konkan Railway publishes named, real, monsoon-vulnerable locations
+(Chiplun, Ratnagiri, Karwar, Udupi, Mangaon) with river-bridge flood-warning
+stations - genuinely real, citable, and precise. Checked directly: zero of
+this project's 26 real operative corridors sit on the Konkan Railway zone or
+near any of these named locations. Real data that cannot honestly be joined
+to this corpus is not usable data for it, however well-sourced.
+
+**Real state-level data exists, but the join key itself has a real gap.**
+The Ministry of Jal Shakti's national flood-affected-area estimate names
+five states explicitly - Assam, Bihar, Odisha, Uttar Pradesh, West Bengal -
+as "largely affected" (cited via the Assam State Disaster Management
+Authority's own page, quoting the Rashtriya Barh Ayog assessment, and a 2015
+Lok Sabha reply from the Ministry of Home Affairs summarising the same
+estimate). This is real, government-sourced, and directly usable - IF a
+corridor's real station data carries a `state` at all. It often does not:
+roughly half of all 8,990 real stations in the underlying `datameet/railways`
+data lack a `state` field, and only 8 of this project's 26 real operative
+corridors have it on both ends. This is a genuine gap in the source data
+T2 already ingested, not something this task's own code could fill in.
+
+**Decision: build it, narrow and honestly labelled, rather than not build
+it or fake it wider.** `data/ingestion/build_seasonal_risk.py` classifies
+each corridor into exactly the three cases D-024/T16's honesty pattern
+would predict:
+- **`"monsoon-risk"`** - at least one station's real state is on the Jal
+  Shakti list. Real on this corpus for exactly 2 of 26 corridors: DGU-PNB
+  (Assam) and HGJ-SUNM (Uttar Pradesh).
+- **`"none"`** - state is known, and genuinely not on the list (6 of 26:
+  Madhya Pradesh, Maharashtra ×2, Rajasthan, Andhra Pradesh, Jharkhand).
+  Checked, not merely absent - the same "checked and found none" distinction
+  T22/T24/T25 already draw for conflict types.
+- **`null`** - no state metadata at all (18 of 26). Never guessed as safe,
+  mirroring T16's `failureRiskScore: null` pattern exactly: absence of
+  information is never scored as a favourable finding.
+
+PRD Section 15's third enum value, `"flood-prone"`, is **never emitted** by
+this build - it would need genuine section-specific data (like the Konkan
+example), which this corpus's real corridors do not have. A test pins this
+so a future edit cannot accidentally start claiming a precision this project
+does not have evidence for.
+
+**Architecture follows D-009's reasoning exactly, for the same reason.**
+`seasonalRiskFlag` needs data T2's own sources (`datameet/railways`) do not
+carry - the same situation D-009 identified for T3's occupancy data. So this
+is a separate stage (`build_seasonal_risk.py`), producing a separate file
+(`corridor_seasonal_risk.json`), joined onto `Corridor.seasonalRiskFlag` at
+seed time exactly like T3's `occupancySummary` (D-016) - never a rewrite of
+T2's own corridors.json, which would couple the stages and put T2's
+rebuild-determinism test at risk for no reason.
+
+**Reporting only, and the ξ objective term (PRD 13.1) is deliberately
+untouched - the same question T22 asked of λ, answered the same way.** PRD
+9.9's own prose offers two readings ("avoids long blocks... OR prioritizes
+pre-monsoon inspection") and the formal constraint list uses
+"penalize/restrict" - genuinely ambiguous between a soft objective term and
+a hard rule. Given the real data supporting this feature covers only 2 of 26
+corridors, wiring EITHER into the objective would let a coarse, two-corridor
+signal start silently steering the solver's choices - exactly what T22
+declined to do with a much richer λ signal, for the same reason: an estimate
+this thin belongs in a report, not inside a function the solver optimises
+against. `app/core/weather.py` only ever reports - `detect_weather_risk`
+runs after the solve, on `result.blocks`, and cannot change them. A
+mutation-style test proves this directly: the exact same scenario, solved
+once with the flag set and once without, produces an **identical plan**
+either way - only the report differs.
+
+**Real corpus result: 7 real blocks, and the reference horizon itself sits
+inside the real monsoon window.** All 7 tasks on the two flagged corridors
+get scheduled (unrelated to this feature - a coincidence of what T25's
+resource-conflict fix already settled), and this project's own reference
+date, 2026-08-24, falls inside IMD's real Southwest Monsoon season (~June 1
+- ~October 15) - so the finding is live on the actual demo horizon, not a
+hypothetical that only fires on a contrived date. Confirmed live: `35/54`
+scheduled/deferred and `45.42%` utilisation are exactly what they were
+before this feature existed - proving "advisory only" by observation, not
+just by design.
+
+**The baseline was checked the same way T24/T25 checked it, with a softer
+finding.** Reusing `detect_weather_risk` against the baseline's own
+placements (no baseline-specific code needed - same technique as D-067)
+finds the baseline schedules essentially the same monsoon-risk work as the
+optimizer (6 blocks / 7 tasks). This is NOT a "violation" the way T24/T25's
+findings were - weather risk is advisory, not a rule, so there is nothing
+for the baseline to have broken. The honest framing is narrower: the
+baseline has no mechanism to know or report this at all, while the
+optimizer does. Documented here per this task's scope; no new baseline
+production code was built for it, the same restraint T24/T25 applied to
+findings that did not correct an existing false claim.
+
+**UI: a small, dedicated panel, not folded into `KnownLimitations`.**
+`WeatherRiskPanel.tsx` mirrors T16's `RISK_FRAMING` pattern - a real count,
+real examples, and an honest caveat stated plainly - rather than T21's
+conflict-taxonomy machinery, because PRD 9.9 is a different section from
+PRD 9.5 and forcing this into the same component would blur a distinction
+this codebase otherwise keeps carefully separate (D-045). Confirmed live: 7
+real blocks render with real corridor/date/task detail and the caveat text,
+directly above Known Limitations on the dashboard sidebar.
+
+**Tests.** Data layer 11 new (`classify()`'s three-way honesty split,
+`"flood-prone"` never emitted, the two real flagged corridors and three real
+checked-and-clear ones pinned by name, rebuild determinism). Optimizer 9 new
+(`is_monsoon_window`'s real calendar boundaries including that the reference
+horizon sits inside it, the detector's shape, a mutation-style proof the
+flag never changes the plan, decision-log threading). Backend 1 new
+(`gatherScenario` threads the field with no extra join, since it is
+denormalised at seed time) plus the real-corpus assertion extended (7 real
+blocks, both flagged corridors named). Frontend: no new test file, consistent
+with CLAUDE.md's frontend-coverage guidance and this session's established
+practice of live-browser verification for a component this small. Verified
+live end to end against a freshly regenerated schedule.

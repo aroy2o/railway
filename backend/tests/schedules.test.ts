@@ -45,6 +45,9 @@ async function insertFixture() {
       stationA: { code: 'A', name: 'ALPHA' }, stationB: { code: 'B', name: 'BRAVO' },
       hasSyntheticDemand: true,
       occupancySummary: { trainsObserved: 40, utilisationPct: 30, blockWindowCount: 1 },
+      // T26: deliberately set so the gathering test below exercises real
+      // threading, not just a null default passing through unnoticed.
+      seasonalRiskFlag: 'monsoon-risk',
     },
     {
       _id: 'C-D', name: 'CHARLIE – DELTA', section: 'C-D',
@@ -150,6 +153,18 @@ test('gathering translates the stored window shape into the contract shape', asy
   assert.deepEqual(Object.keys(window).sort(), ['endMinute', 'startMinute']);
   assert.equal(window.startMinute, 60);
   assert.equal(window.endMinute, 240);
+});
+
+test('gathering threads seasonalRiskFlag straight through (T26)', async (t) => {
+  if (!needs(t)) return;
+
+  const { payload } = await gatherScenario({ horizonStart: HORIZON, horizonDays: 7 });
+  const corridor = payload.corridors.find((c) => c.corridorId === 'A-B');
+
+  // Denormalised onto Corridor at seed time (D-016), so no join is needed
+  // here - unlike occupiedWindows/trainClassMix, which come from the
+  // separate corridor_calendar collection.
+  assert.equal(corridor?.seasonalRiskFlag, 'monsoon-risk');
 });
 
 test('gathering emits taskId, not _id, and joins real asset criticality', async (t) => {
@@ -796,6 +811,20 @@ test('the real 89-task corpus reproduces CHECKPOINT.md numbers through this path
       CORRIDOR_DOUBLE_BOOKING: 6,
       WINDOW_OVER_SUBSCRIPTION: 3,
     });
+
+    // T26, PRD 9.9: real, from Ministry of Jal Shakti flood-risk state data.
+    // 7 real tasks sit on the two corridors (DGU-PNB/Assam, HGJ-SUNM/Uttar
+    // Pradesh) the real corpus flags monsoon-risk, and the reference
+    // horizon genuinely falls inside India's real monsoon window - so this
+    // is a live, non-zero finding, not a null case that would pass by
+    // accident. Advisory only: the scheduled set (35/54) above is exactly
+    // what it was before this field existed.
+    assert.equal(schedule.knownGaps.weatherRisk.count, 7);
+    assert.ok(
+      schedule.knownGaps.weatherRisk.blocks.every((b: { corridorId: string }) =>
+        ['DGU-PNB', 'HGJ-SUNM'].includes(b.corridorId),
+      ),
+    );
 
     // Priority scores landed on every task, in T7's measured range.
     const scored = await Task.find({ priorityScore: { $ne: null } }).lean();

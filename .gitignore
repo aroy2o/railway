@@ -40,6 +40,7 @@ data/processed/*
 !data/processed/INGESTION_REPORT.json
 !data/processed/TIMETABLE_REPORT.json
 !data/processed/SYNTHETIC_REPORT.json
+!data/processed/SEASONAL_RISK_REPORT.json
 
 # --- Editors / OS -----------------------------------------------------------
 .DS_Store

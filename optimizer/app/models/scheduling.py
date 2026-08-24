@@ -20,6 +20,7 @@ so a snake_case client also works.
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -80,6 +81,10 @@ class CorridorIn(ApiModel):
     #: T3's observed train-class counts, for apportioning a displacement's
     #: class split. See `app.core.trains`.
     train_class_mix: dict[str, int] | None = None
+    #: T26, PRD 9.9. Real, from Ministry of Jal Shakti flood-risk state data
+    #: (see app.core.weather). `None` when the corridor's stations have no
+    #: known state - never guessed as "not at risk".
+    seasonal_risk_flag: Literal["monsoon-risk", "none", "flood-prone"] | None = None
 
     @field_validator("daily_windows")
     @classmethod

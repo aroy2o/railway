@@ -877,3 +877,71 @@ safety property mutation-tested against the real corpus: one test asserts
 coverage survives the worst-case-within-range combination, a second asserts
 the SAME combination pushed outside the range genuinely collapses it — proving
 the boundary is real rather than a property that would hold regardless.
+
+---
+
+## Seasonal / monsoon risk (`app/core/weather.py`) — PRD 9.9, T26
+
+`seasonal_risk_flag` on `CorridorAvailability` (`"monsoon-risk" | "none" |
+None`) is real, from `data/ingestion/build_seasonal_risk.py`, joined onto
+`Corridor` at seed time (D-016) — never computed here. This module only
+checks whether a SCHEDULED block on a flagged corridor falls inside India's
+real IMD Southwest Monsoon window (~June 1 – ~October 15), and reports it.
+
+### What was checked before anything was built
+
+PRD Section 5.1 names two real sources for this field — IMD rainfall data
+and publicly known flood-prone rail sections — not synthetic data. Real
+section-specific flood data exists (Konkan Railway's own named vulnerable
+locations) but touches **zero** of this project's 26 real corridors. Real
+state-level data exists (Ministry of Jal Shakti's flood-affected-states
+estimate) and IS usable, but only 8 of 26 corridors have station `state`
+metadata at all — a real gap in the underlying `datameet/railways` data.
+Built narrow and honest rather than skipped or faked wider: **2 of 26
+corridors flagged** `monsoon-risk` (DGU-PNB/Assam, HGJ-SUNM/Uttar Pradesh),
+6 checked-and-clear (`"none"`), 18 genuinely unknown (`null`, never guessed
+safe). See docs/DECISIONS.md D-068.
+
+### Reporting only — the same call T22 made for train-impact
+
+PRD 9.9's own wording is ambiguous between a soft objective term (`ξ`, PRD
+13.1) and a hard rule. Given the real signal covers only 2 of 26 corridors,
+wiring either into the objective would let a thin, coarse flag silently
+steer the solver — the same reasoning T22 used to keep λ (train-delay
+impact) out of the objective. `detect_weather_risk` runs strictly after the
+solve, on `result.blocks`; it cannot change them. Proven, not just designed:
+a mutation-style test solves the identical scenario with and without the
+flag set, and the plan — every block, every placement — comes out identical
+either way.
+
+### On the real corpus
+
+All 7 tasks on the two flagged corridors get scheduled, and the horizon this
+project actually demos with (2026-08-24) genuinely falls inside the real
+monsoon window — so the finding is live, not hypothetical:
+
+```
+knownGaps.weatherRisk = {
+  count: 7,
+  blocks: [{ corridorId: "DGU-PNB", date: "2026-08-24", taskIds: ["TSK-00033"], ... }, ...]
+}
+```
+
+`tasksScheduled`/`tasksDeferred`/`blockUtilisationPct` are byte-identical to
+what they were before this feature existed — 35/54/45.42% — confirming
+"advisory only" by observation, not just by design.
+
+### The baseline
+
+Reusing `detect_weather_risk` against the baseline's own placements (no
+baseline-specific code needed) finds it schedules essentially the same
+monsoon-risk work (6 blocks / 7 tasks) — not a "violation" the way T24/T25's
+baseline findings were, since weather risk is advisory, not a rule. The
+honest framing is narrower: the baseline has no mechanism to know or report
+this at all; only the optimizer does.
+
+### Tests
+
+`tests/test_weather.py` — the real IMD calendar boundaries (including that
+the reference horizon sits inside them), the detector's shape, decision-log
+threading, and the mutation-style proof the flag never changes the plan.

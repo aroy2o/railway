@@ -21,7 +21,9 @@ folders makes that line auditable: anything under `generators/` is synthetic,
 anything under `ingestion/` came from a published dataset.
 
 **Real** (do not invent): station codes, zones, corridor sections, train
-timetable windows, train type/priority.
+timetable windows, train type/priority, seasonal/flood-risk classification
+(T26 - state-level, joined against real government data, and honestly `null`
+where the source data has no state to join against).
 **Synthetic** (does not exist publicly): maintenance tasks, defects, asset
 criticality attributes, degradation history, resources, task dependencies.
 
@@ -40,13 +42,14 @@ cd data
 .venv/bin/python -m ingestion.download            # T2: ~98 MB, skips files already present
 .venv/bin/python -m ingestion.build_corridors     # T2: corridors.json           (~2 s)
 .venv/bin/python -m ingestion.build_timetable     # T3: calendar + trains.json   (~5 s)
+.venv/bin/python -m ingestion.build_seasonal_risk # T26: corridor_seasonal_risk.json (<1 s)
 .venv/bin/python -m generators.build_synthetic    # T4: assets/tasks/resources   (~5 s)
-.venv/bin/python -m pytest                        # 94 tests
+.venv/bin/python -m pytest                        # 105 tests
 ```
 
-Stages are ordered but independent: `build_timetable` reads `corridors.json`
-and never writes to it, so either stage can be re-run on its own without
-disturbing the other (`docs/DECISIONS.md` D-009).
+Stages are ordered but independent: `build_timetable` and `build_seasonal_risk`
+both read `corridors.json` and never write to it, so any of the three can be
+re-run on its own without disturbing the others (`docs/DECISIONS.md` D-009).
 
 `download` writes `raw/MANIFEST.json` with each file's URL, byte size, SHA-256
 and fetch time. Both build steps read only from `raw/` and are **deterministic**
@@ -61,10 +64,11 @@ timestamp is written into them. Re-running is always safe.
 | `corridors.json` | T2 | 10,149 corridor sections + structural facts |
 | `corridor_calendar.json` | T3 | Per-section occupied and free windows |
 | `trains.json` | T3 | 5,208 trains: real class code and accommodation flags |
+| `corridor_seasonal_risk.json` | T26 | Per-section monsoon-risk flag, real Ministry of Jal Shakti state data |
 | `assets.json` | T4 | **Synthetic** assets + FR2.1 criticality scores |
 | `tasks.json` | T4 | **Synthetic** pending maintenance backlog |
 | `resources.json` | T4 | **Synthetic** depot-scoped crews, machines, permissions |
-| `*_REPORT.json` | T2–T4 | Coverage, validation and distribution stats (committed) |
+| `*_REPORT.json` | T2–T4, T26 | Coverage, validation and distribution stats (committed) |
 
 ### Repository footprint
 
@@ -174,7 +178,7 @@ Per-direction traversal counts are kept separately as real observations.
 | `derivedFlags.longHop` | Derived quality signal — see below |
 | `sources` | Which downloaded file(s) the section was observed in |
 | `maxDailyBlockWindows` | **Empty — populated by T3** from real timetable occupancy gaps |
-| `seasonalRiskFlag` | **`null` — populated by T26** from IMD / flood-prone section data |
+| `seasonalRiskFlag` | **`null` in corridors.json itself** (D-009: T2's sources cannot supply it). Real, from `corridor_seasonal_risk.json` (T26), joined at seed time (D-016) - `"monsoon-risk"` where a station's real state is on the Ministry of Jal Shakti flood-affected list, `"none"` where the state is known and not flagged, `null` where no state is known at all. Only 2 of this project's 26 real operative corridors are flagged; see `docs/DECISIONS.md` D-068 for why that is real, not a shortfall. |
 
 #### Extension beyond the PRD schema
 

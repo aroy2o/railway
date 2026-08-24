@@ -309,6 +309,20 @@ the model repeated it**. The prompt does ask for it; a prompt is not a guarantee
 (D-050), and a risk figure shown without its "trained on simulated data" caveat
 is precisely the claim PRD Section 6 NG4 forbids.
 
+## Seasonal risk (PRD 9.9, T26)
+
+`WeatherRiskPanel` mirrors this exact pattern rather than T21's conflict-
+taxonomy machinery, deliberately - PRD 9.9 is a different section from PRD
+9.5 and the two claims (a real government flood-risk flag vs. a solver
+constraint gap) should not blur together (D-045's separation, applied one
+level up). Real count, real corridor/date/task examples, and a caveat
+stated plainly: state-level, not section-specific, and only where a
+corridor's real station data carries a state at all - **2 of the corpus's 26
+real corridors are flagged**, not a shortfall, a measured fact (D-068).
+Renders only when `knownGaps.weatherRisk` exists, above Known Limitations on
+the dashboard sidebar. No dedicated test file, same as `KnownLimitations`
+originally shipped without one - verified live instead.
+
 ## Ask the Planner (PRD 9.2, T18)
 
 `lib/askPlanner.ts` + `components/AskThePlanner.tsx`, on the Controller Dashboard

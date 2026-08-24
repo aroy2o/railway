@@ -104,6 +104,13 @@ export async function gatherScenario({
         endMinute: window.endMin,
       })),
       trainClassMix: calendar?.trainClassMix ?? null,
+      // T26: denormalised onto Corridor at seed time (D-016), so no extra
+      // join is needed here - unlike occupiedWindows/trainClassMix above.
+      seasonalRiskFlag: corridor.seasonalRiskFlag as
+        | 'monsoon-risk'
+        | 'none'
+        | 'flood-prone'
+        | null,
     };
   });
 

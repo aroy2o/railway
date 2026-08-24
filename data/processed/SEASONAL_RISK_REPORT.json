@@ -1,0 +1,18 @@
+{
+  "task": "T26 - corridor seasonal-risk classification (PRD 9.9)",
+  "method": "A corridor is 'monsoon-risk' when at least one station's real state is named among India's most flood-affected by the Ministry of Jal Shakti; 'none' when the state is known and not on that list; null ('unknown') when neither station has state metadata at all. 'flood-prone' is never emitted - this project has no section-specific data that would earn it.",
+  "highFloodRiskStates": [
+    "Assam",
+    "Bihar",
+    "Odisha",
+    "Uttar Pradesh",
+    "West Bengal"
+  ],
+  "monsoonWindow": "IMD normal Southwest Monsoon dates: onset ~June 1, complete withdrawal by ~October 15.",
+  "counts": {
+    "monsoon-risk": 1727,
+    "none": 3814,
+    "unknown": 4608,
+    "total": 10149
+  }
+}
