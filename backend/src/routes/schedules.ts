@@ -23,6 +23,7 @@ import {
 } from '../services/scheduleOrchestrator.js';
 import { explainSchedule } from '../services/explainService.js';
 import { runWhatIf } from '../services/whatIfService.js';
+import { runEmergencyReoptimization } from '../services/emergencyService.js';
 import {
   findPublishedSchedule,
   getAuditTrail,
@@ -312,6 +313,49 @@ router.post(
       const { id } = validated<IdParam>(req.params);
       const { taskId } = validated<WhatIfBody>(req.body);
       res.json({ data: await runWhatIf({ scheduleId: id, taskId }) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+const emergencySchema = z.object({
+  corridorId: z.string().min(1).max(64),
+  // At least one: an emergency re-solve with nothing disrupted is not a real
+  // request - matches the optimizer's own `min_length=1` on the same field.
+  disruptedWindows: z
+    .array(
+      z.object({
+        date: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be an ISO date (YYYY-MM-DD)'),
+        windowIndex: z.coerce.number().int().min(0).max(200),
+      }),
+    )
+    .min(1),
+  // FR6.2's mandatory-reason discipline, applied here too: this commits.
+  reason: z.string().min(8, 'A reason of at least 8 characters is required').max(500),
+});
+type EmergencyBody = z.infer<typeof emergencySchema>;
+
+/**
+ * POST /api/schedules/:id/emergency - FR3.5, PRD 9.10.
+ *
+ * "Simulate an emergency block request": re-solves ONE corridor's remaining
+ * time around a disruption that has consumed one or more of its windows,
+ * holding every other corridor and everything already executed on this one
+ * exactly fixed. Unlike /whatif, this COMMITS - the response is a newly
+ * PERSISTED schedule (D-034), not a disposable hypothetical (D-064).
+ */
+router.post(
+  '/:id/emergency',
+  validate({ params: idParamSchema, body: emergencySchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = validated<IdParam>(req.params);
+      const body = validated<EmergencyBody>(req.body);
+      const schedule = await runEmergencyReoptimization({ scheduleId: id, ...body });
+      res.status(201).json({ data: schedule });
     } catch (err) {
       next(err);
     }

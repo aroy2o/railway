@@ -47,8 +47,10 @@ from app.core.scheduler import (
     solve_schedule,
 )
 from app.core.whatif import generate_whatif
+from app.core.emergency import CurrentPlacement, DisruptedWindow, generate_emergency_reoptimization
 from app.models.scheduling import (
     CorridorIn,
+    EmergencyReoptimizeRequest,
     PrioritizeRequest,
     ScenarioIn,
     SolveRequest,
@@ -332,6 +334,75 @@ def whatif(request: WhatIfRequest, settings: Settings = Depends(get_settings)) -
         request.task_id, len(result.options), result.recommended_index,
     )
     return result.as_dict()
+
+
+@router.post("/emergency-reoptimize")
+def emergency_reoptimize(
+    request: EmergencyReoptimizeRequest, settings: Settings = Depends(get_settings)
+) -> dict:
+    """FR3.5 (PRD 9.10) - "simulate an emergency block request".
+
+    Re-solves ONE corridor's remaining time around a disruption that has
+    consumed one or more of its windows, holding every other corridor and
+    everything already executed on this one to `currentPlacements` exactly -
+    see `app.core.emergency` for why that reading of "emergency" was chosen
+    over "a new task needs a window right now" (ruled out on the real corpus
+    before this endpoint was written; see docs/DECISIONS.md D-069).
+
+    Unlike /whatif, this is meant to be committed: the caller is expected to
+    persist the response as a new schedule, so `currentPlacements` must be the
+    REAL effective plan (overrides included), not a freshly re-solved
+    baseline that could silently discard a manual move.
+    """
+    _guard_size(request, settings)
+    if request.horizon_days > settings.max_horizon_days:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"horizonDays {request.horizon_days} exceeds {settings.max_horizon_days}",
+        )
+
+    budget = min(request.max_seconds or settings.solver_max_seconds, settings.solver_max_seconds)
+    weights = _resolve_weights(request.policy_weights)
+
+    try:
+        outcome = generate_emergency_reoptimization(
+            _to_tasks(request.tasks, request.horizon_start),
+            _to_corridors(request.corridors),
+            horizon_start=request.horizon_start,
+            horizon_days=request.horizon_days,
+            corridor_id=request.corridor_id,
+            current_placements=[
+                CurrentPlacement(p.task_id, p.corridor_id, p.date, p.window_index)
+                for p in request.current_placements
+            ],
+            disrupted_windows=[
+                DisruptedWindow(w.date, w.window_index) for w in request.disrupted_windows
+            ],
+            reason=request.reason,
+            weights=weights,
+            max_seconds=budget,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    logger.info(
+        "emergency-reoptimize: corridor=%s, %d disrupted window(s), %s in %.3fs",
+        request.corridor_id, len(request.disrupted_windows),
+        outcome.result.status, outcome.result.solve_seconds,
+    )
+    payload = outcome.as_dict()
+    payload["conflictReport"] = summarise(
+        from_known_gaps(payload["knownGaps"])
+        + from_train_impact(payload["knownGaps"]["trainImpactConflicts"]["conflicts"])
+    )
+    payload["policyWeights"] = {
+        "coverage": weights.coverage,
+        "slaCompliance": weights.sla_compliance,
+        "batching": weights.batching,
+        "unusedMinute": weights.unused_minute,
+        "fragmentation": weights.fragmentation,
+    }
+    return payload
 
 
 @router.post("/baseline")

@@ -184,6 +184,17 @@ export interface Task {
 /* Schedules (T10 orchestration)                                               */
 /* -------------------------------------------------------------------------- */
 
+/** T27 (PRD FR3.5, 9.10) - present only on a schedule an emergency produced. */
+export interface EmergencyContext {
+  sourceScheduleId: string
+  corridorId: string
+  disruptedWindows: Array<{ date: string; windowIndex: number }>
+  asOf: string
+  reason: string
+  pinnedTaskCount: number
+  blockedWindowCount: number
+}
+
 export interface ScheduleBlock {
   corridorId: string
   date: string
@@ -405,6 +416,8 @@ export interface Schedule {
    * at. Render this where it exists.
    */
   effectivePlan?: EffectivePlan
+  /** T27. `null`/absent for every ordinarily-generated plan. */
+  emergencyContext?: EmergencyContext | null
 }
 
 export interface Resource {
@@ -671,6 +684,30 @@ export const api = createApi({
       invalidatesTags: ['Schedule', 'Approval', 'Override'],
     }),
 
+    /**
+     * T27 (PRD FR3.5, 9.10) - "simulate an emergency block request". Unlike
+     * runWhatIf, this COMMITS: it re-solves one corridor's remaining time
+     * around a disruption and persists the result as a NEW schedule (D-034).
+     * Tagged for invalidation exactly like generateSchedule, because it is
+     * one - the newly-created plan can become the next `latest`.
+     */
+    runEmergencyReoptimize: builder.mutation<
+      { data: Schedule },
+      {
+        scheduleId: string
+        corridorId: string
+        disruptedWindows: Array<{ date: string; windowIndex: number }>
+        reason: string
+      }
+    >({
+      query: ({ scheduleId, ...body }) => ({
+        url: `/schedules/${encodeURIComponent(scheduleId)}/emergency`,
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: ['Schedule', 'Task'],
+    }),
+
     generateSchedule: builder.mutation<
       { data: Schedule },
       {
@@ -703,6 +740,7 @@ export const {
   useGetAuditTrailQuery,
   useRunWorkflowActionMutation,
   useRunWhatIfMutation,
+  useRunEmergencyReoptimizeMutation,
 } = api
 
 /**

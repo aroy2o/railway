@@ -46,6 +46,7 @@ export type {
   ScheduleDeferredTask,
   GenerationError,
   PolicyWeights,
+  EmergencyContext,
 } from './Schedule.js';
 
 export { ScheduleApproval } from './ScheduleApproval.js';

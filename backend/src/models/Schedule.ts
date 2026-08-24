@@ -63,6 +63,22 @@ export interface GenerationError {
   code: string;
 }
 
+/**
+ * T27 (PRD FR3.5, 9.10) - present only on a schedule produced by an emergency
+ * re-solve. `sourceScheduleId` is the plan this one amends; the rest is the
+ * optimizer's own `emergencyContext`, stored verbatim for the same reason
+ * `decisionLog`/`knownGaps` are (D-033).
+ */
+export interface EmergencyContext {
+  sourceScheduleId: string;
+  corridorId: string;
+  disruptedWindows: Array<{ date: string; windowIndex: number }>;
+  asOf: string;
+  reason: string;
+  pinnedTaskCount: number;
+  blockedWindowCount: number;
+}
+
 export interface ISchedule {
   /** Readable, sortable, generated: SCH-<compact ISO timestamp>. See D-017. */
   _id: string;
@@ -135,6 +151,9 @@ export interface ISchedule {
    * as a document pathname and warns that it may break validation.
    */
   generationErrors: GenerationError[];
+
+  /** T27. `null` for every ordinarily-generated plan. */
+  emergencyContext: EmergencyContext | null;
 }
 
 export type ScheduleDocument = HydratedDocument<ISchedule>;
@@ -171,6 +190,28 @@ const generationErrorSchema = new Schema<GenerationError>(
     call: { type: String, required: true },
     message: { type: String, required: true },
     code: { type: String, required: true },
+  },
+  { _id: false },
+);
+
+/** T27. Declared for the same D-033 reason `generationErrorSchema` is. */
+const emergencyContextSchema = new Schema<EmergencyContext>(
+  {
+    sourceScheduleId: { type: String, required: true },
+    corridorId: { type: String, required: true },
+    disruptedWindows: {
+      type: [
+        new Schema(
+          { date: { type: String, required: true }, windowIndex: { type: Number, required: true } },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
+    asOf: { type: String, required: true },
+    reason: { type: String, required: true },
+    pinnedTaskCount: { type: Number, required: true },
+    blockedWindowCount: { type: Number, required: true },
   },
   { _id: false },
 );
@@ -230,6 +271,7 @@ const scheduleSchema = new Schema<ISchedule>(
       prioritySource: String,
     },
     generationErrors: { type: [generationErrorSchema], default: [] },
+    emergencyContext: { type: emergencyContextSchema, default: null },
   },
   {
     versionKey: false,

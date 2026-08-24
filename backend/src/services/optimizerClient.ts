@@ -321,6 +321,52 @@ export interface WhatIfResult {
   framing: string;
 }
 
+/**
+ * T27 (PRD FR3.5, 9.10) - one task's known current placement, as the caller
+ * (Node) actually holds it right now - the effective plan, T15's overrides
+ * included, never a freshly re-solved baseline that could silently discard a
+ * manual move. A task with no entry is currently deferred.
+ */
+export interface EmergencyCurrentPlacement {
+  taskId: string;
+  corridorId: string;
+  date: string;
+  windowIndex: number;
+}
+
+/** One window on the affected corridor an emergency has consumed. */
+export interface EmergencyDisruptedWindow {
+  date: string;
+  windowIndex: number;
+}
+
+/**
+ * T27 - "simulate an emergency block request" (PRD 9.10). Unlike
+ * `WhatIfScenario`, this is meant to be committed, not explored - see
+ * `emergencyService.ts`.
+ */
+export interface EmergencyReoptimizeScenario extends OptimizerScenario {
+  corridorId: string;
+  currentPlacements: EmergencyCurrentPlacement[];
+  disruptedWindows: EmergencyDisruptedWindow[];
+  reason: string;
+}
+
+export interface EmergencyContext {
+  corridorId: string;
+  disruptedWindows: EmergencyDisruptedWindow[];
+  asOf: string;
+  reason: string;
+  pinnedTaskCount: number;
+  blockedWindowCount: number;
+}
+
+/** The optimizer's own result shape - returned verbatim, never reshaped. */
+export interface EmergencyReoptimizeResult extends OptimizedSchedule {
+  emergencyContext: EmergencyContext;
+  framing: string;
+}
+
 /** FR3 - run the CP-SAT optimizer (PRD Section 13). */
 export async function requestOptimizedSchedule(
   payload: OptimizerScenario,
@@ -329,6 +375,22 @@ export async function requestOptimizedSchedule(
     method: 'POST',
     body: payload,
   })) as OptimizedSchedule;
+}
+
+/**
+ * T27 - re-solve one corridor's remaining time around a disruption, holding
+ * everything else (every other corridor, and everything already executed on
+ * this one) fixed. A single CP-SAT solve, same as /optimize, so it shares
+ * /optimize's timeout budget rather than needing a dedicated one the way
+ * /whatif's up-to-four-solves call does.
+ */
+export async function requestEmergencyReoptimize(
+  payload: EmergencyReoptimizeScenario,
+): Promise<EmergencyReoptimizeResult> {
+  return (await requestOptimizer('/emergency-reoptimize', {
+    method: 'POST',
+    body: payload,
+  })) as EmergencyReoptimizeResult;
 }
 
 /**

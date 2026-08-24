@@ -496,7 +496,79 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
     backend 1 new + real-corpus assertions extended (108 total), frontend
     unchanged (71 total; verified live instead, matching CLAUDE.md's
     frontend-coverage guidance for a component this small).
-- [ ] `todo` — **T27**: Emergency rolling re-optimization (9.10)
+- [x] `done` — **T27**: Emergency rolling re-optimization (9.10)
+  - **"Emergency" was audited before it was assumed.** PRD 9.10's own text
+    ("re-solve only the affected corridor/window, holding already-executed
+    blocks fixed") settles two things unambiguously: this re-solve is
+    scope-narrowed to one corridor, and it commits (unlike T20's
+    deliberately non-committing what-if sandbox). What "emergency" itself
+    means was NOT unambiguous, so the more T20-like reading - "an existing
+    deferred task gets forced in right now" - was tried FIRST, directly
+    against the real corpus, before any code existed. It failed to produce
+    anything new: D-024 held exactly as it holds under T20's exclusion and
+    T23's weight sliders (TSK-00073, needs 174 min, stays deferred no matter
+    how much of MQX-RMF's remaining capacity opens around it). The reading
+    actually built - an unplanned event CONSUMES part of the corridor's
+    remaining calendar - was checked the same way and produced a real,
+    positive finding: blocking MQX-RMF's real window 9 on 2026-08-27
+    (holding real TSK-00076) displaced it to 2026-08-28, cascading
+    TSK-00077 to 2026-08-29, every other corridor and deferred task
+    byte-identical. This reading also needs no new task-creation write path
+    at all - FR1.1 stays T10's, untouched. See D-069.
+  - **Mechanism reused, not reinvented.** `Pin` (T20) generalised from one
+    task to `pins: list[Pin]`, plus a genuinely new primitive,
+    `blocked_window_keys`, for "no task may use this window at all" -
+    different from a pin, which only ever constrains ONE task. Every task
+    off the affected corridor is pinned to its exact current placement (or
+    excluded, if deferred); every window on the affected corridor before the
+    earliest disrupted date is blocked outright, plus the disrupted
+    window(s) themselves. A pin exemption had to be added explicitly so an
+    already-executed task's own pin (which necessarily names a window inside
+    the blocked range) still works - found by the audit script, not guessed.
+  - **A second real bug the same audit found:** a task with genuinely ZERO
+    remaining candidate windows was reported via the pre-T27 NO_CAPACITY
+    message as having LOST a priority contest - it never got to enter one.
+    Fixed with a new, honest code, `WINDOW_UNAVAILABLE`, used exactly when
+    the candidate count is zero (D-025's "a rewarded indicator must be free
+    to be zero" rule, reached from a new angle).
+  - **A new commit path, but only because T15's override genuinely does not
+    fit** - checked explicitly rather than assumed. T15 replays a DELTA on
+    the existing plan without re-solving, so it cannot express "the
+    corridor's remaining tasks reshuffle around a capacity change." So
+    `POST /api/schedules/:id/emergency` persists a genuinely new `Schedule`
+    document (additive to D-034, not an exception), carrying a new
+    `emergencyContext` field. `currentPlacements` comes from the EFFECTIVE
+    plan (T15 overrides included), never a fresh re-solve - deliberately
+    different from T20's own choice (D-064), because a fresh re-solve here
+    would silently discard a manual move the moment an emergency hit
+    (D-044's rule, reached in a new layer). No new workflow gate either:
+    T19's `assertOverridable` already points to "generate a new plan" as the
+    correct response to a frozen plan, which is exactly what this is.
+  - **A cross-task finding, not a new one:** the same under-determined-day
+    volatility T20/T23 already documented (D-028/D-061) reproduces here too,
+    now in a COMMITTING context - one disrupted window on BBPR-SYU moved all
+    three of the corridor's remaining blocks to different days, confirmed
+    live in a real browser AND independently via direct `curl` calls on the
+    exact same disruption.
+  - **A live-testing bug in the frontend panel itself**, caught only by
+    driving a real browser: the first version diffed "before" vs "after" by
+    reading `blocks` reactively from the dashboard's own live query - which
+    the emergency mutation's own `invalidatesTags` had already refetched to
+    the JUST-CREATED plan by the time the diff rendered, so everything
+    silently read as "unchanged." Fixed by freezing a snapshot in component
+    state at submit time; re-verified live and against the same `curl`
+    ground-truth check.
+  - **Tests:** optimizer 323 (15 new: off-corridor tasks held exactly fixed,
+    a disrupted window genuinely displacing its occupant, an empty
+    already-executed window staying unusable, honest deferral for a
+    structurally-oversized task, `WINDOW_UNAVAILABLE`, a mutation-style
+    proof the block - not the pin set - causes the displacement, pin
+    uniqueness, HTTP contract validation, and two real-corpus regression
+    tests pinning the audit's own findings). Backend 120 (6 new: a full
+    commit-and-persist round trip on a deterministic fixture, source-schedule
+    immutability, boundary validation). Frontend: no new test file
+    (consistent with T26's practice for a panel this size); verified live
+    end to end, including the stale-snapshot bug found and fixed above.
 - [ ] `todo` — **T28**: Monthly planning polish + DRM oversight view KPI hierarchy (Section 14)
 
 ## Cross-cutting (interleave as needed, not a strict phase)
@@ -531,6 +603,34 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 ## Session log
 
 _Append a dated one-line entry here each session — what was completed, what's next._
+
+- **2026-08-24** — T27 complete. Emergency rolling re-optimization (PRD
+  FR3.5, 9.10), the last 🟡 task with real solver work. PRD 9.10's own text
+  settled two things about scope and commitment (narrowed to one corridor,
+  and unlike T20's what-if it COMMITS) but left "what does emergency mean"
+  open - audited before assuming "T20 but committing": the more T20-like
+  reading (force an existing deferred task in now) was tried first and
+  reproduced D-024's already-known ceiling with nothing new to show; the
+  reading actually built - an unplanned event consumes part of the
+  corridor's remaining calendar - was checked the same way and found a real,
+  positive result on the real corpus (TSK-00076 displaced 8/27→8/28,
+  cascading TSK-00077 to 8/29, everything else byte-identical). Reused T20's
+  `Pin` (generalised from one task to a list) plus a genuinely new
+  `blocked_window_keys` primitive, and the audit itself surfaced two real
+  bugs before they could ship: a pin/block ordering conflict, and a
+  NO_CAPACITY message that would have misreported a task with zero
+  remaining windows as having lost a priority contest it never got to enter
+  (fixed with a new `WINDOW_UNAVAILABLE` code). A new commit path was built
+  only after confirming T15's override genuinely can't express a multi-task
+  reshuffle; `currentPlacements` reads the EFFECTIVE plan, not a fresh
+  re-solve, so a manual override never gets silently discarded by an
+  emergency. Live browser verification caught and fixed a real frontend bug
+  (a stale "before" snapshot that made every block read as "unchanged"),
+  independently confirmed via direct `curl` ground-truth comparison. 323
+  optimizer / 120 backend tests, all green. See docs/DECISIONS.md D-069.
+  Next: **T28** (monthly polish + DRM oversight view), the last task on the
+  board, or TX1-4 (cross-cutting / demo prep - Docker Compose is still
+  unverified end to end, flagged since T1/D-005).
 
 - **2026-08-24** — T26 complete. Weather/monsoon risk flagging (PRD 9.9),
   built only after auditing whether real data even applies to this corpus -

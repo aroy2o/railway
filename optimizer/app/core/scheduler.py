@@ -226,6 +226,13 @@ class DeferralReason:
     NO_WINDOW_ON_CORRIDOR = "NO_WINDOW_ON_CORRIDOR"
     EXCEEDS_LONGEST_WINDOW = "EXCEEDS_LONGEST_WINDOW"
     NO_CAPACITY = "NO_CAPACITY"
+    #: T27, PRD 9.10: every window that would otherwise have fit this task was
+    #: removed by `blocked_window_keys` (already executed, or consumed by the
+    #: disruption itself) before the solver ever weighed one task against
+    #: another. Distinct from NO_CAPACITY on purpose: NO_CAPACITY means this
+    #: task lost a real contest to higher-priority work, which is not true
+    #: here - there was no contest, because there was nothing left to contest.
+    WINDOW_UNAVAILABLE = "WINDOW_UNAVAILABLE"
     #: T24, PRD 9.7: this task's prerequisite (`dependsOnTaskId`) cannot itself
     #: be scheduled in this horizon, so precedence makes this task unschedulable
     #: too - discovered before the solver runs, by walking the chain to a fixed
@@ -422,9 +429,20 @@ def solve_schedule(
     max_seconds: float = 10.0,
     num_workers: int = 1,
     random_seed: int = 20260822,
-    #: T20 - force one task's placement or exclusion. Everything else in the
-    #: model is unchanged, so this is a real answer, not an approximation.
+    #: T20 - force one or more tasks' placement or exclusion. Everything else
+    #: in the model is unchanged, so this is a real answer, not an
+    #: approximation. A single `Pin` remains accepted for T20's callers;
+    #: `pins` (T27) is how more than one task is forced in the same solve -
+    #: e.g. holding an entire existing plan fixed except for the one corridor
+    #: an emergency re-optimization is allowed to touch.
     pin: Pin | None = None,
+    pins: list[Pin] | None = None,
+    #: T27 - window keys (`WindowInstance.key`) no task may be assigned into,
+    #: regardless of which task. Distinct from a pin: a pin forces or excludes
+    #: ONE task; this removes a window from the model entirely, which is what
+    #: "already-executed" means for a window nothing happened to be scheduled
+    #: into - it must stay unusable, not look freshly available.
+    blocked_window_keys: frozenset[str] | None = None,
 ) -> ScheduleResult:
     """Build and solve the CP-SAT block-allocation model.
 
@@ -555,11 +573,23 @@ def solve_schedule(
     assign: dict[tuple[str, str], cp_model.IntVar] = {}
     candidates_for_task: dict[str, list[WindowInstance]] = {}
 
+    # A blocked window is unusable for a NEW placement - but a pin naming that
+    # exact window is reconstructing something that already happened, not
+    # creating a new use of it, so it stays exempt. Computed here, ahead of
+    # `candidates_for_task`, because the exemption has to exist before the
+    # variable it would otherwise be filtered out of.
+    all_pins = list(pins or [])
+    if pin is not None:
+        all_pins.append(pin)
+    pinned_window_keys = {p.window_key for p in all_pins if p.window_key is not None}
+    blocked = (blocked_window_keys or frozenset()) - pinned_window_keys
+
     for task in schedulable:
         fitting = [
             window
             for window in windows_by_corridor[task.corridor_id]
             if task.duration_minutes <= window.duration_minutes
+            and window.key not in blocked
         ]
         candidates_for_task[task.task_id] = fitting
         for window in fitting:
@@ -624,37 +654,44 @@ def solve_schedule(
                 if w_a.day == w_b.day and _overlaps(w_a, w_b):
                     model.add(assign[(task_a_id, w_a.key)] + assign[(task_b_id, w_b.key)] <= 1)
 
-    # --- T20: the what-if pin, if one was given ------------------------------
+    # --- T20/T27: pins, if any were given -------------------------------------
     #
     # Validated here rather than trusted, because a pin naming a window that
     # does not exist or does not fit would otherwise build a model that is
     # silently infeasible for a reason nobody can see - the CP-SAT equivalent
-    # of D-025's "a rewarded indicator must be free to be zero".
-    if pin is not None:
-        if pin.window_key is None:
-            if pin.task_id in candidates_for_task:
+    # of D-025's "a rewarded indicator must be free to be zero". `all_pins`
+    # (merging `pin` and `pins`) was already computed above, ahead of
+    # `candidates_for_task`, so a pin naming a blocked window could stay exempt.
+    seen_pin_tasks: set[str] = set()
+    for one_pin in all_pins:
+        if one_pin.task_id in seen_pin_tasks:
+            raise ValueError(f"task {one_pin.task_id} is pinned more than once")
+        seen_pin_tasks.add(one_pin.task_id)
+
+        if one_pin.window_key is None:
+            if one_pin.task_id in candidates_for_task:
                 model.add(
                     sum(
-                        assign[(pin.task_id, window.key)]
-                        for window in candidates_for_task[pin.task_id]
+                        assign[(one_pin.task_id, window.key)]
+                        for window in candidates_for_task[one_pin.task_id]
                     )
                     == 0
                 )
             # A task already outside `schedulable` (structurally deferred) is
             # already excluded - pinning it out again is a no-op, not an error.
         else:
-            if pin.task_id not in candidates_for_task:
+            if one_pin.task_id not in candidates_for_task:
                 raise ValueError(
-                    f"cannot pin {pin.task_id} to {pin.window_key}: this task fits no "
-                    f"window in the {horizon} horizon at all (structurally deferred), so "
+                    f"cannot pin {one_pin.task_id} to {one_pin.window_key}: this task fits "
+                    f"no window in the {horizon} horizon at all (structurally deferred), so "
                     f"there is no placement to force it into"
                 )
-            if (pin.task_id, pin.window_key) not in assign:
+            if (one_pin.task_id, one_pin.window_key) not in assign:
                 raise ValueError(
-                    f"cannot pin {pin.task_id} to {pin.window_key}: that window is not "
-                    f"a real, fitting, same-corridor candidate for this task"
+                    f"cannot pin {one_pin.task_id} to {one_pin.window_key}: that window is "
+                    f"not a real, fitting, same-corridor candidate for this task"
                 )
-            model.add(assign[(pin.task_id, pin.window_key)] == 1)
+            model.add(assign[(one_pin.task_id, one_pin.window_key)] == 1)
 
     # --- constraint: each task in at most one window ------------------------
     # "At most", not "exactly": zero means deferred, which FR3.3 requires to be
@@ -876,14 +913,29 @@ def _build_result(
     for task in model_tasks:
         if task.task_id not in scheduled:
             candidate_count = len(candidates_for_task[task.task_id])
-            result.deferred.append(
-                DeferredTask(
-                    task.task_id,
-                    DeferralReason.NO_CAPACITY,
-                    f"{candidate_count} window(s) on {task.corridor_id} could physically hold "
-                    f"this task, but every one was better used by higher-priority work",
+            if candidate_count == 0:
+                # T27: every physically-fitting window was removed by
+                # `blocked_window_keys` before any contest could happen - the
+                # NO_CAPACITY wording below would otherwise claim a contest
+                # this task never got to enter.
+                result.deferred.append(
+                    DeferredTask(
+                        task.task_id,
+                        DeferralReason.WINDOW_UNAVAILABLE,
+                        f"every window on {task.corridor_id} this task could physically fit "
+                        f"was already executed or consumed by the disruption itself - not lost "
+                        f"to another task's priority, because there was nothing left to contest",
+                    )
                 )
-            )
+            else:
+                result.deferred.append(
+                    DeferredTask(
+                        task.task_id,
+                        DeferralReason.NO_CAPACITY,
+                        f"{candidate_count} window(s) on {task.corridor_id} could physically hold "
+                        f"this task, but every one was better used by higher-priority work",
+                    )
+                )
 
     result.deferred.sort(key=lambda d: d.task_id)
     result.decision_log = _build_decision_log(

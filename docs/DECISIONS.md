@@ -3032,3 +3032,173 @@ blocks, both flagged corridors named). Frontend: no new test file, consistent
 with CLAUDE.md's frontend-coverage guidance and this session's established
 practice of live-browser verification for a component this small. Verified
 live end to end against a freshly regenerated schedule.
+
+---
+
+## D-069 — Emergency re-optimization means a disruption consumes corridor time, not a new task arriving; it commits, and reuses T20's Pin generalised to many
+
+**Date:** 2026-08-24 · **Task:** T27
+
+**The question, settled by re-reading PRD 9.10 before assuming "T20 but
+committing."** PRD 9.10's own text: *"'Simulate an emergency block request'
+button triggers incremental re-optimization of the remaining week's schedule
+(re-solve only the affected corridor/window, holding already-executed blocks
+fixed)."* Two things follow directly, neither optional: this re-solve is
+**scope-narrowed** to one corridor's remaining time (unlike T20, which
+re-solves the whole model), and - because FR3.5 calls it "support... when an
+emergency... arrives," not "simulate," and 13.1 lists it beside the real
+objective, not beside FR5's what-if - it is meant to **commit**, unlike T20
+(D-064's "no persistence, of any kind" does not apply here; this is closer to
+D-034's "a schedule is an event that happened").
+
+**What "emergency" means was audited, not assumed, and the audit ruled out
+the more obvious reading.** The candidate reading closest to T20 - "an
+existing deferred task gets elevated and forced into the schedule right now"
+- was tried FIRST, directly against the real corpus, before any module code
+existed: pin everything off one corridor and everything already-elapsed on
+it, leave the rest of that corridor free, and see whether a real deferred
+task (TSK-00073, needs 174 min) could be rescued. It could not - D-024 holds
+under this scope exactly as it held under T20's exclusion and T23's weight
+sliders: a task longer than every window on its corridor stays deferred no
+matter how much of the corridor's remaining capacity opens up around it.
+That reading would make T27 demonstrate nothing T20 had not already shown,
+on this data.
+
+The reading actually built - **an unplanned event CONSUMES part of the
+corridor's remaining calendar** (an emergency train movement, a safety
+closure, another authority's urgent possession) - was checked the same way,
+before any endpoint existed: block MQX-RMF's real window 9 on 2026-08-27
+(holding the real TSK-00076) and re-solve. TSK-00076 relocated to 2026-08-28,
+displacing TSK-00077 to 2026-08-29 in turn - a real, positive,
+demonstrable re-optimization, with every OTHER corridor and every other
+deferred task byte-identical to the baseline. This reading is also closer to
+the words themselves - a "block REQUEST" is a request that a block of
+corridor time be granted, i.e. taken OUT of availability - and needs no new
+task-creation write surface at all: FR1.1 (task submission, still T10's to
+finish) stays untouched, and the "emergency" is a capacity change, not a
+data-model change. Both audits are pinned as regression tests
+(`test_real_corpus_displaces_the_real_task_the_disruption_hits`,
+`test_real_corpus_still_defers_a_structurally_oversized_emergency_honestly`
+in `optimizer/tests/test_emergency.py`) rather than left as one-off findings.
+
+**Mechanism: `Pin` (T20) generalised from one to many, plus a second,
+new primitive - blocking a window outright.** `solve_schedule` gained
+`pins: list[Pin]` (a superset of the existing singular `pin`, merged
+internally) and `blocked_window_keys: frozenset[str]`. The distinction
+matters and is not cosmetic: a pin forces or excludes ONE task; a block
+removes a window from the model for EVERY task, which is what "already
+executed" has to mean for a window nothing happened to be scheduled into -
+it must stay unusable, not look freshly available to whichever task is
+still unpinned. `app/core/emergency.py` builds both lists per re-solve:
+every task off the affected corridor is pinned to its exact current
+placement (or excluded, if currently deferred) so nothing outside the
+affected corridor can drift even from CP-SAT's own tie-breaking; every
+window on the affected corridor before the earliest disrupted date is
+blocked outright, plus the disrupted window(s) themselves. Only the
+disruption's own window and whatever remains on that one corridor from the
+earliest disrupted date onward are left free.
+
+**A pin naming a window inside the blocked range must still work - so the
+block/pin interaction had to be resolved explicitly, not left to filter
+order.** `candidates_for_task` is now built with `blocked - pinned_window_keys`
+subtracted, computed BEFORE the candidate list, not after: an already-executed
+task's own pin references a window that literally falls inside "everything
+before the disruption" and has to be exempt from the block that would
+otherwise remove its own variable from the model entirely, causing the pin's
+own validation to fail with "not a real, fitting, same-corridor candidate."
+Found by the audit script itself, not guessed in advance.
+
+**A second real bug the audit found: a task with genuinely ZERO remaining
+candidates was reported as having LOST a priority contest it was never
+allowed to enter.** Before T27, a task in `schedulable` was structurally
+guaranteed at least one candidate window (the physical-fit pre-check already
+requires `duration <= longest window`, and nothing before T27 ever filtered
+that list further). `blocked_window_keys` breaks that guarantee - a task
+whose only window is blocked has `candidates_for_task[task_id] == []` - and
+the existing NO_CAPACITY message ("N window(s)... better used by
+higher-priority work") would report `N=0` while still claiming a contest
+happened. There was no contest; there was nothing left to contest. Fixed
+with a new code, `WINDOW_UNAVAILABLE`, used exactly when the candidate count
+is zero - not a new category invented for T27's convenience, but the same
+"a rewarded indicator must be free to be zero" honesty rule D-025 already
+established, reached from a new angle.
+
+**No new commit path beyond what D-034 already establishes - but a new one
+was still needed, because T15's override genuinely does not fit.** Checked
+explicitly, per the task's own scope boundary: T15's override (D-043)
+replays a DELTA on the existing plan without re-solving anything, so it can
+move or defer exactly one task but cannot express "the corridor's remaining
+tasks reshuffle around a capacity change," which is what an emergency
+displacement usually needs (see TSK-00076/TSK-00077's cascade above). So
+`POST /api/schedules/:id/emergency` persists a genuinely NEW `Schedule`
+document (`emergencyService.ts`), the same `SCH-<timestamp>` shape
+`generateSchedule` already produces, carrying a new `emergencyContext` field
+(source schedule id, corridor, disrupted windows, asOf, reason, and the
+pinned/blocked counts) - additive to D-034, not an exception to it: this is
+still "a schedule is an event that happened," the event just being a
+disruption rather than a scheduled generation.
+
+**Current placements come from the EFFECTIVE plan, never a fresh re-solve -
+a deliberate divergence from T20's own choice, checked explicitly rather
+than copied by analogy.** `runWhatIf` (T20) recomputes a fresh baseline via
+`solve_schedule` because a hypothetical need not reflect every manual
+tweak (D-064). Doing the same here would be a real bug: the plan being
+amended may already carry T15 overrides, and pinning against a freshly
+re-solved baseline instead of `getEffectivePlan`'s replayed result would
+silently discard them the moment an emergency hit - D-044's "measure
+against the effective plan, never the base blocks" rule, in a new layer.
+`emergencyService.ts` reads `getEffectivePlan` and threads
+`effectivePlan.blocks` through as `currentPlacements`.
+
+**No new workflow gate, checked rather than assumed by analogy to T15's
+`assertOverridable`.** T19's gate refuses a WRITE onto a published or
+rejected schedule's own history, and its refusal message already names the
+correct alternative: *"Generate a new plan - it becomes the next version."*
+An emergency re-solve never writes onto the source schedule - it creates an
+independent new document, exactly the "generate a new plan" T19 already
+points to, just triggered by a disruption instead of a manual click. So
+`runEmergencyReoptimization` deliberately does not call `assertOverridable`:
+there is nothing here for it to gate. The resulting schedule is a plain new
+draft, reachable through T19's existing FR6.1 workflow if a Controller wants
+to formally approve or publish it - no new state machine needed.
+
+**A cross-task finding, not a new one: the same under-determined-day
+volatility T20/T23 already documented (D-028/D-061) shows up here too, now
+in a COMMITTING context.** Live-verified against the real seeded corpus: with
+only ONE window on BBPR-SYU disrupted, all THREE of the corridor's remaining
+blocks moved to different days - not because the model needed to, but
+because CP-SAT's own tie-breaking, once perturbed by even one blocked
+window, is free to redistribute the rest. Confirmed independently outside
+the browser via direct `curl` calls comparing the exact before/after block
+placements. This is not a defect - D-028 already established coverage never
+changes from this kind of reshuffle - but it is a real thing the UI has to
+report honestly rather than pretend "only the disrupted task moved."
+
+**A live-testing bug in the frontend panel itself, caught only by driving a
+real browser.** `EmergencyPanel.tsx`'s first version diffed the "before" and
+"after" plan by reading `blocks` reactively from the dashboard's own
+`useGetLatestScheduleQuery` prop. The emergency mutation is tagged
+`invalidatesTags: ['Schedule', 'Task']` - correctly, since its result
+becomes the new `latest` - but that means by the time the mutation's
+response rendered, RTK Query had ALREADY refetched `blocks` to the just-created
+plan, so the diff silently compared the new plan against itself and labelled
+every block "unchanged." Fixed by freezing a `beforeBlocks` snapshot in
+component state at the moment of submission, before the mutation fires.
+Re-verified live after the fix, and independently against raw API output
+(the `curl` comparison above) - both agree exactly.
+
+**Tests.** Optimizer 323 (15 new in `test_emergency.py`: off-corridor tasks
+held exactly fixed, a disrupted window genuinely displacing its occupant, an
+empty already-executed window staying unusable, a structurally-oversized
+task staying honestly deferred, the new `WINDOW_UNAVAILABLE` reason, a
+mutation-style proof the block - not the pin set - causes the displacement,
+pin-uniqueness, HTTP contract validation, and the two real-corpus tests
+above), plus `test_scheduler.py`/`test_whatif.py` re-verified green after the
+`Pin` generalisation. Backend 120 (6 new: a full commit-and-persist round
+trip on a deterministic one-window fixture proving the honest
+`WINDOW_UNAVAILABLE` outcome, source-schedule immutability, and boundary
+validation for an unknown corridor / empty disruption list / short reason /
+unknown schedule id). Frontend: no new test file (consistent with T26's
+practice for a panel this size); verified live end to end in a real browser,
+including finding and fixing the stale-snapshot bug above, plus an
+independent `curl`-based ground-truth check of the exact same disruption.

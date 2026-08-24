@@ -244,6 +244,92 @@ class WhatIfRequest(ScenarioIn):
     task_id: str = Field(min_length=1, max_length=64)
 
 
+class CurrentPlacementIn(ApiModel):
+    """Where one task sits in the plan being amended (T27).
+
+    Node's job, not the optimizer's: this service never touches MongoDB, so it
+    has no way to know what is currently scheduled, including anything T15's
+    manual overrides have since moved. A task with no entry here is currently
+    deferred - the absence IS the information, not a value to default.
+    """
+
+    task_id: str = Field(min_length=1, max_length=64)
+    corridor_id: str = Field(min_length=1, max_length=64)
+    date: date
+    window_index: int = Field(ge=0)
+
+
+class DisruptedWindowIn(ApiModel):
+    """One window on the affected corridor that an emergency has consumed."""
+
+    date: date
+    window_index: int = Field(ge=0)
+
+
+class EmergencyReoptimizeRequest(ScenarioIn):
+    """T27 (PRD FR3.5, 9.10) - disruption-resilient rolling re-optimization.
+
+    "Re-solve constrained to only the affected corridor and remaining
+    unelapsed time window, holding already-executed blocks fixed" (PRD 13.1).
+    Unlike T20's what-if, this is not a hypothetical: the caller means to
+    commit the answer, so it needs the plan as it REALLY stands right now
+    (`current_placements`, effective-plan-with-overrides, not a freshly
+    re-solved baseline) rather than reconstructing one.
+    """
+
+    horizon_start: date
+    horizon_days: int = Field(default=7, ge=1)
+    max_seconds: float | None = Field(default=None, gt=0)
+    policy_weights: PolicyWeightsIn | None = None
+    #: The one corridor this re-solve is allowed to change.
+    corridor_id: str = Field(min_length=1, max_length=64)
+    #: The plan being amended, as it currently stands - every task NOT listed
+    #: here is currently deferred.
+    current_placements: list[CurrentPlacementIn] = Field(default_factory=list)
+    #: The emergency itself: window(s) on `corridor_id` that are no longer
+    #: available. At least one is required - an emergency re-solve with
+    #: nothing disrupted is not a real request.
+    disrupted_windows: list[DisruptedWindowIn] = Field(min_length=1)
+    #: FR6.2's mandatory-reason discipline, applied here too: this re-solve
+    #: commits, so it needs the same audit trail an override does.
+    reason: str = Field(min_length=8, max_length=500)
+
+    @model_validator(mode="after")
+    def _check_referential_integrity(self) -> "EmergencyReoptimizeRequest":
+        corridor_ids = {c.corridor_id for c in self.corridors}
+        if self.corridor_id not in corridor_ids:
+            raise ValueError(f"corridorId {self.corridor_id!r} is not in the payload's corridors")
+
+        task_ids = {t.task_id for t in self.tasks}
+        dangling = sorted({p.task_id for p in self.current_placements} - task_ids)
+        if dangling:
+            raise ValueError(f"currentPlacements reference unknown task(s): {dangling}")
+
+        by_task = {t.task_id: t for t in self.tasks}
+        mismatched = sorted(
+            p.task_id
+            for p in self.current_placements
+            if by_task[p.task_id].corridor_id != p.corridor_id
+        )
+        if mismatched:
+            raise ValueError(
+                f"currentPlacements corridorId disagrees with the task's own corridorId "
+                f"for: {mismatched}"
+            )
+
+        corridor_window_counts = {c.corridor_id: len(c.daily_windows) for c in self.corridors}
+        affected_window_count = corridor_window_counts.get(self.corridor_id, 0)
+        out_of_range = sorted(
+            {w.window_index for w in self.disrupted_windows if w.window_index >= affected_window_count}
+        )
+        if out_of_range:
+            raise ValueError(
+                f"disruptedWindows windowIndex {out_of_range} out of range for "
+                f"{self.corridor_id!r}, which has {affected_window_count} daily window(s)"
+            )
+        return self
+
+
 class PrioritizeRequest(ApiModel):
     """FR2.4 ranked-queue request."""
 

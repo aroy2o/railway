@@ -370,6 +370,148 @@ test('T20: whatif against a nonexistent schedule id is a 404', async (t) => {
     .expect(404);
 });
 
+test('T27: emergency reoptimize persists a NEW schedule with the disrupted window empty', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  // A ONE-day horizon deliberately: A-B has exactly one window per day, so
+  // there is no CP-SAT tie-break to predict (see optimizer/tests/test_emergency.py's
+  // own note on this - an earlier version of this test assumed the batch
+  // would land on day 1 of a multi-day horizon, which turned out false; CP-SAT
+  // preferred a LATER day instead, the same under-determined-day volatility
+  // D-028/D-061 document elsewhere). With only one day and one window, the
+  // batch has exactly one place to be, no ambiguity, and disrupting that
+  // window leaves the corridor with genuinely zero remaining capacity in this
+  // horizon - the honest WINDOW_UNAVAILABLE outcome this task's own audit
+  // found and fixed (see docs/DECISIONS.md D-069), not silently dropped work.
+  const generated = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 1 })
+    .expect(201);
+  const sourceId = generated.body.data._id;
+  const sourceBlock = generated.body.data.blocks.find(
+    (b: { corridorId: string }) => b.corridorId === 'A-B',
+  );
+  assert.ok(sourceBlock, 'sanity: the one-day, one-window fixture batches deterministically');
+  assert.deepEqual(sourceBlock.taskIds.sort(), ['TSK-A1', 'TSK-A2']);
+
+  const res = await request(app)
+    .post(`/api/schedules/${sourceId}/emergency`)
+    .send({
+      corridorId: 'A-B',
+      disruptedWindows: [{ date: HORIZON, windowIndex: sourceBlock.windowIndex }],
+      reason: 'unplanned traffic block on A-B',
+    })
+    .expect(201);
+
+  const emergencySchedule = res.body.data;
+  assert.notEqual(emergencySchedule._id, sourceId, 'a NEW schedule, not a mutation (D-034)');
+  assert.equal(
+    emergencySchedule.blocks.some((b: { corridorId: string }) => b.corridorId === 'A-B'),
+    false,
+    'the disrupted window was this corridor\'s only capacity in the horizon - nowhere to relocate to',
+  );
+  const deferredIds = emergencySchedule.deferredTasks.map((d: { taskId: string }) => d.taskId);
+  assert.ok(deferredIds.includes('TSK-A1') && deferredIds.includes('TSK-A2'));
+  const tsk1 = emergencySchedule.deferredTasks.find((d: { taskId: string }) => d.taskId === 'TSK-A1');
+  assert.equal(tsk1.reason, 'WINDOW_UNAVAILABLE');
+
+  assert.equal(emergencySchedule.emergencyContext.sourceScheduleId, sourceId);
+  assert.equal(emergencySchedule.emergencyContext.corridorId, 'A-B');
+  assert.equal(emergencySchedule.emergencyContext.reason, 'unplanned traffic block on A-B');
+  assert.ok(emergencySchedule.framing === undefined, 'framing is optimizer-response-only, not stored');
+
+  // Fetchable afterwards, like any other schedule.
+  const fetched = await request(app).get(`/api/schedules/${emergencySchedule._id}`).expect(200);
+  assert.equal(fetched.body.data.emergencyContext.sourceScheduleId, sourceId);
+});
+
+test('T27: emergency reoptimize never mutates the source schedule', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  const generated = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 3 })
+    .expect(201);
+  const sourceId = generated.body.data._id;
+  const before = await Schedule.findById(sourceId).lean();
+
+  await request(app)
+    .post(`/api/schedules/${sourceId}/emergency`)
+    .send({
+      corridorId: 'A-B',
+      disruptedWindows: [{ date: HORIZON, windowIndex: 0 }],
+      reason: 'unplanned traffic block on A-B',
+    })
+    .expect(201);
+
+  const after = await Schedule.findById(sourceId).lean();
+  assert.deepEqual(before, after, 'the source schedule document must be byte-identical afterwards');
+});
+
+test('T27: an unknown corridor id is a clean 422, not a 500', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  const generated = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 3 })
+    .expect(201);
+
+  const res = await request(app)
+    .post(`/api/schedules/${generated.body.data._id}/emergency`)
+    .send({
+      corridorId: 'NOWHERE',
+      disruptedWindows: [{ date: HORIZON, windowIndex: 0 }],
+      reason: 'unplanned traffic block',
+    })
+    .expect(502);
+  assert.match(JSON.stringify(res.body), /NOWHERE/);
+});
+
+test('T27: an empty disruptedWindows array is refused at the boundary', async (t) => {
+  if (!needs(t)) return;
+
+  const generated = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 3 })
+    .expect(201);
+
+  await request(app)
+    .post(`/api/schedules/${generated.body.data._id}/emergency`)
+    .send({ corridorId: 'A-B', disruptedWindows: [], reason: 'unplanned traffic block' })
+    .expect(400);
+});
+
+test('T27: a short reason is refused at the boundary', async (t) => {
+  if (!needs(t)) return;
+
+  const generated = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 3 })
+    .expect(201);
+
+  await request(app)
+    .post(`/api/schedules/${generated.body.data._id}/emergency`)
+    .send({
+      corridorId: 'A-B',
+      disruptedWindows: [{ date: HORIZON, windowIndex: 0 }],
+      reason: 'why',
+    })
+    .expect(400);
+});
+
+test('T27: emergency reoptimize against a nonexistent schedule id is a 404', async (t) => {
+  if (!needs(t)) return;
+
+  await request(app)
+    .post('/api/schedules/SCH-NOPE/emergency')
+    .send({
+      corridorId: 'A-B',
+      disruptedWindows: [{ date: HORIZON, windowIndex: 0 }],
+      reason: 'unplanned traffic block',
+    })
+    .expect(404);
+});
+
 test('priorityScore is null before generation and real after it', async (t) => {
   if (!needs(t, { optimizer: true })) return;
 

@@ -135,6 +135,9 @@ export async function generateSchedule({
       prioritySource: priorityQueue ? 'fr2.3-priority-engine' : 'severity-fallback',
     },
     generationErrors,
+    // T27. Only an emergency re-solve sets this - an ordinary generation
+    // never did and never claims to have.
+    emergencyContext: null,
   };
 
   const saved = await Schedule.create(document);

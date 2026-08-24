@@ -30,6 +30,7 @@ import GanttTimeline from '../components/GanttTimeline.tsx'
 import OverrideHistory from '../components/OverrideHistory.tsx'
 import WorkflowPanel from '../components/WorkflowPanel.tsx'
 import WhatIfPanel from '../components/WhatIfPanel.tsx'
+import EmergencyPanel from '../components/EmergencyPanel.tsx'
 import PolicySliders from '../components/PolicySliders.tsx'
 import { OVERRIDABLE_STATES } from '../lib/approval.ts'
 import OverridePanel from '../components/OverridePanel.tsx'
@@ -53,6 +54,9 @@ export function ControllerDashboard() {
   // T20: independent of the override selection above - a what-if works on a
   // deferred task too, which has no block on the Gantt to select at all.
   const [whatIfTaskId, setWhatIfTaskId] = useState<string | null>(null)
+  // T27: independent of both selections above - an emergency picks its own
+  // corridor and window rather than reusing the Gantt's click-to-select.
+  const [emergencyOpen, setEmergencyOpen] = useState(false)
 
   const plan = schedule.data?.data
   // `blocks` is the solver's plan and what `decisionLog` explains; the
@@ -90,6 +94,15 @@ export function ControllerDashboard() {
               <span className="text-xs text-slate-500">
                 {plan._id} · {new Date(plan.generatedAt).toLocaleString()}
               </span>
+            )}
+            {plan && visibleBlocks.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setEmergencyOpen((open) => !open)}
+                className="rounded-lg border border-rose-300 px-3 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-50"
+              >
+                ⚠ Simulate emergency
+              </button>
             )}
             <button
               type="button"
@@ -192,6 +205,14 @@ export function ControllerDashboard() {
                       scheduleId={plan._id}
                       taskId={whatIfTaskId}
                       onClose={() => setWhatIfTaskId(null)}
+                    />
+                  )}
+
+                  {emergencyOpen && (
+                    <EmergencyPanel
+                      scheduleId={plan._id}
+                      blocks={visibleBlocks}
+                      onClose={() => setEmergencyOpen(false)}
                     />
                   )}
 
