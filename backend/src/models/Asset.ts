@@ -43,6 +43,18 @@ export interface IAsset {
   dominantCriticalityFactor: string | null;
   /** SIMULATED asset-health series (PRD 9.1). Not observed IR data. */
   degradationHistory: DegradationPoint[];
+  /**
+   * FR2.2 predictive failure risk, 0-100 (T16). Null when the model could not
+   * assess the asset - `failureRiskReason` says why. Never defaulted: a missing
+   * measurement must not read as a low-risk finding.
+   */
+  failureRiskScore: number | null;
+  failureRiskBreakdown: Record<string, unknown> | null;
+  failureRiskComputed: boolean;
+  failureRiskReason: string | null;
+  /** PRD 9.1 framing. Stored WITH the score so the two cannot be separated. */
+  failureRiskFraming: string | null;
+  failureRiskComputedAt: Date | null;
   synthetic: boolean;
 }
 
@@ -80,6 +92,12 @@ const assetSchema = new Schema<IAsset>(
     criticalityBreakdown: { type: Map, of: Number, default: {} },
     dominantCriticalityFactor: { type: String, default: null },
     degradationHistory: { type: [degradationPointSchema], default: [] },
+    failureRiskScore: { type: Number, default: null },
+    failureRiskBreakdown: { type: Schema.Types.Mixed, default: null },
+    failureRiskComputed: { type: Boolean, default: false },
+    failureRiskReason: { type: String, default: null },
+    failureRiskFraming: { type: String, default: null },
+    failureRiskComputedAt: { type: Date, default: null },
     synthetic: { type: Boolean, default: true },
   },
   { versionKey: false, _id: false },

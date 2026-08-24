@@ -255,6 +255,147 @@ test('knownGaps and the placeholder flag survive being stored and read back', as
   assert.equal(schedule.inputSummary.prioritySource, 'fr2.3-priority-engine');
 });
 
+test('the T22 traffic-block costing survives the Mongoose sub-schema', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  await request(app).post('/api/schedules/generate').send({ horizonStart: HORIZON }).expect(201);
+  const schedule = (await request(app).get('/api/schedules/latest').expect(200)).body.data;
+
+  // This is a regression test with a specific history: `deferredSchema` declared
+  // only taskId/reason/detail, so Mongoose SILENTLY dropped displacementOption -
+  // the same subtraction D-033 caught in a response schema, in a different layer.
+  const costed = schedule.deferredTasks.filter((task: any) => task.displacementOption);
+
+  if (schedule.deferredTasks.length === 0) return;   // fixture with nothing deferred
+  assert.ok(costed.length > 0, 'traffic-block costings must survive persistence');
+
+  const option = costed[0].displacementOption;
+  // Measured and estimated stay structurally apart, not merged into one number.
+  assert.ok(typeof option.impact.measured.trainsAffected === 'number');
+  assert.ok(typeof option.impact.measured.clearanceMinutes === 'number');
+  assert.ok(typeof option.impact.estimated.weightedImpact === 'number');
+  assert.match(option.impact.framing, /apportioned/i);
+  assert.match(option.note, /does NOT schedule it/);
+
+  // T22 graduated the conflict type: checked, not undetectable, and in exactly
+  // one of the two lists.
+  const report = schedule.conflictReport;
+  const undetectable = report.notYetDetectable.map((e: any) => e.type);
+  const clear = report.checkedAndClear.map((e: any) => e.type);
+  assert.ok(!undetectable.includes('TRAIN_IMPACT_CONFLICT'));
+  assert.ok(clear.includes('TRAIN_IMPACT_CONFLICT'));
+});
+
+test('the FR2.2 risk model reaches the schedule with its PRD 9.1 framing intact', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  await request(app).post('/api/schedules/generate').send({ horizonStart: HORIZON }).expect(201);
+  const schedule = (await request(app).get('/api/schedules/latest').expect(200)).body.data;
+
+  const risk = schedule.riskModel;
+  assert.ok(risk, 'the schedule must record how FR2.2 was applied');
+  assert.equal(risk.modelType, 'linear-trend-extrapolation-to-threshold');
+
+  // PRD Section 6 NG4: the disclaimer has to survive to the database, not just
+  // exist in the Python module that wrote it. This is the same round-trip check
+  // D-015 applies to `synthetic` and D-033 to `knownGaps`.
+  assert.match(risk.framing, /simulated asset degradation/i);
+  assert.match(risk.framing, /does not predict real/i);
+
+  if (risk.assetsScored > 0) {
+    const entry = schedule.decisionLog.find(
+      (item: any) => item.contributingFactors?.priorityBreakdown?.usesFailureRisk === true,
+    );
+    assert.ok(entry, 'at least one task should be scored with FR2.2');
+    assert.ok(
+      'failure_risk' in entry.contributingFactors.priorityBreakdown.contributions,
+      'the weighted risk contribution must be in the FR2.4 breakdown',
+    );
+  }
+});
+
+
+/* -------------------------------------------------------------------------- */
+/* Ask the Planner (T18)                                                      */
+/* -------------------------------------------------------------------------- */
+
+test('a question is refused at the boundary before any optimizer call', async () => {
+  const res = await request(app)
+    .post('/api/schedules/latest/explain')
+    .send({ question: 'hi' })
+    .expect(400);
+
+  assert.equal(res.body.error.code, 'BAD_REQUEST');
+  assert.match(res.body.error.details[0].message, /at least 3 characters/);
+});
+
+test('explaining a schedule that does not exist is a 404, not a 502', async () => {
+  const res = await request(app)
+    .post('/api/schedules/64b7f9c2e1a4d5f6a7b8c9d0/explain')
+    .send({ question: 'Why was this task deferred?' })
+    .expect(404);
+
+  assert.match(res.body.error.message, /No schedule 64b7f9c2e1a4d5f6a7b8c9d0/);
+});
+
+test('an unconfigured explanation layer says so, and says the plan is unaffected', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+  // No ANTHROPIC_API_KEY is set in the test environment, so the optimizer
+  // returns 503. D-037's standard says that message must reach the Controller
+  // intact rather than being flattened into "Optimizer responded 503".
+  const res = await request(app)
+    .post('/api/schedules/latest/explain')
+    .send({ question: 'Why was TSK-A1 scheduled when it was?' });
+
+  if (res.status === 200) {
+    // A key IS configured on this machine - then the shape must be the audited
+    // one, not a bare string.
+    assert.ok(typeof res.body.data.answer === 'string');
+    assert.ok(Array.isArray(res.body.data.groundedIn));
+    assert.equal(typeof res.body.data.verification.grounded, 'boolean');
+    return;
+  }
+
+  assert.equal(res.status, 503, 'an unconfigured LLM is 503, not 502 or 500');
+  assert.equal(res.body.error.code, 'SERVICE_UNAVAILABLE');
+  assert.match(res.body.error.message, /ANTHROPIC_API_KEY/);
+  assert.match(res.body.error.message, /still available/);
+});
+
+test('the typed conflict taxonomy survives the round trip and keeps the plans apart', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  const schedule = (await request(app).get('/api/schedules/latest').expect(200)).body.data;
+
+  // PRD 9.5, optimized layer. T21's point is that this carries enough detail to
+  // render an actionable row - before it, the entries had no corridor at all.
+  const report = schedule.conflictReport;
+  assert.ok(report, 'typed conflict report must be stored');
+  assert.deepEqual(Object.keys(report.byPlan), ['optimized']);
+  assert.equal(report.byPlan.optimized.byType.RESOURCE_CONTENTION, 1);
+
+  const [conflict] = report.conflicts;
+  assert.equal(conflict.plan, 'optimized');
+  assert.equal(conflict.resolution.enforcedBy, 'T25');
+  assert.ok(conflict.resolution.strategy);
+  assert.ok(conflict.corridorId, 'a conflict with no corridor cannot be acted on');
+  assert.ok(conflict.date);
+
+  // T22 graduated this type: it moved OUT of "nothing checks for it" and INTO
+  // "checked, none found". It must appear in exactly one of those lists - being
+  // in both would let a reader take whichever reading suited them.
+  assert.ok(!report.notYetDetectable.some((e: any) => e.type === 'TRAIN_IMPACT_CONFLICT'));
+  assert.ok(report.checkedAndClear.some((e: any) => e.type === 'TRAIN_IMPACT_CONFLICT'));
+  assert.ok(!('TRAIN_IMPACT_CONFLICT' in report.byPlan.optimized.byType));
+
+  // D-045: the baseline's conflicts live on their own layer. No shape anywhere
+  // in either payload may present a single total spanning both plans.
+  const baselineReport = schedule.baseline.conflictReport;
+  assert.ok(baselineReport, 'baseline typed report must be stored');
+  assert.deepEqual(Object.keys(baselineReport.byPlan), ['baseline']);
+  assert.ok(!('total' in report) && !('total' in baselineReport));
+});
+
 test('the baseline conflict report and contestable set survive the round trip', async (t) => {
   if (!needs(t, { optimizer: true })) return;
 
@@ -463,11 +604,27 @@ test('the real 89-task corpus reproduces CHECKPOINT.md numbers through this path
     assert.equal(schedule.knownGaps.resourceConflicts.count, 11);
     assert.equal(schedule.knownGaps.dependencyViolations.count, 5);
 
+    // The same figures typed per PRD 9.5, still separated by plan (D-045).
+    assert.deepEqual(schedule.conflictReport.byPlan.optimized.byType, {
+      RESOURCE_CONTENTION: 11,
+      DEPENDENCY_ORDER_VIOLATION: 5,
+    });
+    assert.deepEqual(schedule.baseline.conflictReport.byPlan.baseline.byType, {
+      CORRIDOR_DOUBLE_BOOKING: 6,
+      WINDOW_OVER_SUBSCRIPTION: 3,
+    });
+
     // Priority scores landed on every task, in T7's measured range.
     const scored = await Task.find({ priorityScore: { $ne: null } }).lean();
     assert.equal(scored.length, 89);
     const scores = scored.map((task) => task.priorityScore ?? 0);
-    assert.ok(Math.min(...scores) >= 25 && Math.max(...scores) <= 88);
+    // T16 widened the formula to five factors and reweighted it (D-055), which
+    // moved the measured range from 25.04-87.31 to 23.98-84.80. Asserted as the
+    // new measured band, not loosened to hide the change.
+    assert.ok(
+      Math.min(...scores) >= 23 && Math.max(...scores) <= 86,
+      `priority range moved unexpectedly: ${Math.min(...scores)}-${Math.max(...scores)}`,
+    );
   } finally {
     await source.close();
   }

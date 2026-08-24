@@ -29,6 +29,7 @@ import DeferredTasksPanel from '../components/DeferredTasksPanel.tsx'
 import GanttTimeline from '../components/GanttTimeline.tsx'
 import OverrideHistory from '../components/OverrideHistory.tsx'
 import OverridePanel from '../components/OverridePanel.tsx'
+import AskThePlanner from '../components/AskThePlanner.tsx'
 import KnownLimitations from '../components/KnownLimitations.tsx'
 import KpiStrip from '../components/KpiStrip.tsx'
 import PriorityQueue from '../components/PriorityQueue.tsx'
@@ -165,6 +166,11 @@ export function ControllerDashboard() {
                     />
                   )}
 
+                  {/* Sits under the timeline, in the wide column: a Controller
+                      asks about the plan they are looking at, and the grounding
+                      list needs room to be readable rather than truncated. */}
+                  <AskThePlanner scheduleId={plan._id} />
+
                   <DeferredTasksPanel deferred={plan.deferredTasks} />
                 </div>
 
@@ -173,6 +179,7 @@ export function ControllerDashboard() {
                   <OverrideHistory overrides={plan.overrides ?? []} />
                   <KnownLimitations
                     knownGaps={plan.knownGaps}
+                    conflictReport={plan.conflictReport}
                     generationErrors={plan.generationErrors}
                   />
                 </div>

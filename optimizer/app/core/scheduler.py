@@ -47,6 +47,8 @@ from datetime import date, timedelta
 
 from ortools.sat.python import cp_model
 
+from app.core.trains import cheapest_displacement
+
 logger = logging.getLogger(__name__)
 
 MINUTES_PER_DAY = 24 * 60
@@ -113,6 +115,13 @@ class CorridorAvailability:
     #: T3's data-quality flag. A corridor carrying this must never be scheduled;
     #: T4 already excluded them from demand generation, so it is asserted here.
     low_confidence: bool = False
+    #: When trains actually occupy the corridor (T3). Unused by the CP-SAT model
+    #: - carried so a deferral can be costed as a traffic block (T22 Phase A).
+    #: The solver still never schedules into these.
+    occupied_windows: tuple[DailyWindow, ...] = ()
+    #: The corridor's observed train-class counts (T3), for apportioning the
+    #: class split of a displacement. See `app.core.trains`.
+    train_class_mix: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +147,11 @@ class MaintenanceTask:
     #: the FR9.1 baseline (T8), whose first-come-first-served ordering needs a
     #: genuine arrival time. Optional so existing callers are unaffected.
     date_raised: date | None = None
+    #: T7's full FR2.4 breakdown behind `priority`, as `PriorityBreakdown.as_dict()`.
+    #: Unused by the model - carried so the decision log can say WHY a task ranks
+    #: where it does, not merely that it ranks there (T17). `/optimize` already
+    #: computed this and discarded all but `solver_priority`; see D-048.
+    priority_breakdown: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -225,9 +239,16 @@ class DeferredTask:
     task_id: str
     reason: str
     detail: str
+    #: T22 Phase A: what a traffic block for this task would cost, when one is
+    #: possible. D-024 promised this figure and could not yet give it. None when
+    #: the deferral has nothing to do with window length.
+    displacement: dict | None = None
 
     def as_dict(self) -> dict:
-        return {"taskId": self.task_id, "reason": self.reason, "detail": self.detail}
+        payload = {"taskId": self.task_id, "reason": self.reason, "detail": self.detail}
+        if self.displacement is not None:
+            payload["displacementOption"] = self.displacement
+        return payload
 
 
 @dataclass
@@ -396,6 +417,41 @@ def solve_schedule(
 
         longest = max(window.duration_minutes for window in candidates)
         if task.duration_minutes > longest:
+            # T22 Phase A: the deferral message has always said this needs a
+            # traffic block. Now it says what that block would COST, so the
+            # sentence stops being an explanation and becomes a decision a
+            # Controller can actually take.
+            corridor = corridors[task.corridor_id]
+            option = cheapest_displacement(
+                task.corridor_id,
+                [
+                    {"startMin": w.start_minute, "endMin": w.end_minute}
+                    for w in corridor.daily_windows
+                ],
+                [
+                    {"startMin": w.start_minute, "endMin": w.end_minute}
+                    for w in corridor.occupied_windows
+                ],
+                corridor.train_class_mix,
+                task.duration_minutes,
+            )
+            # "0 trains" and "we were not given the occupancy data" are very
+            # different statements, and the first one would be a false claim
+            # dressed as a reassuring one. Only assert a cost when the corridor
+            # actually carried occupancy data.
+            impact = option.impact
+            if not corridor.occupied_windows:
+                cost = (
+                    " The cost of that block is not computed here: no train-occupancy "
+                    "data was supplied for this corridor."
+                )
+            elif impact is not None:
+                cost = (
+                    f" A traffic block would displace {impact.trains_affected} train(s) "
+                    f"for {impact.displaced_minutes} min."
+                )
+            else:
+                cost = f" No traffic block is possible: {option.reason}."
             deferred.append(
                 DeferredTask(
                     task.task_id,
@@ -403,7 +459,10 @@ def solve_schedule(
                     f"needs {task.duration_minutes} min but the longest free window on "
                     f"{task.corridor_id} is {longest} min - this corridor's traffic leaves "
                     f"no gap long enough, so the work requires a traffic block that displaces "
-                    f"trains (train-impact-aware planning, T22)",
+                    f"trains (train-impact-aware planning, T22)." + cost,
+                    displacement=(
+                        option.as_dict() if corridor.occupied_windows else None
+                    ),
                 )
             )
             continue
@@ -525,6 +584,7 @@ def solve_schedule(
         assign=assign,
         candidates_for_task=candidates_for_task,
         deferred=deferred,
+        corridors=corridors,
         horizon=horizon,
         horizon_start=horizon_start,
         horizon_days=horizon_days,
@@ -592,6 +652,7 @@ def _build_result(
     assign,
     candidates_for_task,
     deferred,
+    corridors,
     horizon,
     horizon_start,
     horizon_days,
@@ -658,8 +719,23 @@ def _build_result(
             )
 
     result.deferred.sort(key=lambda d: d.task_id)
-    result.decision_log = _build_decision_log(all_tasks, placements, result.deferred)
+    result.decision_log = _build_decision_log(
+        all_tasks, placements, result.deferred, candidates_for_task
+    )
     result.known_gaps = detect_known_gaps(all_tasks, placements)
+    # T22: checked, not assumed. Lands in knownGaps so it travels the same route
+    # to the UI as every other honesty field.
+    train_impacts = detect_train_impact(result.blocks, corridors)
+    result.known_gaps["trainImpactConflicts"] = {
+        "count": len(train_impacts),
+        "note": (
+            "Scheduled blocks overlapping observed train movements (PRD 9.5/9.6). The model "
+            "only assigns into free windows, so a non-zero count means the free-window data "
+            "and the occupancy data disagree."
+        ),
+        "conflicts": train_impacts[:20],
+    }
+    annotate_conflicts(result.decision_log, result.known_gaps)
 
     # FR3.3 as an invariant, not an aspiration: no task may vanish.
     accounted = result.scheduled_task_ids | {d.task_id for d in result.deferred}
@@ -670,55 +746,181 @@ def _build_result(
     return result
 
 
-def _build_decision_log(all_tasks, placements, deferred) -> list[dict]:
+def _priority_factors(task: MaintenanceTask) -> dict:
+    """The FR2.3 score and the FR2.4 reasoning behind it, when T7 supplied one.
+
+    `priority` is the integer the CP-SAT objective uses - `round(score)`. The
+    unrounded score and its four contributions are what a Controller actually
+    asks about ("why is this one ahead of that one?"), and answering from the
+    rounded integer alone would give a number that does not match the priority
+    queue on screen. Both are reported, labelled, so neither has to be inferred.
+    """
+    factors = {
+        "priority": task.priority,
+        "priorityIsPlaceholder": task.priority_is_placeholder,
+        "durationMinutes": task.duration_minutes,
+        "slaDueDate": task.sla_due_date.isoformat(),
+    }
+
+    breakdown = task.priority_breakdown
+    if breakdown is None:
+        # No T7 score was supplied. Say so rather than omitting the key, so a
+        # consumer can tell "not computed" from "computed and unremarkable".
+        factors["priorityBreakdown"] = None
+        return factors
+
+    factors["priorityScore"] = breakdown.get("priorityScore")
+    factors["dominantPriorityFactor"] = breakdown.get("dominantFactor")
+    factors["priorityBreakdown"] = {
+        "contributions": breakdown.get("contributions"),
+        "components": breakdown.get("components"),
+        "daysToDue": breakdown.get("daysToDue"),
+        "isOverdue": breakdown.get("isOverdue"),
+        "usesFailureRisk": breakdown.get("usesFailureRisk"),
+    }
+    return factors
+
+
+def _build_decision_log(all_tasks, placements, deferred, candidates=None) -> list[dict]:
     """Per-task record of what happened and the factors behind it.
 
-    Deliberately structured rather than prose: T17 turns these factors into
+    Deliberately structured rather than prose: T18 turns these factors into
     plain English grounded in the solver's own decisions, and PRD 18 is explicit
-    that the explanation layer must never invent numbers.
+    that the explanation layer must never invent numbers. Everything here is
+    therefore a figure the solver actually used, never a derived narrative.
+
+    `candidates` maps task id -> the eligible window keys the model considered.
+    It answers "why this window and not another one" with a count rather than a
+    claim, which is the honest version: the model's choice among N eligible
+    windows is an objective outcome, not a rule that can be quoted.
+
+    WHAT THIS LOG IS NOT
+    --------------------
+    It records what the **solver** decided. It does not reflect manual overrides
+    (T15), which are a separate append-only log by D-043 precisely so that "what
+    the AI decided" and "what the plan is now" stay independently answerable. A
+    consumer explaining the *current* plan must join both - see the grounding
+    contract in `app/core/grounding.py`.
     """
     reasons = {item.task_id: item for item in deferred}
+    candidates = candidates or {}
     log = []
+
+    # Who else landed in the same window instance - the basis of the batching
+    # claim, and computed here from `placements` rather than asserted.
+    occupants: dict[object, list[MaintenanceTask]] = {}
+    for task in all_tasks:
+        window = placements.get(task.task_id)
+        if window is not None:
+            occupants.setdefault(window.key, []).append(task)
 
     for task in sorted(all_tasks, key=lambda t: t.task_id):
         window = placements.get(task.task_id)
+        eligible = len(candidates.get(task.task_id, ()))
+
         if window is not None:
+            share = sorted(
+                (other for other in occupants[window.key] if other.task_id != task.task_id),
+                key=lambda t: t.task_id,
+            )
+            factors = _priority_factors(task)
+            factors.update(
+                {
+                    "windowCapacityMinutes": window.duration_minutes,
+                    "windowUsedMinutes": sum(t.duration_minutes for t in occupants[window.key]),
+                    "withinSla": window.day <= task.sla_due_date,
+                    "eligibleWindowsConsidered": eligible,
+                    "sharedWith": [t.task_id for t in share],
+                    "sharedWithDepartments": sorted({t.department for t in share}),
+                    "isCrossDepartmentBatch": any(
+                        t.department != task.department for t in share
+                    ),
+                }
+            )
             log.append(
                 {
                     "taskId": task.task_id,
                     "decision": "scheduled",
+                    "department": task.department,
                     "corridorId": task.corridor_id,
                     "date": window.day.isoformat(),
                     "window": f"{_clock(window.start_minute)}-{_clock(window.end_minute)}",
-                    "contributingFactors": {
-                        "priority": task.priority,
-                        "priorityIsPlaceholder": task.priority_is_placeholder,
-                        "durationMinutes": task.duration_minutes,
-                        "windowCapacityMinutes": window.duration_minutes,
-                        "slaDueDate": task.sla_due_date.isoformat(),
-                        "withinSla": window.day <= task.sla_due_date,
-                    },
+                    "windowIndex": window.window_index,
+                    "contributingFactors": factors,
                 }
             )
         else:
             item = reasons[task.task_id]
+            factors = _priority_factors(task)
+            factors["eligibleWindowsConsidered"] = eligible
             log.append(
                 {
                     "taskId": task.task_id,
                     "decision": "deferred",
+                    "department": task.department,
                     "corridorId": task.corridor_id,
                     "reason": item.reason,
                     "detail": item.detail,
-                    "contributingFactors": {
-                        "priority": task.priority,
-                        "priorityIsPlaceholder": task.priority_is_placeholder,
-                        "durationMinutes": task.duration_minutes,
-                        "slaDueDate": task.sla_due_date.isoformat(),
-                    },
+                    "contributingFactors": factors,
                 }
             )
 
     return log
+
+
+def detect_train_impact(blocks, corridors) -> list[dict]:
+    """Blocks overlapping observed train occupancy (PRD 9.5/9.6, T22).
+
+    Expected to be empty: the model only ever assigns into T3's free windows, so
+    an overlap would mean the window data and the occupancy data disagree. That
+    is exactly why it is CHECKED rather than assumed - a silent inconsistency
+    between the two would put maintenance on top of a running train, on paper.
+    """
+    found: list[dict] = []
+    for block in blocks:
+        corridor = corridors.get(block.corridor_id)
+        if corridor is None or not corridor.occupied_windows:
+            continue
+        affected = 0
+        displaced = 0
+        for window in corridor.occupied_windows:
+            overlap = min(block.end_minute, window.end_minute) - max(
+                block.start_minute, window.start_minute
+            )
+            if overlap > 0:
+                affected += 1
+                displaced += overlap
+        if affected:
+            found.append(
+                {
+                    "corridorId": block.corridor_id,
+                    "date": block.day.isoformat(),
+                    "taskIds": list(block.task_ids),
+                    "departments": sorted(set(block.departments)),
+                    "trainsAffected": affected,
+                    "displacedMinutes": displaced,
+                }
+            )
+    return found
+
+
+def annotate_conflicts(decision_log: list[dict], known_gaps: dict) -> None:
+    """Cross-reference each task to the typed conflicts it takes part in (T21).
+
+    Only the type names go on the log entry; the full records stay in
+    `conflictReport`, which owns them (D-046). Both are derived from the same
+    `known_gaps` in the same call, so they cannot drift apart within a schedule.
+    """
+    from app.core.conflicts import from_known_gaps
+
+    by_task: dict[str, set[str]] = {}
+    for conflict in from_known_gaps(known_gaps):
+        for task_id in conflict.task_ids:
+            if task_id:
+                by_task.setdefault(task_id, set()).add(conflict.type)
+
+    for entry in decision_log:
+        entry["conflictTypes"] = sorted(by_task.get(entry["taskId"], ()))
 
 
 def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:
@@ -752,11 +954,27 @@ def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:
                 second_task.required_resource_ids
             )
             if shared:
+                # Every field below was already in scope; only the count and a
+                # three-field stub used to be returned, which was too thin to
+                # build a conflict view from at parity with the baseline's
+                # report (T21). This is additive - no new computation.
+                overlap_start = max(first_window.start_minute, second_window.start_minute)
+                overlap_end = min(first_window.end_minute, second_window.end_minute)
+                corridors = [first_window.corridor_id, second_window.corridor_id]
                 resource_conflicts.append(
                     {
                         "taskIds": [first_id, second_id],
                         "sharedResourceIds": sorted(shared),
                         "date": first_window.day.isoformat(),
+                        # Resources are depot-scoped, so the two tasks may sit
+                        # on different corridors. `corridorId` is only set when
+                        # they agree; `corridorIds` always carries both.
+                        "corridorIds": corridors,
+                        "corridorId": corridors[0] if corridors[0] == corridors[1] else None,
+                        "departments": [first_task.department, second_task.department],
+                        "overlapStart": _clock(overlap_start),
+                        "overlapEnd": _clock(overlap_end),
+                        "overlapMinutes": overlap_end - overlap_start,
                     }
                 )
 
@@ -767,20 +985,33 @@ def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:
         if not task.depends_on_task_id:
             continue
         prerequisite = placements.get(task.depends_on_task_id)
+        # As above: corridor, date and department were already available here
+        # and simply were not returned (T21).
+        common = {
+            "taskId": task_id,
+            "dependsOn": task.depends_on_task_id,
+            "corridorId": task.corridor_id,
+            "date": window.day.isoformat(),
+            "departments": [task.department],
+            "scheduledAt": f"{_clock(window.start_minute)}-{_clock(window.end_minute)}",
+        }
         if prerequisite is None:
             dependency_violations.append(
                 {
-                    "taskId": task_id,
-                    "dependsOn": task.depends_on_task_id,
+                    **common,
                     "issue": "prerequisite not scheduled",
+                    "prerequisiteDate": None,
                 }
             )
         elif (prerequisite.day, prerequisite.end_minute) > (window.day, window.start_minute):
             dependency_violations.append(
                 {
-                    "taskId": task_id,
-                    "dependsOn": task.depends_on_task_id,
+                    **common,
                     "issue": "scheduled before its prerequisite completes",
+                    "prerequisiteDate": prerequisite.day.isoformat(),
+                    "prerequisiteAt": (
+                        f"{_clock(prerequisite.start_minute)}-{_clock(prerequisite.end_minute)}"
+                    ),
                 }
             )
 

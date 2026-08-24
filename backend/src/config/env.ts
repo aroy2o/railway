@@ -46,6 +46,10 @@ const envSchema = z.object({
   // The Python CP-SAT service. Node never runs OR-Tools itself.
   OPTIMIZER_URL: z.url('OPTIMIZER_URL must be a valid URL'),
   OPTIMIZER_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  // Ask the Planner waits on a Claude API call, not a CP-SAT solve, so it gets
+  // its own budget. Sharing the solver's 30s would either cut off a slow
+  // generation or make a hung LLM call hold a request far too long.
+  EXPLAIN_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
 
   // Where the seed script reads the pipeline output from. Relative paths are
   // resolved against the repo root, so the default works from any cwd.
@@ -77,7 +81,11 @@ export interface AppConfig {
   readonly mongoUri: string;
   readonly corsOrigins: readonly string[];
   readonly jwt: { readonly secret: string; readonly expiresIn: string };
-  readonly optimizer: { readonly baseUrl: string; readonly timeoutMs: number };
+  readonly optimizer: {
+    readonly baseUrl: string;
+    readonly timeoutMs: number;
+    readonly explainTimeoutMs: number;
+  };
   readonly paths: { readonly repoRoot: string; readonly processedData: string };
 }
 
@@ -97,6 +105,7 @@ export const config: AppConfig = Object.freeze({
   optimizer: Object.freeze({
     baseUrl: raw.OPTIMIZER_URL.replace(/\/+$/, ''),
     timeoutMs: raw.OPTIMIZER_TIMEOUT_MS,
+    explainTimeoutMs: raw.EXPLAIN_TIMEOUT_MS,
   }),
   paths: Object.freeze({
     repoRoot: REPO_ROOT,

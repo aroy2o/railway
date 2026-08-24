@@ -39,6 +39,8 @@ export interface ScheduleDeferredTask {
   taskId: string;
   reason?: string;
   detail?: string;
+  /** T22: what a traffic block for this task would cost. Absent when uncosted. */
+  displacementOption?: unknown;
 }
 
 export interface GenerationError {
@@ -71,6 +73,29 @@ export interface ISchedule {
   decisionLog: unknown[];
   /** Constraints the solver does not yet enforce (T24, T25). */
   knownGaps: unknown | null;
+  /**
+   * PRD 9.5 - the same gaps, named by type with a resolution strategy each.
+   * Derived by the optimizer from `knownGaps`; stored rather than recomputed so
+   * the taxonomy lives in exactly one place (D-046). The baseline's own typed
+   * report rides along inside `baseline`, which is stored verbatim.
+   */
+  conflictReport: unknown | null;
+  /**
+   * FR2.2 (T16): how the predictive risk model was applied to THIS plan.
+   *
+   * Stored per schedule, not only per asset, because the priority weights this
+   * plan was built with depend on whether risk was available. A plan generated
+   * while /risk was down used the renormalised four-factor weights, and that
+   * has to stay knowable afterwards rather than being inferred from whatever
+   * the assets happen to hold now. `framing` is PRD 9.1's disclaimer (D-055).
+   */
+  riskModel: {
+    applied: boolean;
+    assetsScored: number;
+    tasksWithRisk: number;
+    modelType: string | null;
+    framing: string | null;
+  } | null;
   /** The full FR9.1 baseline result, including its conflict report. */
   baseline: unknown | null;
   /** D-031: the comparison denominator, so T14 cannot use the full backlog. */
@@ -130,7 +155,15 @@ const generationErrorSchema = new Schema<GenerationError>(
 );
 
 const deferredSchema = new Schema<ScheduleDeferredTask>(
-  { taskId: { type: String, required: true }, reason: String, detail: String },
+  {
+    taskId: { type: String, required: true },
+    reason: String,
+    detail: String,
+    // T22's traffic-block costing. Declared because Mongoose silently DROPS
+    // undeclared keys - which is exactly how this field went missing on its
+    // first run, the same subtraction D-033 caught in a response schema.
+    displacementOption: { type: Schema.Types.Mixed, default: undefined },
+  },
   { _id: false },
 );
 
@@ -153,6 +186,8 @@ const scheduleSchema = new Schema<ISchedule>(
     metrics: { type: Schema.Types.Mixed, default: {} },
     decisionLog: { type: Schema.Types.Mixed, default: [] },
     knownGaps: { type: Schema.Types.Mixed, default: null },
+    conflictReport: { type: Schema.Types.Mixed, default: null },
+    riskModel: { type: Schema.Types.Mixed, default: null },
     baseline: { type: Schema.Types.Mixed, default: null },
     contestableTaskIds: { type: [String], default: [] },
 

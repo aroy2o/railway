@@ -47,8 +47,34 @@ class Settings(BaseSettings):
     solver_num_workers: int = Field(default=0, ge=0, le=64, alias="SOLVER_NUM_WORKERS")
 
     # Consumed by the /explain endpoint (task T18). Empty is valid - the
-    # service must start and serve every other endpoint without it.
+    # service must start and serve every other endpoint without it, and
+    # /explain then returns a 503 naming the missing key rather than failing
+    # opaquely.
+    # Which vendor generates the sentence. PRD Section 10 names Anthropic and
+    # that path is intact; `groq` exists so the layer is demonstrable without a
+    # paid key (D-052). Neither the grounding contract nor the output
+    # verification depends on this choice.
+    llm_provider: str = Field(default="anthropic", alias="LLM_PROVIDER")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    anthropic_model: str = Field(default="claude-sonnet-5", alias="ANTHROPIC_MODEL")
+    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
+    # `groq/compound-mini` advertises 70K tokens/min against gpt-oss-120b's 8K,
+    # but its 429s name `openai/gpt-oss-120b` - the compound models are agentic
+    # systems built ON gpt-oss and bill against ITS budget, so the higher figure
+    # buys nothing here. A plain LLM with no web-search path is the better
+    # choice at identical effective limits. See D-052.
+    groq_model: str = Field(default="openai/gpt-oss-120b", alias="GROQ_MODEL")
+    # Answers are 2-5 sentences by design (PRD 9.2 is a chat box, not a report).
+    explain_max_tokens: int = Field(default=700, gt=0, le=4096, alias="EXPLAIN_MAX_TOKENS")
+
+    @property
+    def explain_api_key(self) -> str:
+        """The key for whichever provider is configured."""
+        return self.groq_api_key if self.llm_provider == "groq" else self.anthropic_api_key
+
+    @property
+    def explain_model(self) -> str:
+        return self.groq_model if self.llm_provider == "groq" else self.anthropic_model
 
     # --- request limits -----------------------------------------------------
     # Bounds on what a single solve request may contain. PRD Section 7 sizes the

@@ -40,6 +40,11 @@ export function DeferredTasksPanel({ deferred }: { deferred: DeferredTask[] }) {
     return [...byReason.entries()].sort((a, b) => b[1].length - a[1].length)
   }, [deferred])
 
+  // T22: how many deferrals carry a costed traffic-block option. The caveat
+  // below renders only when at least one does - a disclaimer with nothing to
+  // disclaim is noise.
+  const costedCount = deferred.filter((task) => task.displacementOption?.feasible).length
+
   if (deferred.length === 0) {
     return (
       <section className="rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4">
@@ -62,6 +67,16 @@ export function DeferredTasksPanel({ deferred }: { deferred: DeferredTask[] }) {
         </p>
       </header>
 
+      {costedCount > 0 && (
+        <p className="border-b border-slate-100 bg-amber-50/50 px-5 py-2 text-[11px] text-slate-600">
+          <span className="font-medium text-slate-700">Traffic-block cost</span> — {costedCount} of
+          these could be forced through by displacing trains. Displaced counts and minutes are
+          measured from the real timetable; the class split behind the weighting is apportioned
+          from each corridor's overall train mix, not measured per service. This system costs the
+          option; it does not schedule it.
+        </p>
+      )}
+
       <div className="divide-y divide-slate-100">
         {groups.map(([reason, tasks]) => (
           <div key={reason} className="px-5 py-4">
@@ -83,11 +98,22 @@ export function DeferredTasksPanel({ deferred }: { deferred: DeferredTask[] }) {
 
             {expanded === reason && (
               <ul className="mt-2 max-h-64 space-y-1.5 overflow-y-auto rounded-lg bg-slate-50 p-3">
-                {tasks.map((task) => (
-                  <li key={task.taskId} className="text-[11px] leading-relaxed text-slate-600">
-                    <span className="font-mono text-slate-800">{task.taskId}</span> — {task.detail}
-                  </li>
-                ))}
+                {tasks.map((task) => {
+                  const cost = task.displacementOption?.impact?.measured
+                  return (
+                    <li key={task.taskId} className="text-[11px] leading-relaxed text-slate-600">
+                      <span className="font-mono text-slate-800">{task.taskId}</span> —{' '}
+                      {task.detail}
+                      {cost && (
+                        <span className="ml-1 rounded bg-white px-1.5 py-0.5 text-[10px] whitespace-nowrap text-amber-900 ring-1 ring-amber-200 ring-inset">
+                          {cost.trainsAffected} train{cost.trainsAffected === 1 ? '' : 's'} ·{' '}
+                          {cost.displacedMinutes} min
+                          {cost.clearanceMinutes > 0 && ` · +${cost.clearanceMinutes} min clearance`}
+                        </span>
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>

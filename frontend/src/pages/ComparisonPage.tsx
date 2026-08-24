@@ -28,6 +28,7 @@ import { Link } from 'react-router-dom'
 
 import { useGetLatestScheduleQuery } from '../api/apiSlice.ts'
 import type { DoubleBooking, OverSubscribedWindow } from '../api/apiSlice.ts'
+import { groupConflicts, type ConflictReport } from '../lib/conflicts.ts'
 import { buildMetricRows, headlineRows, supportingRows, type MetricRow } from '../lib/comparison.ts'
 import { PageHeader, TableShell, Td, Th } from '../components/Table.tsx'
 import QueryState from '../components/QueryState.tsx'
@@ -115,6 +116,7 @@ export function ComparisonPage() {
           })()}
 
           <ConflictEvidence
+            conflictReport={plan.baseline?.conflictReport}
             doubleBookings={plan.baseline?.conflicts.doubleBookings ?? []}
             overSubscribed={plan.baseline?.conflicts.overSubscribedWindows ?? []}
             note={plan.baseline?.conflicts.note ?? ''}
@@ -274,6 +276,15 @@ function Side({
   )
 }
 
+/** PRD 9.5 type name, so a conflict is named rather than merely counted. */
+function ConflictTypeBadge({ label }: { label: string }) {
+  return (
+    <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-rose-800 uppercase ring-1 ring-rose-200 ring-inset">
+      {label}
+    </span>
+  )
+}
+
 /**
  * The conflicts themselves, not just the count.
  *
@@ -285,20 +296,42 @@ function ConflictEvidence({
   doubleBookings,
   overSubscribed,
   note,
+  conflictReport,
 }: {
   doubleBookings: DoubleBooking[]
   overSubscribed: OverSubscribedWindow[]
   note: string
+  /** T21: supplies the PRD 9.5 type name and resolution for each block. */
+  conflictReport?: ConflictReport | null
 }) {
   if (doubleBookings.length === 0 && overSubscribed.length === 0) return null
 
+  // Every group here is on the `baseline` layer by construction - these are the
+  // naive process's conflicts, never this system's plan's (D-045).
+  const byType = new Map(
+    groupConflicts(conflictReport, 'baseline').map((group) => [group.type, group]),
+  )
+  const doubleBookingType = byType.get('CORRIDOR_DOUBLE_BOOKING')
+  const overSubscriptionType = byType.get('WINDOW_OVER_SUBSCRIPTION')
+
   return (
     <section className="mt-8">
-      <h2 className="mb-1 text-sm font-semibold text-slate-900">
-        The conflicts themselves{' '}
-        <span className="font-normal text-slate-500">({doubleBookings.length})</span>
-      </h2>
+      <h2 className="mb-1 text-sm font-semibold text-slate-900">The conflicts themselves</h2>
       <p className="mb-3 max-w-3xl text-xs text-slate-500">{note}</p>
+
+      <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <ConflictTypeBadge label={doubleBookingType?.label ?? 'Corridor double-booking'} />
+        <span className="text-xs text-slate-500">
+          {doubleBookings.length} on the baseline plan
+        </span>
+        {doubleBookingType && (
+          <span className="text-[11px] text-slate-500">
+            · Resolution: <strong className="font-medium text-slate-700">
+              {doubleBookingType.strategies.join(' / ')}
+            </strong>
+          </span>
+        )}
+      </div>
 
       <TableShell>
         <thead>
@@ -342,10 +375,24 @@ function ConflictEvidence({
 
       {overSubscribed.length > 0 && (
         <div className="mt-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-semibold text-slate-900">
-            Windows booked beyond capacity{' '}
-            <span className="font-normal text-slate-500">({overSubscribed.length})</span>
-          </h3>
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <ConflictTypeBadge
+              label={overSubscriptionType?.label ?? 'Window over-subscription'}
+            />
+            <h3 className="text-sm font-semibold text-slate-900">
+              Windows booked beyond capacity{' '}
+              <span className="font-normal text-slate-500">({overSubscribed.length})</span>
+            </h3>
+          </div>
+          {overSubscriptionType && (
+            <p className="mt-1 text-[11px] text-slate-500">
+              Resolution:{' '}
+              <strong className="font-medium text-slate-700">
+                {overSubscriptionType.strategies.join(' / ')}
+              </strong>{' '}
+              — classified, not applied.
+            </p>
+          )}
           <ul className="mt-2 space-y-1">
             {overSubscribed.map((window) => (
               <li key={`${window.corridorId}-${window.date}-${window.windowIndex}`} className="text-xs text-slate-600">

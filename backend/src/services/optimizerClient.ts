@@ -77,9 +77,24 @@ export async function requestOptimizer(
   }
 
   if (!response.ok) {
-    throw ApiError.badGateway(`Optimizer responded ${response.status}`, {
-      details: { url, status: response.status, body: parsed },
-    });
+    // FastAPI puts our own message in `detail`. Surfacing it is the D-037
+    // standard applied one layer out: "no ANTHROPIC_API_KEY is set" tells a
+    // Controller what to do, "Optimizer responded 503" tells them nothing, and
+    // burying the first inside the second is the same failure with extra steps.
+    // Only a string `detail` is passed through - a 422's detail is a list of
+    // validation objects, which is debugging output, not a message.
+    const detail = (parsed as { detail?: unknown } | null)?.detail;
+    const message =
+      typeof detail === 'string' && detail.trim()
+        ? detail
+        : `Optimizer responded ${response.status}`;
+    const details = { url, status: response.status, body: parsed };
+
+    // 503 from the optimizer means the service is up and a dependency is not.
+    // Relabelling that as 502 would claim the optimizer itself is broken.
+    throw response.status === 503
+      ? ApiError.serviceUnavailable(message, { details })
+      : ApiError.badGateway(message, { details });
   }
 
   return parsed;
@@ -136,10 +151,19 @@ export interface OptimizerWindow {
   endMinute: number;
 }
 
+/** T22: when trains hold the corridor. Costing input only, never schedulable. */
+export interface OptimizerOccupiedWindow {
+  startMinute: number;
+  endMinute: number;
+}
+
 export interface OptimizerCorridor {
   corridorId: string;
   dailyWindows: OptimizerWindow[];
   lowConfidence: boolean;
+  /** T22 costing input. Optional so an older caller still validates. */
+  occupiedWindows?: OptimizerOccupiedWindow[];
+  trainClassMix?: Record<string, number> | null;
 }
 
 export interface OptimizerTask {
@@ -193,6 +217,8 @@ export interface OptimizedSchedule {
   deferredTasks: OptimizerDeferredTask[];
   decisionLog: unknown[];
   knownGaps: unknown;
+  /** PRD 9.5 typed conflicts derived from knownGaps by the optimizer. */
+  conflictReport: unknown;
 }
 
 export interface BaselineSchedule {
@@ -201,6 +227,8 @@ export interface BaselineSchedule {
   deferredTasks: OptimizerDeferredTask[];
   conflicts: unknown;
   contestableTaskIds: string[];
+  /** PRD 9.5 typed conflicts for the baseline layer. */
+  conflictReport: unknown;
 }
 
 export interface PriorityQueueEntry {
@@ -249,6 +277,42 @@ export async function requestBaselineSchedule(
  * request without it, deliberately, because scoring without the real value
  * would produce a weaker ranking that still looked authoritative.
  */
+/** One asset's FR2.2 risk assessment (T16, PRD 9.1). */
+export interface RiskAssessment {
+  assetId: string;
+  failureRiskScore: number | null;
+  /** False when the model could not assess the asset; `reason` says why. */
+  computed: boolean;
+  reason: string | null;
+  breakdown: Record<string, unknown>;
+  /** PRD 9.1 honesty framing. Must survive every hop - see D-055. */
+  framing: string;
+}
+
+export interface RiskResponse {
+  assessments: RiskAssessment[];
+  count: number;
+  scoredCount: number;
+  framing: string;
+  modelType: string;
+}
+
+/**
+ * Score assets against the FR2.2 predictive risk model.
+ *
+ * Runs BEFORE the three scheduling calls, not alongside them: the risk score is
+ * an input to the FR2.3 priority score, so it has to exist before /prioritize
+ * and /optimize see the tasks.
+ */
+export async function requestAssetRisk(
+  assets: Array<{ assetId: string; degradationHistory: Array<{ healthMetric: number }> }>,
+): Promise<RiskResponse> {
+  return (await requestOptimizer('/risk', {
+    method: 'POST',
+    body: { assets },
+  })) as RiskResponse;
+}
+
 export async function requestPriorityQueue({
   tasks,
   asOf,

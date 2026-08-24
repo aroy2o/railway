@@ -67,25 +67,36 @@ def test_optimize_matches_calling_the_solver_directly(client):
 
     from app.core.priority import PriorityInputs, score_task
 
-    def priority(severity, criticality, due):
+    def scored(task_id, severity, criticality, due):
+        """T17: the endpoint carries the whole FR2.4 breakdown into the decision
+        log, not just the rounded integer, so the direct call must too."""
         return score_task(
-            PriorityInputs("x", severity, criticality, date.fromisoformat(due), H)
-        ).solver_priority
+            PriorityInputs(task_id, severity, criticality, date.fromisoformat(due), H)
+        )
+
+    e1, s1 = scored("E1", 4, 80.0, "2026-12-01"), scored("S1", 2, 40.0, "2026-12-01")
 
     direct = solve_schedule(
         [
             MaintenanceTask("E1", "A-B", "Engineering", 100, date(2026, 12, 1),
-                            priority=priority(4, 80.0, "2026-12-01"),
-                            priority_is_placeholder=False, date_raised=date(2026, 7, 1)),
+                            priority=e1.solver_priority, priority_is_placeholder=False,
+                            date_raised=date(2026, 7, 1), priority_breakdown=e1.as_dict()),
             MaintenanceTask("S1", "A-B", "S&T", 80, date(2026, 12, 1),
-                            priority=priority(2, 40.0, "2026-12-01"),
-                            priority_is_placeholder=False, date_raised=date(2026, 7, 2)),
+                            priority=s1.solver_priority, priority_is_placeholder=False,
+                            date_raised=date(2026, 7, 2), priority_breakdown=s1.as_dict()),
         ],
         {"A-B": CorridorAvailability("A-B", (DailyWindow(60, 240),))},
         horizon_start=H, horizon_days=1,
     ).as_dict()
 
     body.pop("solveSeconds"), direct.pop("solveSeconds")
+
+    # The endpoint adds the PRD 9.5 typed taxonomy (T21). Peel it off and assert
+    # it is derived from this very solve's `knownGaps` rather than from anything
+    # else - then the rest must still be byte-for-byte the solver's own output.
+    from app.core.conflicts import from_known_gaps, summarise
+
+    assert body.pop("conflictReport") == summarise(from_known_gaps(direct["knownGaps"]))
     assert body == direct
 
 
@@ -105,7 +116,11 @@ def test_baseline_matches_calling_the_function_directly(client):
         horizon_start=H, horizon_days=1,
     ).as_dict()
 
-    # The endpoint adds the contestable set for T14; everything else is verbatim.
+    # The endpoint adds the contestable set for T14 and the typed taxonomy for
+    # T21; everything else is verbatim.
+    from app.core.conflicts import from_baseline_conflicts, summarise
+
+    assert body["conflictReport"] == summarise(from_baseline_conflicts(direct["conflicts"]))
     assert body["blocks"] == direct["blocks"]
     assert body["conflicts"] == direct["conflicts"]
     assert body["metrics"] == direct["metrics"]
@@ -185,18 +200,23 @@ def test_priority_placeholder_flag_survives_and_reflects_reality(client):
     } == {True}
 
 
-def test_uses_failure_risk_is_reported_false(client):
-    """FR2.2 is T16's. Supplying a risk score must not change the ranking or the
-    flag - otherwise the score would quietly claim to be risk-aware."""
-    tasks = [{**task, "failureRiskScore": 0.95} for task in SCENARIO["tasks"]]
+def test_uses_failure_risk_tracks_whether_a_score_was_actually_supplied(client):
+    """T16 made FR2.2 real. The flag must follow the behaviour in BOTH
+    directions: true when a score was weighted, false when none was available.
+    A flag that says true regardless would be worse than no flag - it would
+    assert risk-awareness on a task with no risk data."""
+    with_risk = [{**task, "failureRiskScore": 82.0} for task in SCENARIO["tasks"]]
 
-    body = client.post("/prioritize", json={"tasks": tasks, "asOf": HORIZON}).json()
-
-    assert all(entry["usesFailureRisk"] is False for entry in body["queue"])
+    scored = client.post("/prioritize", json={"tasks": with_risk, "asOf": HORIZON}).json()
     plain = client.post("/prioritize", json={"tasks": SCENARIO["tasks"], "asOf": HORIZON}).json()
-    assert [e["priorityScore"] for e in body["queue"]] == [
+
+    assert all(entry["usesFailureRisk"] is True for entry in scored["queue"])
+    assert all(entry["usesFailureRisk"] is False for entry in plain["queue"])
+    assert [e["priorityScore"] for e in scored["queue"]] != [
         e["priorityScore"] for e in plain["queue"]
     ]
+    assert all("failure_risk" in e["contributions"] for e in scored["queue"])
+    assert all("failure_risk" not in e["contributions"] for e in plain["queue"])
 
 
 def test_baseline_conflict_report_survives_the_round_trip(client):

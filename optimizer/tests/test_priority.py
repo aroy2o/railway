@@ -43,20 +43,43 @@ def test_weights_sum_to_one():
     assert sum(PRIORITY_WEIGHTS.values()) == pytest.approx(1.0)
 
 
-def test_score_is_hand_checkable():
-    """severity 4/5=0.8, criticality 60/100=0.6, due in 45 days -> urgency
+def test_score_is_hand_checkable_without_a_risk_score():
+    """No risk supplied, so the four remaining weights are renormalised (T16).
+
+    severity 4/5=0.8, criticality 60/100=0.6, due in 45 days -> urgency
     (90-45)/90=0.5, not overdue -> breach 0.
 
-    score = 100 x (0.35x0.8 + 0.30x0.6 + 0.20x0.5 + 0.15x0)
-          = 100 x (0.28 + 0.18 + 0.10 + 0)  = 56.0
+    Renormalised weights = D-055's five divided by (1 - 0.20):
+      0.30/0.8=0.375  0.25/0.8=0.3125  0.15/0.8=0.1875  0.10/0.8=0.125
+
+    score = 100 x (0.375x0.8 + 0.3125x0.6 + 0.1875x0.5 + 0.125x0)
+          = 100 x (0.30 + 0.1875 + 0.09375 + 0) = 58.125
     """
     breakdown = score_task(make(severity=4, criticality=60.0, due_in_days=45))
 
-    assert breakdown.score == pytest.approx(56.0)
-    assert breakdown.contributions["severity"] == pytest.approx(28.0)
-    assert breakdown.contributions["asset_criticality"] == pytest.approx(18.0)
-    assert breakdown.contributions["sla_urgency"] == pytest.approx(10.0)
+    assert breakdown.score == pytest.approx(58.125)
+    assert breakdown.contributions["severity"] == pytest.approx(30.0)
+    assert breakdown.contributions["asset_criticality"] == pytest.approx(18.75)
+    assert breakdown.contributions["sla_urgency"] == pytest.approx(9.375)
     assert breakdown.contributions["sla_breach"] == pytest.approx(0.0)
+    assert breakdown.uses_failure_risk is False
+
+
+def test_score_is_hand_checkable_with_a_risk_score():
+    """The same task WITH an FR2.2 risk score, on the full five-factor set.
+
+    risk 75/100 = 0.75.
+    score = 100 x (0.30x0.8 + 0.25x0.6 + 0.20x0.75 + 0.15x0.5 + 0.10x0)
+          = 100 x (0.24 + 0.15 + 0.15 + 0.075 + 0) = 61.5
+    """
+    breakdown = score_task(make(severity=4, criticality=60.0, due_in_days=45, risk=75.0))
+
+    assert breakdown.score == pytest.approx(61.5)
+    assert breakdown.contributions["severity"] == pytest.approx(24.0)
+    assert breakdown.contributions["asset_criticality"] == pytest.approx(15.0)
+    assert breakdown.contributions["failure_risk"] == pytest.approx(15.0)
+    assert breakdown.contributions["sla_urgency"] == pytest.approx(7.5)
+    assert breakdown.uses_failure_risk is True
 
 
 def test_contributions_always_sum_to_the_score():
@@ -77,8 +100,8 @@ def test_asset_criticality_separates_tasks_of_identical_severity():
     high = score_task(make("HIGH", severity=3, criticality=90.75))
 
     assert high.score > low.score
-    # 0.30 weight x (90.75-27.92)/100 x 100 = 18.85 points of separation.
-    assert high.score - low.score == pytest.approx(18.85, abs=0.01)
+    # Renormalised 0.3125 weight x (90.75-27.92)/100 x 100 = 19.63 points.
+    assert high.score - low.score == pytest.approx(19.63, abs=0.01)
 
 
 def test_severity_outranks_asset_criticality_at_the_margin():
@@ -197,14 +220,34 @@ def test_scoring_is_deterministic():
 # FR2.2 stays out until T16                                                    #
 # --------------------------------------------------------------------------- #
 
-def test_failure_risk_is_accepted_and_deliberately_unused():
-    """Folding a fabricated risk number in to make the formula look complete is
-    exactly what PRD 9.1 warns against. T16 owns this input."""
+def test_failure_risk_now_moves_the_score_and_says_so(monkeypatch):
+    """T16 replaced T7's deliberate no-op. The flag has to flip WITH the
+    behaviour, or a consumer cannot tell a risk-aware score from a renormalised
+    one - the flag existing but lying is worse than no flag."""
     without = score_task(make("T", risk=None))
-    with_risk = score_task(make("T", risk=0.97))
+    low = score_task(make("T", risk=10.0))
+    high = score_task(make("T", risk=90.0))
 
-    assert with_risk.score == without.score
-    assert with_risk.uses_failure_risk is False
+    assert without.uses_failure_risk is False
+    assert low.uses_failure_risk is True and high.uses_failure_risk is True
+    assert high.score > low.score
+    assert "failure_risk" not in without.contributions
+    assert "failure_risk" in high.contributions
+
+
+def test_a_missing_risk_score_is_not_treated_as_low_risk():
+    """The trap this renormalisation exists to avoid.
+
+    If the absent factor simply contributed zero, a task whose asset lacks
+    degradation history would be pushed DOWN the queue for having a data gap -
+    a missing measurement scored as a favourable finding. Renormalising keeps it
+    comparable: with no risk data, its score must sit between what it would get
+    at zero risk and at full risk, not at the bottom."""
+    no_data = score_task(make("T", risk=None))
+    zero_risk = score_task(make("T", risk=0.0))
+    full_risk = score_task(make("T", risk=100.0))
+
+    assert zero_risk.score < no_data.score < full_risk.score
 
 
 # --------------------------------------------------------------------------- #

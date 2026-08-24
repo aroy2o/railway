@@ -80,13 +80,135 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 ## 🟠 Strong differentiators (start only once all 🔴 above is `done`)
 
-- [ ] `todo` — **T16**: Predictive risk model (9.1) — train on synthetic degradation history, honestly-labeled in UI/docs
-- [ ] `todo` — **T17**: Decision log generation in the optimizer (structured, per-task reasoning)
-- [ ] `todo` — **T18**: `/explain` endpoint (LLM call grounded in decision log) + "Ask the Planner" UI
+- [x] `done` — **T16**: Predictive asset-risk model (FR2.2, PRD 9.1), honestly framed
+  - `optimizer/app/core/risk.py`: linear trend extrapolation to an intervention
+    threshold. Chosen because it **matches T4's generative process** (constant
+    per-asset decline + N(0, 0.015) noise), not as an approximation of it.
+  - **No classifier**, and the reason is a fact about the data: there are no
+    failure labels. Labels derived from the same series would be circular and any
+    accuracy figure meaningless. PRD 9.1 offers the option; the data does not.
+  - **Probability-of-crossing was built, measured and rejected** — noise is too
+    small relative to the decline, so it collapsed to near-binary (30 of 55 under
+    5, 23 over 50). Time-to-threshold keeps the information and stays continuous.
+  - Weights reconsidered, not bolted on (D-055): **30/25/20/15/10**. Risk earns
+    0.20 on the same evidence criticality earned 0.30 — near-orthogonal to both
+    existing physical factors (rho -0.084 vs severity, +0.141 vs criticality) —
+    and is capped *below* criticality because it comes from simulated data while
+    criticality is anchored in real train counts.
+  - Ranking moved: rho +0.873, median rank move 8 places, `failure_risk`
+    dominant for 15 of 89 tasks. **The plan did not change** — same 36/53 split,
+    same blocks, same batches, same utilisation (D-024: no capacity contest).
+  - Honest gaps: <3 observations -> `null` + reason; no declining trend -> `0.0`
+    + reason; missing score -> the other four weights **renormalise** rather than
+    contributing zero, so a data gap is never scored as a favourable finding.
+  - Framing enforced at every layer and tested to *appear*: stored on the asset
+    and the schedule, returned by `/risk` twice over, rendered under the priority
+    queue, and returned by `/explain` as `context.modelFramings`
+    **independently of whether the model repeated it**.
+  - Tests: 16 risk (4 mutation-verified), plus updated priority/API/decision-log
+    and a backend round-trip asserting the disclaimer survives to MongoDB.
+- [x] `done` — **T17**: Decision log generation in the optimizer (structured, per-task reasoning)
+  - Audited live against real generated data before changing anything. Deferral
+    reasons were already complete (53/53 with reason + detail); everything else
+    was thinner than assumed.
+  - `priorityScore` + FR2.4 breakdown + `dominantPriorityFactor`: **0/89 → 89/89**.
+    `/optimize` was computing the whole breakdown and keeping only the rounded
+    integer (D-048) — the same computed-then-discarded shape as D-047.
+  - `department`, `eligibleWindowsConsidered`: **0/89 → 89/89**.
+  - Cross-department batching (`sharedWith`, `isCrossDepartmentBatch`): **0 → 5
+    tasks across 2 blocks**. The project's headline differentiator was not
+    recorded in the log that explains it.
+  - Typed-conflict cross-reference: **0 → 18/89** entries.
+  - Overrides deliberately NOT added: D-043 keeps "what the AI decided" and
+    "what the plan is now" separate. A test asserts "override" never appears in
+    the log. The join happens at grounding time instead.
+  - All additive — no constraint or objective change. 12 tests, 4
+    mutation-verified.
+- [x] `done` — **T18**: `/explain` endpoint (LLM call grounded in decision log) + "Ask the Planner" UI
+  - **Grounding contract** (`optimizer/app/core/grounding.py`): `assemble_context`
+    is a pure function selecting the real records that bear on a question. The
+    model never sees the schedule — only a flat list of `Fact`s, each carrying
+    the id of the record it came from, so an answer is auditable (D-049).
+  - **Runtime verification** (`explainer.py`): every number in the model's reply
+    is checked against the values the context actually contained. Ungrounded
+    figures are returned beside the answer and rendered as a warning, never
+    styled as a clean answer (D-050). Mutation-verified 5 ways.
+  - **Honest refusal**: six `UNAVAILABLE_TOPICS` (train impact → T22, failure
+    risk → T16, approval/audit → T19, what-if → T20, policy → T23, weather),
+    each with a reason and the task that would supply it (D-051).
+  - `POST /api/schedules/:id/explain` and `/latest/explain`; Node gathers, Python
+    grounds and calls Claude. `EXPLAIN_TIMEOUT_MS` separate from the solver's.
+  - No `ANTHROPIC_API_KEY` → **503 with an actionable message**, surfaced intact
+    to the Controller (D-051 extends D-037 one layer out).
+  - **Provider is pluggable** (D-052). Default `LLM_PROVIDER=groq` with
+    `openai/gpt-oss-120b`; the Anthropic path is intact behind one env var.
+    Do NOT switch to a `groq/compound-*` model — they can reach the internet and
+    bill against gpt-oss's rate limit anyway.
+  - **Context size budget** (D-053): an unreferenced question once built an
+    ~11,000-token prompt, over the per-minute allowance. Now ~1,750 tokens with
+    ranked survival, and anything dropped is reported to the model rather than
+    silently lost.
+  - **Live behaviour verified against the real API** — 12 calls, 4 questions × 3
+    repetitions. The model was correct in all 12; the run exposed **three
+    false-accusation bugs in this project's own verifier** (month of an ISO
+    date, thousands separator, non-breaking hyphen), all fixed with regression
+    tests (D-054).
 - [ ] `todo` — **T19**: Human-in-the-loop approval workflow (FR6.1) + `audit_logs` collection + Audit Trail view
 - [ ] `todo` — **T20**: What-if simulation endpoint + UI panel (FR5)
-- [ ] `todo` — **T21**: Conflict detection + typed classification (corridor/train-impact/resource/dependency) + display (FR4)
-- [ ] `todo` — **T22**: Train-impact scoring integrated into the CP-SAT objective function (9.6)
+- [x] `done` — **T21**: Conflict detection + typed classification (corridor/train-impact/resource/dependency) + display (FR4)
+  - `optimizer/app/core/conflicts.py`: the PRD 9.5 taxonomy. Four detectable types
+    (`CORRIDOR_DOUBLE_BOOKING`, `WINDOW_OVER_SUBSCRIPTION`, `RESOURCE_CONTENTION`,
+    `DEPENDENCY_ORDER_VIOLATION`), each with a named resolution strategy.
+  - `TRAIN_IMPACT_CONFLICT` is named but **not detected** — reported in
+    `notYetDetectable` with a reason, never as a count of zero. Needs T22.
+  - Resolutions are **classified, not applied**. Nothing here changes a plan;
+    resource no-overlap is still T25, dependency precedence still T24.
+  - Real corpus: optimized plan 11 resource contention + 5 dependency order;
+    baseline 6 corridor double-bookings + 3 over-subscribed windows. Counts
+    unchanged from T6/T8 — the taxonomy names them, it does not re-detect them.
+  - All 11 resource conflicts are same-department, because T4's resource
+    catalogue is keyed by department, so cross-department contention cannot
+    occur by construction. The strategy differs accordingly ("Stagger within the
+    department" rather than PRD 9.5's cross-department "Only one proceeds"),
+    and a test asserts this so a change to the resource model surfaces.
+  - `detect_known_gaps` was returning 3 fields per conflict where the baseline
+    returned 7. Enriched to 9 — additive, all data already in scope (D-047).
+  - Never totalled across plans (D-045); stored once in Python, not recomputed
+    per layer (D-046).
+  - Tests: 12 optimizer (3 mutation-verified), 2 backend round-trip, 9 frontend.
+  - UI: `KnownLimitations` on the dashboard, type badges + resolution on the
+    comparison screen's conflict evidence. Both visually confirmed.
+- [x] `done` — **T22 (Phase A)**: Train-impact scoring + traffic-block costing (PRD 9.6)
+  - **Phase A only, decided on measurement not budget** (D-056). Phase B — a
+    penalty term in the CP-SAT objective — was scoped out because T3 kept train
+    times but not per-service classes, so the class split is *apportioned*.
+    Reporting an estimate is fine; putting one inside the objective would let it
+    drive the solver's choices, not just its reporting.
+  - Phase B's prize measured first: **all 53 deferred tasks are rescuable** by
+    displacing 1-16 trains (median 3). Not scoped out because it was small —
+    scoped out because the ripple hits D-031's contestable-36 framing and four
+    prior tasks' comparisons, and the data cannot justify λ yet.
+  - Class weighting **4/2/1/0.7**, measured against alternatives: flat weighting
+    produces a constant (spread 0.00, 325 ties) — the exact failure mode a
+    "score" that carries no information looks like.
+  - `TRAIN_IMPACT_CONFLICT` **graduated cleanly**: out of `notYetDetectable`,
+    into a new `checkedAndClear`, never both. Real count 0 — an *earned* zero,
+    since every block is checked against observed occupancy.
+  - `/explain` grounding: `TRAIN_IMPACT_GAP_FACT` removed (the claim became
+    false) and replaced with the measured/estimated boundary — the same
+    stale-claim cleanup T16 did to its own "model not built" line.
+  - **The plan is unchanged**: 36 scheduled / 53 deferred, 25 blocks, 2 batches,
+    74.33% utilisation. Phase A is read-only by construction.
+  - Three bugs found and fixed: the span sweep jumped undefined gaps (then
+    over-corrected into strict adjacency, which T3's clearance margin breaks);
+    "0 trains displaced" was reported for corridors whose occupancy was never
+    sent; and Mongoose's `deferredSchema` silently stripped the costing (D-033's
+    failure mode in a new layer).
+  - One real finding: **TSK-00073 needs no train displaced at all** — 22 minutes
+    of clearance margin. `clearanceMinutes` now travels with every costing, so a
+    0-train block is never reported as free.
+  - Tests: 31 on the impact model (4 mutation-verified, plus a brute-force check
+    that boundary-aligned search is exhaustive), backend persistence regression.
 - [ ] `todo` — **T23**: Policy sliders on Controller Dashboard, wired to objective function weights (13.1)
 
 ## 🟡 Stretch (only if time remains after 🟠 is done)

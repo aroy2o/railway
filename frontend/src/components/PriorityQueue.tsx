@@ -20,9 +20,24 @@ import { DepartmentPill } from './Table.tsx'
 const FACTOR_LABEL: Record<string, string> = {
   severity: 'severity',
   asset_criticality: 'asset criticality',
+  failure_risk: 'predicted risk',
   sla_urgency: 'SLA urgency',
   sla_breach: 'overdue',
 }
+
+/**
+ * PRD 9.1 / NG4, shown wherever the FR2.2 score is.
+ *
+ * Not optional decoration: the score is a model output over SIMULATED
+ * degradation data, and PRD Section 6 lists presenting it as a real failure
+ * forecast as an explicit non-goal. A test asserts this string renders whenever
+ * a risk figure does.
+ */
+const RISK_FRAMING =
+  'Predicted risk is a prototype model trained on simulated asset degradation patterns, ' +
+  'designed to be retrained on real railway asset-health data when available. It does not ' +
+  'predict real Indian Railways asset failures.'
+
 
 interface PriorityQueueProps {
   tasks: Task[]
@@ -50,13 +65,19 @@ export function PriorityQueue({ tasks, schedule, limit = 12 }: PriorityQueueProp
   )
 
   const unscored = tasks.filter((task) => task.priorityScore === null).length
+  // The framing appears only when a risk figure does - a disclaimer on a screen
+  // showing no risk scores is noise that trains people to skip disclaimers.
+  const showsRisk = ranked.some(
+    (task) => task.failureRiskScore !== null && task.failureRiskScore !== undefined,
+  )
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
       <header className="border-b border-slate-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-slate-900">Priority queue</h2>
         <p className="text-xs text-slate-500">
-          Ranked by severity, asset criticality and SLA pressure. Top {ranked.length} of{' '}
+          Ranked by severity, asset criticality, predicted risk and SLA pressure. Top{' '}
+          {ranked.length} of{' '}
           {tasks.length}.
         </p>
       </header>
@@ -95,6 +116,15 @@ export function PriorityQueue({ tasks, schedule, limit = 12 }: PriorityQueueProp
                       {FACTOR_LABEL[task.dominantPriorityFactor ?? ''] ??
                         task.dominantPriorityFactor}
                     </span>
+                    {task.failureRiskScore !== null &&
+                      task.failureRiskScore !== undefined && (
+                        <span
+                          className="rounded bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-800 ring-1 ring-violet-200 ring-inset"
+                          title={RISK_FRAMING}
+                        >
+                          risk {Math.round(task.failureRiskScore)}
+                        </span>
+                      )}
                     {task.priorityBreakdown?.isOverdue && (
                       <span className="ml-1 font-medium text-rose-600">· overdue</span>
                     )}
@@ -121,6 +151,12 @@ export function PriorityQueue({ tasks, schedule, limit = 12 }: PriorityQueueProp
         <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-400">
           {unscored} task{unscored > 1 ? 's' : ''} not yet scored — generate a schedule to rank
           them.
+        </p>
+      )}
+
+      {showsRisk && (
+        <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">
+          <span className="font-medium text-slate-600">Predicted risk:</span> {RISK_FRAMING}
         </p>
       )}
     </section>

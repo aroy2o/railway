@@ -59,11 +59,39 @@ from datetime import date
 #:                           being months late can never outrank genuine
 #:                           criticality. Verified: see
 #:                           `test_a_badly_overdue_trivial_task_cannot_outrank_a_fresh_critical_one`.
+#:   failure_risk      0.20  FR2.2, added by T16. Likelihood-of-failing, which
+#:                           is a different question from asset_criticality's
+#:                           consequence-if-it-fails - the two halves of a risk
+#:                           matrix, so they coexist rather than compete.
+#:                           Measured near-orthogonal to both existing physical
+#:                           factors on the real corpus (rho -0.084 vs severity,
+#:                           +0.141 vs criticality), which is the same evidence
+#:                           that earned criticality its weight in D-026.
+#:                           Capped BELOW criticality on purpose: this score is
+#:                           derived from SIMULATED degradation data, while
+#:                           criticality is anchored in real train counts (T3),
+#:                           and a synthetic input must not outweigh a measured
+#:                           one. See D-055.
 PRIORITY_WEIGHTS = {
-    "severity": 0.35,
-    "asset_criticality": 0.30,
-    "sla_urgency": 0.20,
-    "sla_breach": 0.15,
+    "severity": 0.30,
+    "asset_criticality": 0.25,
+    "failure_risk": 0.20,
+    "sla_urgency": 0.15,
+    "sla_breach": 0.10,
+}
+
+#: The weights to use when no failure-risk score is available for a task.
+#:
+#: NOT the old D-026 set: the remaining four are renormalised so they still sum
+#: to 1.0, keeping their relative proportions. A task whose asset has too little
+#: degradation history must not be systematically ranked lower than one that has
+#: it - that would penalise a data gap as though it were a low-risk finding,
+#: which is exactly the "not computed is not the same as computed to be low"
+#: error this project avoids elsewhere (D-015, D-045).
+WEIGHTS_WITHOUT_RISK = {
+    name: weight / (1.0 - PRIORITY_WEIGHTS["failure_risk"])
+    for name, weight in PRIORITY_WEIGHTS.items()
+    if name != "failure_risk"
 }
 
 #: Severity is 1-5, so dividing by 5 keeps a floor of 0.2 rather than mapping the
@@ -72,6 +100,9 @@ SEVERITY_MAX = 5
 
 #: Asset criticality (FR2.1) is already a 0-100 score.
 CRITICALITY_MAX = 100.0
+
+#: Failure risk (FR2.2, T16) is likewise 0-100.
+RISK_MAX = 100.0
 
 #: Days over which SLA urgency ramps from 0 (far away) to 1 (due now). 90 is not
 #: arbitrary: PRD 5.2 sets the longest SLA tier at 90 days, so this is exactly
@@ -177,8 +208,13 @@ def sla_breach(days_to_due: int) -> float:
 
 def score_task(inputs: PriorityInputs, weights: dict[str, float] | None = None) -> PriorityBreakdown:
     """Compute one task's FR2.3 priority score, with its FR2.4 breakdown."""
-    active = weights or PRIORITY_WEIGHTS
     days_to_due = (inputs.sla_due_date - inputs.as_of).days
+    has_risk = inputs.failure_risk_score is not None
+
+    if weights is not None:
+        active = weights
+    else:
+        active = PRIORITY_WEIGHTS if has_risk else WEIGHTS_WITHOUT_RISK
 
     components = {
         "severity": _clamp(inputs.severity / SEVERITY_MAX),
@@ -186,6 +222,14 @@ def score_task(inputs: PriorityInputs, weights: dict[str, float] | None = None) 
         "sla_urgency": sla_urgency(days_to_due),
         "sla_breach": sla_breach(days_to_due),
     }
+    if "failure_risk" in active:
+        if not has_risk:
+            raise ValueError(
+                "weights include failure_risk but no failure_risk_score was supplied; "
+                "pass WEIGHTS_WITHOUT_RISK, or a score"
+            )
+        # FR2.2 (T16). 0-100 like criticality, so the same normalisation.
+        components["failure_risk"] = _clamp(inputs.failure_risk_score / RISK_MAX)
     contributions = {name: 100.0 * active[name] * value for name, value in components.items()}
     total = sum(contributions.values())
 
@@ -200,8 +244,10 @@ def score_task(inputs: PriorityInputs, weights: dict[str, float] | None = None) 
         dominant_factor=max(contributions, key=lambda name: (contributions[name], name)),
         days_to_due=days_to_due,
         is_overdue=days_to_due < 0,
-        # FR2.2 is T16's. Reported so nobody mistakes this for a risk-aware score.
-        uses_failure_risk=False,
+        # True only when a real FR2.2 score was supplied AND weighted. Reported
+        # so nobody mistakes a renormalised four-factor score for a risk-aware
+        # one, and so the PRD 9.1 framing can be attached wherever it is True.
+        uses_failure_risk="failure_risk" in active,
     )
 
 

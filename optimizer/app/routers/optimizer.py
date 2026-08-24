@@ -31,6 +31,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.config import Settings, get_settings
 from app.core.baseline import run_baseline, structurally_contestable
+from app.core.conflicts import (
+    from_baseline_conflicts,
+    from_known_gaps,
+    from_train_impact,
+    summarise,
+)
 from app.core.priority import PriorityInputs, rank_tasks
 from app.core.scheduler import (
     CorridorAvailability,
@@ -57,6 +63,13 @@ def _to_corridors(payload: list[CorridorIn]) -> dict[str, CorridorAvailability]:
                 for window in sorted(corridor.daily_windows, key=lambda w: w.start_minute)
             ),
             low_confidence=corridor.low_confidence,
+            # T22: carried for costing a traffic block only. The model builder
+            # never reads these - it assigns solely into `daily_windows`.
+            occupied_windows=tuple(
+                DailyWindow(window.start_minute, window.end_minute)
+                for window in sorted(corridor.occupied_windows, key=lambda w: w.start_minute)
+            ),
+            train_class_mix=corridor.train_class_mix,
         )
         for corridor in payload
     }
@@ -75,7 +88,11 @@ def _to_tasks(payload: list[TaskIn], as_of) -> list[MaintenanceTask]:
     tasks: list[MaintenanceTask] = []
     for task in payload:
         if task.asset_criticality_score is not None:
-            priority = score_task(
+            # T17/D-048: this call already computes the whole FR2.4 breakdown.
+            # It used to be reduced to one integer here and the reasoning thrown
+            # away, which left the decision log unable to answer "why is this
+            # task ranked where it is". Keep it and pass it through.
+            breakdown = score_task(
                 PriorityInputs(
                     task_id=task.task_id,
                     severity=task.severity,
@@ -84,10 +101,13 @@ def _to_tasks(payload: list[TaskIn], as_of) -> list[MaintenanceTask]:
                     as_of=as_of,
                     failure_risk_score=task.failure_risk_score,
                 )
-            ).solver_priority
+            )
+            priority = breakdown.solver_priority
+            priority_breakdown = breakdown.as_dict()
             is_placeholder = False
         else:
             priority, is_placeholder = task.severity, True
+            priority_breakdown = None
 
         tasks.append(
             MaintenanceTask(
@@ -101,6 +121,7 @@ def _to_tasks(payload: list[TaskIn], as_of) -> list[MaintenanceTask]:
                 required_resource_ids=tuple(task.required_resource_ids),
                 priority_is_placeholder=is_placeholder,
                 date_raised=task.date_raised,
+                priority_breakdown=priority_breakdown,
             )
         )
     return tasks
@@ -203,7 +224,14 @@ def optimize(request: SolveRequest, settings: Settings = Depends(get_settings)) 
         "optimize: %d tasks, %d corridors, %s in %.3fs",
         len(request.tasks), len(request.corridors), result.status, result.solve_seconds,
     )
-    return result.as_dict()
+    payload = result.as_dict()
+    # PRD 9.5 - the same gaps, named and with a resolution strategy each.
+    # Additive: `knownGaps` is untouched, so nothing that already reads it breaks.
+    payload["conflictReport"] = summarise(
+        from_known_gaps(payload["knownGaps"])
+        + from_train_impact(payload["knownGaps"]["trainImpactConflicts"]["conflicts"])
+    )
+    return payload
 
 
 @router.post("/baseline")
@@ -253,6 +281,9 @@ def baseline(request: SolveRequest, settings: Settings = Depends(get_settings)) 
         ]
 
     payload["contestableTaskIds"] = sorted(structurally_contestable(tasks, corridors))
+    # PRD 9.5 typing for the baseline's own conflicts. Kept on the `baseline`
+    # layer so it can never be totalled with the optimized plan's (D-045).
+    payload["conflictReport"] = summarise(from_baseline_conflicts(payload["conflicts"]))
     logger.info(
         "baseline: %d tasks, %d double-bookings",
         len(request.tasks), payload["metrics"]["doubleBookings"],

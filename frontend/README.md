@@ -147,7 +147,9 @@ The window list comes from `/override-targets`, which runs the same validator as
 the write path, so nothing offered can be refused. The refusal path is still
 fully built, because validity can change between opening the panel and
 confirming. Both outcomes render the full six-check re-validation, not a bare
-verdict. `OverrideHistory` shows every amendment with the solver's original
+verdict.
+
+`OverrideHistory` shows every amendment with the solver's original
 placement kept alongside it.
 
 The Gantt renders `effectivePlan.blocks` where present — the plan as amended —
@@ -156,6 +158,89 @@ while `blocks` stays untouched as what the solver produced (D-043).
 **Known limitations** renders `knownGaps` — the constraints the solver does not
 enforce (T24, T25) — plus any `generationErrors`. That report has now survived
 four hops: dataclass, HTTP, MongoDB, and screen.
+
+## Traffic-block cost (PRD 9.6, T22)
+
+`DeferredTasksPanel` shows, per deferred task, what forcing it through would
+cost: trains displaced, minutes displaced, and clearance margin consumed. The
+caveat above the list renders only when at least one costing exists.
+
+The caveat says three things on purpose: displaced counts and minutes are
+**measured**, the class split behind the weighting is **apportioned**, and this
+system **costs the option without scheduling it**. All three are load-bearing —
+the last one is what stops the panel reading as a recommendation.
+
+## Predicted risk (FR2.2, PRD 9.1, T16)
+
+Surfaced inside the existing priority displays, not on a page of its own: a
+`risk NN` badge on each queue row that has a score, and the PRD 9.1 disclaimer
+as a footer under the queue.
+
+The footer renders **only when a risk figure is on screen**. A disclaimer shown
+on a screen with no risk scores is noise, and noise is what teaches people to
+skip disclaimers.
+
+In Ask the Planner, `context.modelFramings` is rendered beside the answer
+whenever the grounding context carried a risk framing — **regardless of whether
+the model repeated it**. The prompt does ask for it; a prompt is not a guarantee
+(D-050), and a risk figure shown without its "trained on simulated data" caveat
+is precisely the claim PRD Section 6 NG4 forbids.
+
+## Ask the Planner (PRD 9.2, T18)
+
+`lib/askPlanner.ts` + `components/AskThePlanner.tsx`, on the Controller Dashboard
+under the timeline. A text box and an answer — not a chat interface; conversation
+history would imply the system carries context between questions, which it does
+not.
+
+Showing the answer is the easy half. `answerState()` distinguishes three
+outcomes, and they must never render alike:
+
+| State | Meaning | Rendered as |
+|---|---|---|
+| `answered` | Grounded, and the question was answerable | Normal answer + cited records |
+| `declined` | The system said it does not hold that data | Normal outcome, with the reason and the task that would supply it |
+| `ungrounded` | The optimizer's verifier found a figure with no counterpart in any record | **Warning above the answer**, naming the offending numbers |
+
+`ungrounded` outranks `declined`: a reply that both hedges *and* states an
+invented figure is the worst case, because it reads as cautious. A test asserts
+that ordering.
+
+The suggested-question chips deliberately include one the system **cannot**
+answer ("How many trains will be delayed by this plan?"). The honest refusal is
+the behaviour most worth demonstrating, and a Controller should not have to think
+of it themselves.
+
+## Typed conflicts (PRD 9.5, T21)
+
+`lib/conflicts.ts` holds **display logic only** — labels, ordering, grouping. It
+never re-derives a conflict type or a resolution; both come from the optimizer
+(D-046).
+
+`groupConflicts(report, plan)` takes the plan as a **required** argument and
+drops anything that does not match, and `planTotal()` has no cross-plan
+counterpart. That is not an oversight. On the real corpus the optimized plan
+carries 16 conflicts and the baseline carries 9; a combined "25" would describe
+no plan that exists, and would let the process being argued against inflate the
+count attributed to this system. Same class of trap as D-031's utilisation
+figure, handled the same way — the misleading shape is unavailable rather than
+merely discouraged. See D-045.
+
+Two surfaces render it:
+
+- **`KnownLimitations`** (dashboard) — the optimized layer. Each type shows its
+  count, its resolution strategy, the task that would enforce it (T24/T25), and
+  up to three real instances with corridor and date. Below them, a **"Not
+  checked for at all"** block lists types PRD 9.5 names that nothing detects —
+  currently train impact, which needs T22. Listed with a reason, never as a
+  count of zero.
+- **`ConflictEvidence`** (comparison screen) — the baseline layer, with a type
+  badge and resolution above each table. The count is labelled "on the baseline
+  plan" so a screenshot cannot be read as this system's conflicts.
+
+The UI copy says "labelled, not applied" and "classified, not applied" because
+that is literally true: T21 changes no plan.
+
 
 ## Tests
 

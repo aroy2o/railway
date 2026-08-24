@@ -55,6 +55,17 @@ class WindowIn(ApiModel):
         return self
 
 
+class OccupiedWindowIn(ApiModel):
+    """When trains actually hold the corridor (T3).
+
+    Used only to cost a traffic block (T22 Phase A). The solver never assigns
+    work into these - it only ever uses `daily_windows`.
+    """
+
+    start_minute: int = Field(ge=0, le=1440)
+    end_minute: int = Field(ge=0, le=1440)
+
+
 class CorridorIn(ApiModel):
     """A corridor's free-window pattern."""
 
@@ -63,6 +74,12 @@ class CorridorIn(ApiModel):
     #: T3's data-quality flag. The solver refuses to schedule a flagged
     #: corridor; surfaced here so Node cannot accidentally send one.
     low_confidence: bool = False
+    #: T22. Optional - without them a deferral is reported as UNCOSTED rather
+    #: than as costing zero, because "we did not look" is not "nothing there".
+    occupied_windows: list[OccupiedWindowIn] = Field(default_factory=list)
+    #: T3's observed train-class counts, for apportioning a displacement's
+    #: class split. See `app.core.trains`.
+    train_class_mix: dict[str, int] | None = None
 
     @field_validator("daily_windows")
     @classmethod
@@ -98,8 +115,14 @@ class TaskIn(ApiModel):
     depends_on_task_id: str | None = Field(default=None, max_length=64)
     required_resource_ids: list[str] = Field(default_factory=list)
 
-    #: FR2.2, task T16. Accepted and deliberately unused by the priority engine.
-    failure_risk_score: float | None = Field(default=None, ge=0, le=1)
+    #: FR2.2 predicted failure risk (T16). Real since T16; the priority engine
+    #: weights it at 0.20 when present and renormalises the other four when not.
+    # 0-100, matching `asset_criticality_score`. T7 declared this 0-1 while the
+    # field was unpopulated and unused; T16 made it real and aligned the two
+    # scales, because two 0-100 factors and one 0-1 factor in the same weighted
+    # sum is a silent-scaling bug waiting to happen. Nothing consumed the old
+    # range - it was null on every task (D-055).
+    failure_risk_score: float | None = Field(default=None, ge=0, le=100)
 
 
 class ScenarioIn(ApiModel):
@@ -177,3 +200,28 @@ class PrioritizeRequest(ApiModel):
                 f"value Node must join from the assets collection; missing for: {missing[:10]}"
             )
         return self
+
+
+class DegradationPointIn(ApiModel):
+    """One simulated asset-health observation (T4)."""
+
+    #: Accepted for contract fidelity with T4's stored shape and then ignored:
+    #: observations are evenly spaced by construction, and reading the dates
+    #: would invite a precision the generator does not support. Typed as a
+    #: string rather than a date because the field name shadows the `date` type
+    #: imported above - and a parsed value nothing reads is dead weight anyway.
+    date: str | None = None
+    health_metric: float = Field(ge=0, le=1)
+
+
+class AssetRiskIn(ApiModel):
+    """An asset and its simulated degradation history (FR2.2, PRD 9.1)."""
+
+    asset_id: str = Field(min_length=1, max_length=64)
+    degradation_history: list[DegradationPointIn] = Field(default_factory=list)
+
+
+class RiskRequest(ApiModel):
+    """Assets to score. See PRD 9.1 on how the output must be framed."""
+
+    assets: list[AssetRiskIn] = Field(min_length=1)

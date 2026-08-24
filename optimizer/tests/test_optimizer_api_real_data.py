@@ -154,7 +154,16 @@ def test_prioritize_ranks_the_real_backlog_over_http(client, payload):
     assert scores == sorted(scores, reverse=True)
     # T7 measured the real range at 25.04-87.31.
     assert scores[0] > 80 and scores[-1] < 30
-    assert all(entry["usesFailureRisk"] is False for entry in body["queue"])
+    # T16 made FR2.2 real, and the seeded corpus now carries risk scores, so the
+    # flag is True wherever a score came through. It must still be False for any
+    # task whose asset the model could not assess - the flag tracks the data,
+    # not the feature's existence.
+    with_risk = [t for t in payload["tasks"] if t.get("failureRiskScore") is not None]
+    by_id = {entry["taskId"]: entry for entry in body["queue"]}
+    for task in payload["tasks"]:
+        expected = task.get("failureRiskScore") is not None
+        assert by_id[task["taskId"]]["usesFailureRisk"] is expected
+    assert with_risk, "expected the real corpus to carry FR2.2 scores after T16"
 
 
 def test_endpoints_are_deterministic_over_http(client, payload):

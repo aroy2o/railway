@@ -199,11 +199,38 @@ export interface ScheduleBlock {
   trainImpact: unknown | null
 }
 
+/** T22: what forcing a deferred task through as a traffic block would cost. */
+export interface DisplacementOption {
+  corridorId: string
+  requiredMinutes: number
+  feasible: boolean
+  reason: string | null
+  window: string | null
+  note: string
+  framing: string
+  impact: {
+    corridorId: string
+    window: string
+    /** Real: from T3's timetable. */
+    measured: {
+      trainsAffected: number
+      displacedMinutes: number
+      /** Safety buffer consumed. A 0-train block is still not free. */
+      clearanceMinutes: number
+    }
+    /** Apportioned from the corridor's class mix, not per-service measured. */
+    estimated: { weightedImpact: number; tierSplit: Record<string, number> }
+    framing: string
+  } | null
+}
+
 export interface DeferredTask {
   taskId: string
   reason: 'EXCEEDS_LONGEST_WINDOW' | 'NO_CAPACITY' | 'NO_WINDOW_ON_CORRIDOR'
   /** Human-readable and already good; render it rather than re-wording it. */
   detail: string
+  /** Absent when the corridor carried no occupancy data to cost against. */
+  displacementOption?: DisplacementOption
 }
 
 export interface ScheduleMetrics {
@@ -216,6 +243,9 @@ export interface ScheduleMetrics {
   blockUtilisationPct: number
   unusedBlockMinutes: number
 }
+
+/** PRD 9.5 typed taxonomy, derived by the optimizer (see lib/conflicts.ts). */
+export type { ConflictReport, TypedConflict } from '../lib/conflicts.ts'
 
 export interface KnownGaps {
   resourceConflicts: { count: number; note: string; conflicts: unknown[] }
@@ -253,6 +283,8 @@ export interface BaselineResult {
     note: string
   }
   contestableTaskIds?: string[]
+  /** PRD 9.5 typed conflicts on the BASELINE layer. Never summed with the plan's. */
+  conflictReport?: import('../lib/conflicts.ts').ConflictReport | null
 }
 
 /** Where a task sits, or sat, in a plan. */
@@ -332,6 +364,8 @@ export interface Schedule {
     contributingFactors: Record<string, unknown>
   }>
   knownGaps: KnownGaps
+  /** PRD 9.5 typed conflicts on the OPTIMIZED layer (T21). */
+  conflictReport: import('../lib/conflicts.ts').ConflictReport | null
   contestableTaskIds: string[]
   /** FR9.3 comparison, computed once by T10 with D-031's caveats embedded. */
   comparisonToBaseline: ComparisonToBaseline | null
@@ -529,6 +563,21 @@ export const api = createApi({
       invalidatesTags: ['Schedule', 'Override'],
     }),
 
+    /**
+     * Ask the Planner (FR8.2). Not tagged for invalidation - asking a question
+     * changes nothing, and re-fetching the schedule after one would imply it did.
+     */
+    askThePlanner: builder.mutation<
+      { data: import('../lib/askPlanner.ts').ExplainResponse },
+      { scheduleId?: string; question: string }
+    >({
+      query: ({ scheduleId, question }) => ({
+        url: `/schedules/${scheduleId ?? 'latest'}/explain`,
+        method: 'POST',
+        body: { question },
+      }),
+    }),
+
     generateSchedule: builder.mutation<
       { data: Schedule },
       { horizonStart?: string; horizonDays?: number } | void
@@ -551,6 +600,7 @@ export const {
   useGenerateScheduleMutation,
   useGetOverrideTargetsQuery,
   useApplyOverrideMutation,
+  useAskThePlannerMutation,
 } = api
 
 /**

@@ -12,15 +12,18 @@
 import type { AnyBulkWriteOperation } from 'mongoose';
 
 import {
+  requestAssetRisk,
   requestBaselineSchedule,
   requestOptimizedSchedule,
   requestPriorityQueue,
   type BaselineSchedule,
   type OptimizedSchedule,
   type PriorityQueueEntry,
+  type RiskAssessment,
+  type RiskResponse,
 } from './optimizerClient.js';
-import { Schedule, Task, type GenerationError, type ISchedule, type ITask } from '../models/index.js';
-import { gatherScenario } from './scheduleGathering.js';
+import { Asset, Schedule, Task, type GenerationError, type ISchedule, type ITask } from '../models/index.js';
+import { gatherScenario, type GatheredScenario } from './scheduleGathering.js';
 import { ApiError } from '../utils/ApiError.js';
 import { logger } from '../utils/logger.js';
 
@@ -53,6 +56,15 @@ export async function generateSchedule({
     horizonDays: payload.horizonDays,
   });
 
+  // FR2.2 first, and on its own: the risk score is an INPUT to the FR2.3
+  // priority score, so it cannot run alongside /prioritize and /optimize. A
+  // failure here is not fatal - tasks keep `failureRiskScore: null`, the
+  // priority engine renormalises its remaining four weights, and
+  // `usesFailureRisk` reports false. That is the D-036 rule applied to a fourth
+  // call: only /optimize failing aborts the request.
+  const generationErrors: GenerationError[] = [];
+  const riskResult = await applyAssetRisk(gathered, generationErrors);
+
   const [optimizeOutcome, baselineOutcome, priorityOutcome] = await Promise.allSettled([
     requestOptimizedSchedule(payload),
     requestBaselineSchedule(payload),
@@ -66,7 +78,6 @@ export async function generateSchedule({
   }
 
   const optimized = optimizeOutcome.value;
-  const generationErrors: GenerationError[] = [];
 
   const baseline = takeOptional(baselineOutcome, 'baseline', generationErrors);
   const priorityQueue = takeOptional(priorityOutcome, 'prioritize', generationErrors);
@@ -92,6 +103,18 @@ export async function generateSchedule({
     deferredTasks: optimized.deferredTasks,
     decisionLog: optimized.decisionLog,
     knownGaps: optimized.knownGaps,
+    conflictReport: optimized.conflictReport ?? null,
+    riskModel: {
+      // "A risk score actually reached a task" - NOT "the /risk call returned".
+      // Those differ whenever the assets have too little degradation history to
+      // score, and the first spelling claimed the model had been applied to a
+      // plan where every task still ranked on four factors.
+      applied: payload.tasks.some((task) => task.failureRiskScore !== null),
+      assetsScored: riskResult.assessments.filter((entry) => entry.computed).length,
+      tasksWithRisk: payload.tasks.filter((task) => task.failureRiskScore !== null).length,
+      modelType: riskResult.modelType,
+      framing: riskResult.framing,
+    },
     baseline: baseline ?? null,
     contestableTaskIds,
     comparisonToBaseline: baseline ? buildComparison(optimized, baseline) : null,
@@ -269,4 +292,99 @@ export async function findScheduleById(scheduleId: string): Promise<ISchedule> {
   const schedule = await Schedule.findById(scheduleId).lean<ISchedule | null>().exec();
   if (!schedule) throw ApiError.notFound(`No schedule ${scheduleId}`);
   return schedule;
+}
+
+
+/**
+ * Score assets with the FR2.2 model and fold the result into the task payload.
+ *
+ * Mutates `gathered.payload.tasks` in place so the three scheduling calls that
+ * follow see the risk scores. Returns what was written, for persistence and for
+ * the schedule's own record of how the priority was computed.
+ *
+ * On failure this degrades rather than throwing: an error is recorded, scores
+ * stay null, and the priority engine renormalises. PRD 9.1's honesty rule cuts
+ * both ways - a risk score that could not be computed must not be invented, and
+ * that includes not quietly substituting zero.
+ */
+async function applyAssetRisk(
+  gathered: GatheredScenario,
+  generationErrors: GenerationError[],
+): Promise<{ assessments: RiskAssessment[]; framing: string | null; modelType: string | null }> {
+  const empty = { assessments: [] as RiskAssessment[], framing: null, modelType: null };
+  if (gathered.assetHistories.length === 0) return empty;
+
+  let response: RiskResponse;
+  try {
+    response = await requestAssetRisk(gathered.assetHistories);
+  } catch (err) {
+    const error = err as ApiError;
+    logger.warn('asset risk scoring failed; priority will run without FR2.2', {
+      message: error.message,
+    });
+    generationErrors.push({
+      call: 'risk',
+      message: error.message,
+      code: (error as { code?: string }).code ?? 'RISK_FAILED',
+    });
+    return empty;
+  }
+
+  const scoreByAsset = new Map(
+    response.assessments.map((entry) => [entry.assetId, entry.failureRiskScore]),
+  );
+
+  // Persist onto the asset documents, framing included. Stored rather than
+  // recomputed per read, and never stored as a bare number (D-055).
+  const operations = response.assessments.map((entry) => ({
+    updateOne: {
+      filter: { _id: entry.assetId },
+      update: {
+        $set: {
+          failureRiskScore: entry.failureRiskScore,
+          failureRiskBreakdown: entry.breakdown,
+          failureRiskComputed: entry.computed,
+          failureRiskReason: entry.reason,
+          failureRiskFraming: entry.framing,
+          failureRiskComputedAt: new Date(),
+        },
+      },
+    },
+  }));
+  if (operations.length > 0) await Asset.bulkWrite(operations, { ordered: false });
+
+  const taskAssetIds = await Task.find({
+    _id: { $in: gathered.payload.tasks.map((task) => task.taskId) },
+  })
+    .select('_id assetId')
+    .lean();
+  const assetByTask = new Map(taskAssetIds.map((task) => [task._id, task.assetId]));
+
+  const taskUpdates: AnyBulkWriteOperation<ITask>[] = [];
+  for (const task of gathered.payload.tasks) {
+    const assetId = assetByTask.get(task.taskId);
+    const score = assetId ? (scoreByAsset.get(assetId) ?? null) : null;
+    task.failureRiskScore = score;
+    // Denormalised onto the task as well as the asset, the same way T7 writes
+    // `priorityScore` back (D-032's join happens here, not downstream). The
+    // asset holds the model's output and its reasoning; the task holds the
+    // number it was actually prioritised with, which is what the explanation
+    // layer reads and what a Controller sees in the queue.
+    taskUpdates.push({
+      updateOne: { filter: { _id: task.taskId }, update: { $set: { failureRiskScore: score } } },
+    });
+  }
+  if (taskUpdates.length > 0) await Task.bulkWrite(taskUpdates, { ordered: false });
+
+  logger.info('asset risk scored', {
+    assets: response.count,
+    scored: response.scoredCount,
+    tasksWithRisk: gathered.payload.tasks.filter((task) => task.failureRiskScore !== null).length,
+  });
+
+  return {
+    assessments: response.assessments,
+    framing: response.framing,
+    modelType: response.modelType,
+  };
 }

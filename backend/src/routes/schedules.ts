@@ -20,6 +20,7 @@ import {
   findScheduleById,
   generateSchedule,
 } from '../services/scheduleOrchestrator.js';
+import { explainSchedule } from '../services/explainService.js';
 import {
   getEffectivePlan,
   listOverrides,
@@ -146,6 +147,52 @@ const overrideSchema = z
     { message: 'A move requires targetDate and targetWindowIndex' },
   );
 type OverrideBody = z.infer<typeof overrideSchema>;
+
+const explainSchema = z.object({
+  question: z.string().trim().min(3, 'question must be at least 3 characters').max(1000),
+});
+type ExplainBody = z.infer<typeof explainSchema>;
+
+/**
+ * POST /api/schedules/latest/explain - Ask the Planner (FR8.2).
+ *
+ * Registered before `/:id/explain` so "latest" is never read as an id.
+ */
+router.post(
+  '/latest/explain',
+  validate({ body: explainSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { question } = validated<ExplainBody>(req.body);
+      res.json({ data: await explainSchedule({ question }) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * POST /api/schedules/:id/explain
+ *
+ * A free-text question about one plan, answered strictly from that plan's own
+ * records. The response carries what the answer was grounded in, and a
+ * verification of every number in it - PRD Section 18 treats an invented figure
+ * as the headline risk of this feature, so the check travels with the answer
+ * rather than being assumed.
+ */
+router.post(
+  '/:id/explain',
+  validate({ params: idParamSchema, body: explainSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = validated<IdParam>(req.params);
+      const { question } = validated<ExplainBody>(req.body);
+      res.json({ data: await explainSchedule({ scheduleId: id, question }) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 /**
  * POST /api/schedules/:id/override

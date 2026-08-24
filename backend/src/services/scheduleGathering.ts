@@ -37,11 +37,19 @@ export interface GatherOptions {
   horizonDays?: number;
 }
 
+/** One asset's simulated degradation series, for the FR2.2 risk model (T16). */
+export interface AssetHistory {
+  assetId: string;
+  degradationHistory: Array<{ healthMetric: number }>;
+}
+
 export interface GatheredScenario {
   payload: OptimizerScenario;
   taskCount: number;
   corridorCount: number;
   tasksMissingCriticality: string[];
+  /** Input to /risk. Kept out of `payload`, which is the solver's contract. */
+  assetHistories: AssetHistory[];
 }
 
 /** Build the scenario payload for /optimize and /baseline. */
@@ -61,7 +69,10 @@ export async function gatherScenario({
   const corridorIds = corridors.map((corridor) => corridor._id);
   const [calendars, tasks] = await Promise.all([
     CorridorCalendar.find({ _id: { $in: corridorIds } })
-      .select('_id maxDailyBlockWindows lowConfidence')
+      // occupiedWindows + trainClassMix are for T22's traffic-block costing.
+      // The solver never schedules into occupied time; these only let a
+      // deferral say what forcing it through would cost.
+      .select('_id maxDailyBlockWindows lowConfidence occupiedWindows trainClassMix')
       .lean(),
     Task.find({ corridorId: { $in: corridorIds } }).lean(),
   ]);
@@ -70,8 +81,11 @@ export async function gatherScenario({
 
   // The FR2.1 criticality score is real measured-anchored data and only Node
   // can reach it, so the join happens here (D-032).
+  // `degradationHistory` comes along for T16's FR2.2 risk model. It is the one
+  // heavy field on an asset, so it is fetched here once for the assets this
+  // plan actually touches rather than on every asset read.
   const assets = await Asset.find({ _id: { $in: tasks.map((task) => task.assetId) } })
-    .select('_id criticalityScore')
+    .select('_id criticalityScore degradationHistory')
     .lean();
   const criticalityByAsset = new Map(assets.map((asset) => [asset._id, asset.criticalityScore]));
 
@@ -85,8 +99,20 @@ export async function gatherScenario({
         endMinute: window.endMin,
       })),
       lowConfidence: Boolean(calendar?.lowConfidence),
+      occupiedWindows: (calendar?.occupiedWindows ?? []).map((window) => ({
+        startMinute: window.startMin,
+        endMinute: window.endMin,
+      })),
+      trainClassMix: calendar?.trainClassMix ?? null,
     };
   });
+
+  const assetHistories = assets.map((asset) => ({
+    assetId: asset._id,
+    degradationHistory: (asset.degradationHistory ?? []).map((point) => ({
+      healthMetric: point.healthMetric,
+    })),
+  }));
 
   const missingCriticality: string[] = [];
   const taskPayload: OptimizerTask[] = tasks.map((task) => {
@@ -107,8 +133,10 @@ export async function gatherScenario({
       dateRaised: task.dateRaised ?? null,
       dependsOnTaskId: task.dependsOnTaskId ?? null,
       requiredResourceIds: task.requiredResourceIds ?? [],
-      // FR2.2 stays null until T16 computes it.
-      failureRiskScore: task.failureRiskScore ?? null,
+      // FR2.2. Filled in by the orchestrator after the /risk call, because the
+      // score is an input to the priority score and must exist before
+      // /prioritize and /optimize run (D-055).
+      failureRiskScore: null,
     };
   });
 
@@ -137,6 +165,7 @@ export async function gatherScenario({
     taskCount: taskPayload.length,
     corridorCount: corridorPayload.length,
     tasksMissingCriticality: missingCriticality,
+    assetHistories,
   };
 }
 

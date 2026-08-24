@@ -60,6 +60,17 @@ export class ApiError extends Error {
   }
 
   /** Upstream optimizer service unreachable, timed out, or returned garbage. */
+  /**
+   * An upstream dependency is up but cannot serve this request right now.
+   *
+   * Distinct from `badGateway`, which means the upstream itself is unreachable
+   * or spoke nonsense. A Controller acts on these differently: 503 here means
+   * "one feature is off, the rest of the system is fine".
+   */
+  static serviceUnavailable(message: string, options?: ApiErrorOptions): ApiError {
+    return new ApiError(503, message, options);
+  }
+
   static badGateway(message = 'Optimizer service unavailable', options?: ApiErrorOptions): ApiError {
     return new ApiError(502, message, options);
   }

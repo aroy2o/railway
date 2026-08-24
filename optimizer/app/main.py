@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.config import get_settings
 from app.logging_config import configure_logging
-from app.routers import health, optimizer
+from app.routers import explain, health, optimizer, risk
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,8 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(optimizer.router)
+    app.include_router(explain.router)
+    app.include_router(risk.router)
 
     @app.middleware("http")
     async def limit_body_size(request: Request, call_next):

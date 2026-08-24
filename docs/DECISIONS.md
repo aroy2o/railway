@@ -1475,3 +1475,650 @@ the window list a Controller picks from is exactly the set that would be
 accepted. The refusal path is still fully implemented, because validity can
 change between opening the panel and confirming — demonstrated live by staging
 that race.
+
+---
+
+## D-045
+
+**Typed conflicts are grouped by the plan they occur in, and never totalled
+across plans.**
+
+T21 gives every conflict a `plan` discriminator — `optimized` or `baseline` —
+and `summarise()` nests counts under it. There is deliberately no flat total,
+in Python, in the stored document, or in the frontend helper.
+
+The reason is arithmetic that would be true and misleading at the same time.
+On the real corpus the optimized plan carries 16 conflicts (11 resource
+contention, 5 dependency order) and the baseline carries 9 (6 corridor
+double-bookings, 3 over-subscribed windows). A single "25 conflicts" figure
+describes no plan that exists. Worse, the two halves mean opposite things:
+baseline conflicts are the FR9.1 *finding* — the evidence that the current
+uncoordinated process fails — while optimized-plan conflicts are gaps this
+system's own solver does not yet close (T24, T25). Summing them would let the
+thing being argued against inflate the count attributed to the thing doing the
+arguing.
+
+This is the same class of trap as D-031's utilisation figure: a number that is
+correct as arithmetic and wrong as a claim. It is handled the same way — by
+making the misleading shape unavailable rather than by remembering not to use
+it. `groupConflicts()` in `frontend/src/lib/conflicts.ts` takes the plan as a
+**required** argument and drops non-matching records; `planTotal()` reports one
+plan and has no cross-plan counterpart. Both the Python and the frontend test
+suites assert a 1-and-1 mix never surfaces as 2.
+
+**Alternative considered:** a single conflict list with a filter defaulting to
+"all". Rejected — the default view would have been the misleading one, and a
+screenshot of a default view is what ends up in a pitch deck.
+
+**Also decided here:** `TRAIN_IMPACT_CONFLICT` is named by PRD 9.5 but nothing
+in this build detects it (that is T22). It is reported in a `notYetDetectable`
+list with a reason, *not* as a count of zero. Zero asserts "we checked and found
+none"; the truth is that no check exists. Same distinction as D-015's
+`priorityIsPlaceholder`, applied to a conflict type instead of a field.
+
+---
+
+## D-046
+
+**The taxonomy is computed once in the optimizer and stored, not recomputed per
+consumer.**
+
+`optimizer/app/core/conflicts.py` converts what the solver and the baseline
+already detect into typed records with a resolution strategy each. Both
+`/optimize` and `/baseline` attach the result as `conflictReport`; Node stores
+it verbatim (`Schedule.conflictReport`, and the baseline's inside the
+already-verbatim `baseline` field); React reads it.
+
+Classification could equally have lived in Node or in the frontend, since it is
+a pure function of data those layers already hold. It lives in Python because
+that is where the detection lives — putting the naming next to the detecting
+means a new conflict type is added in one file, and no layer can drift into
+classifying the same conflict differently. The frontend's `lib/conflicts.ts`
+holds display logic only: labels, ordering, grouping. It never re-derives a
+type or a resolution.
+
+**Consequence accepted:** schedules generated before T21 have
+`conflictReport: null`. `KnownLimitations` keeps its pre-T21 count-only
+rendering as a fallback rather than crashing or showing an empty panel on an
+older document.
+
+**A resolution strategy is a label, not an action.** Nothing in T21 changes a
+plan. Resource no-overlap is still T25 and dependency precedence is still T24,
+and every layer says so: `enforced_by` on each `Resolution`, "classified, not
+applied" in the payload note, and "labelled, not applied" in the UI copy.
+
+---
+
+## D-047
+
+**`detect_known_gaps` was returning less than it computed, and this was found by
+checking rather than by assuming.**
+
+T21's plan assumed the work was mostly surfacing what already existed. Checking
+against the running services showed that was half right. Detection was complete
+and the counts were correct (11 resource conflicts, 5 dependency violations,
+matching T6). But the per-conflict records carried three fields
+(`taskIds`, `sharedResourceIds`, `date`) against the baseline report's seven —
+no corridor, no time window, no departments, no overlap. Not enough to render a
+row a Controller could act on.
+
+`first_task`, `second_task`, `first_window` and `second_window` were all already
+in scope in the detection loop, so enriching the return was additive: no new
+detection logic, no change to the model, no change to any count. The fields were
+simply never returned.
+
+**Guarded by:** `test_real_conflicts_all_carry_corridor_and_date` in
+`optimizer/tests/test_conflicts.py`, which was mutation-tested — reverting the
+corridor field to `None` makes it fail — so a future regression to the thin
+shape cannot pass silently.
+
+
+---
+
+## D-048
+
+**The decision log now carries the FR2.3 score and its FR2.4 breakdown, because
+`/optimize` was computing them and throwing them away.**
+
+T17's audit measured the log against what an explanation layer would need. Real
+numbers, on the 89-task corpus:
+
+| | before | after |
+|---|---|---|
+| entries carrying the FR2.3 `priorityScore` | 0/89 | 89/89 |
+| entries carrying the T7 breakdown + dominant factor | 0/89 | 89/89 |
+| entries carrying `department` | 0/89 | 89/89 |
+| entries carrying eligible-window count | 0/89 | 89/89 |
+| entries recording cross-department batching | 0 | 5 tasks / 2 blocks |
+| entries cross-referencing a typed conflict | 0/89 | 18/89 |
+| deferred entries with a real reason + detail | 53/53 | 53/53 |
+
+The deferral reasons were already complete. Everything else was not, and the
+priority case was the same shape as D-047: `/optimize` calls `score_task`,
+which returns the whole breakdown, and the router reduced it to
+`.solver_priority` — one rounded integer — before handing it to the model. The
+reasoning was computed and discarded on every solve.
+
+**Why the rounding matters.** The log's `priority` is `round(score)`. The
+priority queue on screen shows the unrounded score. For a task scoring 39.75 the
+log said 40. An explanation sourced from the log would then quote a number one
+higher than the number beside it on the same screen — not invented, but wrong,
+and wrong in a way that survives review because it looks right. Both are now
+reported, labelled, so neither has to be inferred.
+
+**What was deliberately NOT added.** Overrides. D-043 keeps the schedule
+immutable so that "what the AI decided" and "what the plan is now" stay
+separately answerable, and putting override state into the solver's log would
+collapse that distinction. A test asserts the string "override" never appears in
+the log. Joining the two is the grounding layer's job (D-049).
+
+Also not added: defect type, asset id and workflow stage. Those are MongoDB
+fields the solver never sees, and pushing them through the optimizer to get them
+into its log would make the solver carry data it has no use for. They are joined
+at grounding time instead.
+
+---
+
+## D-049
+
+**The grounding contract is a pure function, and it is the only thing the LLM is
+allowed to see.**
+
+PRD Section 18 requires that the explanation layer never invent numbers. That is
+a property of a system, not an instruction to a model, so it is built as one:
+
+```
+Node (owns MongoDB)  ->  gathers schedule + tasks + overrides, interprets nothing
+Python grounding.py  ->  assemble_context(question, records) -> GroundingContext
+Python explainer.py  ->  prompt built ONLY from that context -> Claude
+```
+
+`assemble_context` is pure. Same question and records, same context, every time —
+asserted directly by `test_assembly_is_deterministic`. The model never receives
+the schedule; it receives a flat list of `Fact` records, each carrying the id of
+the record it was copied from. That is what makes an answer auditable rather
+than merely plausible: every figure it was permitted to use traces to a record a
+Controller can open, and the response returns those ids.
+
+The split matters because of what can be tested. What the model is *allowed* to
+say is deterministic and fully asserted before any API call. How it phrases what
+it says is not, and no amount of testing makes it so. Putting the guarantee in
+the deterministic half is the only version of this that can be honestly claimed.
+
+**Overrides are in the context** for the reason D-043 anticipated: the decision
+log records where the solver put a task, not where it is now. An explanation
+built from the log alone would confidently give a Controller the time their own
+override replaced.
+
+**The baseline comparison travels with its caveats** in a single fact. D-031
+found the baseline's utilisation reads *higher* than the optimized plan's;
+handing a model those two percentages without the caveats is an invitation to
+say "utilisation improved", which is false.
+
+**Alternative considered:** assembling the context in Node. Rejected — the
+taxonomy, the decision log and the deferral reasons are all authored in Python,
+and a second interpretation of them in TypeScript is exactly the drift D-046
+avoided for conflicts.
+
+---
+
+## D-050
+
+**The model's output is verified at runtime, not trusted because the prompt was
+strict.**
+
+Every other guarantee in this project is a pure function with a test that fails
+when it breaks. An LLM is the first component where "it worked once" is weak
+evidence: the same prompt can produce different words on different calls.
+
+So the prompt is not the guarantee. `verify_answer` is. It extracts every number
+from the model's reply and checks each against the set of values the grounding
+context actually contained, plus any the Controller used in their own question.
+Anything left over is reported as `ungroundedNumbers`, the API returns it beside
+the answer, and the UI renders that answer under a warning instead of styled
+like a clean one. Mutation-tested five ways.
+
+**This is a net, not a proof, and the limit is written down as a test.** A
+fabricated number that happens to equal some real value elsewhere in the context
+passes — `test_the_verifier_is_a_net_not_a_proof` asserts exactly that, so the
+blind spot cannot quietly rot into an assumed guarantee. The verifier reliably
+catches distinctive invented quantities, which is the failure that actually
+occurs ("about 12 trains", "roughly 300 delay-minutes").
+
+**One real bug it forced out.** ISO dates were being split into year/month/day,
+so a task due in September put `9` into the allowed set and "9 express trains" —
+pure fabrication — verified clean. Months are always 1–12, so this whitelisted a
+small integer on essentially every schedule. Dates now contribute their year and
+day but not their month.
+
+**Live behaviour is tested separately and never faked.** `test_explain_live.py`
+asks each behaviour across several phrasings and several repetitions, and
+asserts on the whole set — a model that is grounded four times in five fails.
+Those tests **skip** without `ANTHROPIC_API_KEY` rather than passing, so an
+absent key can never be mistaken for a verified explanation layer.
+
+---
+
+## D-051
+
+**An honest refusal is a first-class answer, and what cannot be answered is
+declared rather than inferred.**
+
+A Controller will ask about train impact, failure risk and approval history,
+because a real planning system has them. This one does not: those are T22, T16
+and T19. `UNAVAILABLE_TOPICS` names six such gaps with a reason and the task that
+would supply each, deterministic keyword detection attaches the relevant ones to
+the context, and the prompt instructs the model to decline and say why.
+
+The detection only ever *adds* a caveat; it never suppresses an answer on its
+own. Forcing a refusal on a keyword match would decline questions the data can
+answer.
+
+**A false caveat is not free**, which a bug proved: substring matching read
+"express **t-rain**" as a weather question. Matching is now on a leading word
+boundary — which also fixed the opposite failure, where `\bapprove\b` missed
+"approved" and "approval", the phrasings a Controller actually types.
+
+**`trainImpact: null` is stated outright** in every context as "not computed",
+because a model shown only a block with a missing field could reasonably read it
+as "no trains affected". Same distinction as T21's `notYetDetectable`.
+
+**Upstream failure messages now reach the Controller.** `requestOptimizer`
+flattened every non-2xx into `Optimizer responded 503`, burying "no
+ANTHROPIC_API_KEY is set on the optimizer service" in a details blob. It now
+surfaces a string `detail` as the message, and maps the optimizer's 503 to a 503
+rather than a 502 — the optimizer is up, one dependency is not, and a Controller
+acts on those differently. This is D-037's standard applied one layer out. Only
+a string `detail` passes through; a 422's detail is a list of validation
+objects, which is debugging output, not a message.
+
+
+---
+
+## D-052
+
+**The explanation layer's LLM provider is pluggable, and the default is Groq's
+`openai/gpt-oss-120b` rather than Claude.**
+
+PRD Section 10 names the Claude API for this layer and CLAUDE.md forbids stack
+deviation without asking. This was asked and approved: no Anthropic key is
+available for this project, and a differentiator that cannot be demonstrated is
+worth less than one running on a free tier. **The Anthropic path is intact and
+selected by `LLM_PROVIDER=anthropic`** — switching back is one environment
+variable.
+
+Nothing this project claims depends on the vendor. The grounding contract fixes
+what the model may say before either provider is called (D-049), and
+`verify_answer` checks what it did say afterwards (D-050). The provider decides
+only who writes the sentence, and `Explanation.model` records which one did.
+
+### Two findings from actually testing the alternatives
+
+**`groq/compound-mini`'s advertised 70,000 tokens/minute is not real for this
+key.** It looks like the obvious pick against `gpt-oss-120b`'s 8,000 — until its
+429 arrives reading *"Rate limit reached for model `openai/gpt-oss-120b`"*. The
+compound models are agentic systems built **on** gpt-oss and bill against its
+budget, so the higher headline figure buys nothing.
+
+**The compound models can reach the internet, which disqualifies them here.**
+Asked about the weather, compound-mini attempted a web search and failed the
+request with HTTP 413; the same question with `search_settings.exclude_domains:
+["*"]` returned a correct refusal and `executed_tools: None`. For a feature
+whose entire claim is "every number came from these records", a model that can
+read the internet mid-answer can ground a sentence in something no Controller
+can audit. At identical effective rate limits, a plain LLM with no tool path is
+strictly the better choice.
+
+Search is still suppressed on every compound call rather than left as an option,
+and a reply reporting `executed_tools` is **refused rather than displayed** —
+belt and braces, because the failure it prevents is invisible in the output.
+
+**`response_format: {"type": "json_object"}` is not used.** It looks like the
+right way to protect the citation list, and `gpt-oss-120b` rejects the request
+outright under it (`Failed to validate JSON`). The tolerant parser handles the
+wrappings that occur in practice, and a lost citation list degrades an answer
+rather than failing it.
+
+---
+
+## D-053
+
+**The grounding context has a hard size budget, facts are ranked for survival,
+and what is dropped is reported.**
+
+A question naming no task assembled a ~45,000-character prompt from the real
+corpus — about 11,000 tokens, which exceeds the per-minute allowance of every
+model this service can reach. Not a tidiness problem: those requests simply
+fail.
+
+Three things had to be right, and the first two were wrong on the first attempt.
+
+**Sizing must be measured, not estimated.** The char/4 rule of thumb put a real
+prompt at ~1,400 tokens; the API's own accounting said 4,241. Dense JSON full of
+ids, quotes and hyphens tokenises at roughly 1.3 characters per token. Every
+figure in the budget now comes from `usage.prompt_tokens`, not arithmetic.
+
+**Survival must be ranked, not positional.** Dropping facts from the end of the
+list discarded the named task's own block and conflicts while keeping generic
+plan context — it threw away the evidence and kept the perspective. Facts now
+carry a tier: essentials, then evidence about what the question actually named,
+then the FR9.3 comparison, then the bounded slice. A second pass was needed
+after that, because conflicts involving a *slice* task were inheriting the
+"named" tier and outranking the comparison on a question that was purely about
+the baseline.
+
+**Dropping must be reported.** `omittedFactCount` travels in the context and the
+prompt says outright that further records exist and were not examined, with an
+instruction not to claim the plan lacks something. A context that quietly lost
+the record holding the answer would produce a confident *"the plan does not show
+that"* — a wrong answer wearing the costume of an honest one, which is worse
+than either an error or a guess.
+
+**Also trimmed, on the same principle** (keep every figure, drop restatement):
+`priorityBreakdown.components` are the pre-weighting normalised values that
+`contributions` already expresses in score units; a conflict's
+`resolution.explanation` is a paragraph written for the conflicts screen and
+contains no number. The bounded slice interleaves batched and deferred entries
+rather than concatenating them, because concatenation meant "which tasks share a
+block across departments" was answered from a context holding no batched task.
+
+
+---
+
+## D-054
+
+**The first live run found three defects, and all three were in this project's
+own checking, not in the model.**
+
+Twelve real calls against `openai/gpt-oss-120b`, four questions asked three
+times each. Ten replies verified clean. The two that did not, plus one outright
+test failure, were every one of them a false accusation:
+
+| Reported as | Actually |
+|---|---|
+| `9` invented in *"…SLA due date (2026-09-18, 25 days to due)"* | The date is real. `numbers()` withholds the MONTH of a stored date on purpose (months are 1–12 and would whitelist a small integer on every schedule) — but the *answer* scanner still split `2026-09-18` into 2026/9/18. Dates are now checked whole, on both sides. |
+| `880` invented in *"the same total block minutes (4,880)"* | The figure is real. The number pattern read `4,880` as `4` and `880`. Thousands separators are now folded before scanning. |
+| Decline "did not name what is missing" | It did: *"The system does not have train‑impact data…"* — with U+2011, a non-breaking hyphen, which no ASCII comparison matches. Typographic dashes are now normalised before any literal match. |
+
+**The model was correct in all twelve calls.** Every failure was the guard
+misfiring.
+
+That direction matters. A verifier that cries wolf on true statements is not
+merely noisy — it trains whoever reads the warning to ignore it, and the one
+time it fires on a real fabrication it will be dismissed too. A false alarm here
+costs more than the check is worth, so all three are treated as bugs of the same
+severity as a missed fabrication and each has a regression test.
+
+**None of this was reachable without running the thing.** The deterministic
+suite passed throughout: every one of these bugs lived in the gap between what a
+stored record looks like (`"2026-09-18"`, `4880`) and what a model writes about
+it (`2026-09-18` in prose, `4,880`, `train‑impact`). Hand-built fixtures were
+written by the same person who wrote the parser, and they agreed with it. This
+is the argument for `-m live` existing at all, and for it being run rather than
+merely available.
+
+
+---
+
+## D-055
+
+**FR2.2 predictive risk: linear trend extrapolation to an intervention
+threshold, weighted 0.20, and reweighting the other four to make room.**
+
+### The model, and why not the ones PRD 9.1 also offers
+
+T4 generates each asset as a **constant per-asset decline plus N(0, 0.015)
+observation noise** (`data/generators/generate.py::_degradation_history`). Read
+before choosing, and it settles the choice: a linear fit is not an approximation
+of that process, it is the right functional form, and its two parameters are
+exactly the two the generator used.
+
+* **Gradient-boosted classifier / logistic regression** — rejected on a fact
+  about the data, not taste: **there are no failure labels.** T4 generated
+  health series, not failure events. A classifier would need labels derived from
+  the same series it learns from, which is circular, and any accuracy figure
+  from it would measure nothing. The user's brief forbids reporting such a
+  figure; the cleaner answer is not to build the thing that produces it.
+* **Probability of crossing within a horizon** — built, measured, rejected.
+  Noise is small relative to the decline, so the predictive interval barely
+  straddles the threshold: at six months, 30 of 55 assets scored under 5 and 23
+  over 50, with almost nothing between. A near-binary flag is a poor priority
+  input.
+* **Latest observed health alone** — simpler, and correlates −0.95 with the
+  chosen score on this corpus. Rejected because it discards the decline rate,
+  and two assets at 0.50 losing 0.04 and 0.01 a month are not equally urgent.
+
+**Chosen:** fit OLS over the 12 monthly points, extrapolate to a threshold of
+0.30, and express time-to-threshold as `100 × (1 − t/24)`, clipped.
+
+Both constants are modelling choices and are stated as such. **0.30** sits just
+below the lowest current fitted health in the corpus (0.317), which matters: a
+higher threshold would report assets as *already* past intervention, which is a
+statement about the present dressed up as a prediction. **24 months** — median
+time-to-threshold is 8.4 and only 3 of 55 exceed 24, so the cap expresses "not
+soon" without flattening the distribution that carries the signal.
+
+**An honest caveat about how much this adds.** On this corpus, current health
+and decline rate correlate +0.867, because the generator starts every asset in a
+narrow band and declines it at a constant rate. So the risk score is closer to
+"inverted current health" here than it would be on real data with varied asset
+ages. The model is right; the *synthetic data* under-exercises it. Stated rather
+than left for someone to discover.
+
+### Why it earns a weight, and why exactly 0.20
+
+D-026 justified criticality's 0.30 by showing it was uncorrelated with severity
+and therefore genuinely reordered tasks. The same test, run on the same corpus:
+
+| | ρ |
+|---|---:|
+| risk vs severity | **−0.084** |
+| risk vs asset criticality | **+0.141** |
+| *(D-026's reference)* severity vs criticality | −0.109 |
+
+Near-orthogonal to both, and it reorders inside every severity band (full
+0–98 range within bands 2, 3 and 4). It earns its place on exactly the evidence
+criticality did.
+
+**Criticality and risk are not the same thing and both stay.** Criticality is
+consequence-if-it-fails; risk is likelihood-of-failing — the two axes of a risk
+matrix. Collapsing them would lose the distinction a maintenance planner works
+in.
+
+**New weights**, replacing D-026's four:
+
+| Factor | D-026 | T16 | |
+|---|---:|---:|---|
+| severity | 0.35 | **0.30** | still leads: the observed defect |
+| asset_criticality | 0.30 | **0.25** | consequence, anchored in real train counts |
+| failure_risk | — | **0.20** | likelihood, from simulated data |
+| sla_urgency | 0.20 | **0.15** | compliance, still below every physical term |
+| sla_breach | 0.15 | **0.10** | smallest and capped, as before |
+
+**Risk is capped below criticality on purpose, and the reason is framing as much
+as arithmetic:** criticality is anchored in real measured train counts (T3),
+while this score comes from simulated degradation. A synthetic input must not
+outweigh a measured one. That single sentence is what fixes 0.20 rather than the
+0.25 that scored marginally better on tie count.
+
+**Measured on the 89-task corpus:**
+
+| | ties | range | ρ vs current | physical-first guard |
+|---|---:|---|---:|---|
+| D-026 (4 factors) | 12 | 25.0–87.3 | 1.000 | **fails** a tight case |
+| **chosen 30/25/20/15/10** | 12 | 24.0–84.8 | +0.873 | passes |
+| 30/25/15/18/12 | 12 | 23.9–85.9 | +0.926 | passes |
+| 28/22/25/15/10 | 11 | 22.6–84.6 | +0.800 | passes |
+| risk-from-severity 20/30/15/20/15 | 11 | 24.9–86.9 | +0.899 | **fails** |
+
+The "physical-first guard" is D-026's own correctness test, run on a *tighter*
+case than D-026 used (severity 4 vs 1, criticality 80 vs 40, 60 days overdue,
+rather than severity 5 vs 1 and criticality 90.75 vs 27.92). D-026's own case
+still passes on the old weights — but this nearby one does not: the old formula
+scores the overdue trivial defect 54.0 against the fresh critical one at 52.0.
+Trimming the SLA terms to make room for risk fixes that as a side effect.
+
+### What changed, and what did not
+
+Ranking moved substantially: ρ = +0.873, median rank move 8 places, max 28, only
+3 of 89 unchanged. `failure_risk` is now the dominant factor for 15 tasks.
+
+**The plan did not change at all** — same 36 scheduled, same 53 deferred, same
+25 blocks, same 2 cross-department batches, same 74.33% utilisation, identical
+task sets. Per D-024, 53 of 89 tasks fit no window on their corridor and the
+remaining 36 all fit, so there is no capacity contest for priority to arbitrate.
+Same finding T7 reported, and it is stated plainly rather than left for someone
+to notice that a headline number was unmoved.
+
+### Honest handling of what it cannot score
+
+* Fewer than 3 observations → `score: null` with a reason. Never a default.
+* No declining trend → `0.0` **with** a reason. That is an inference, not a gap,
+  and the two are reported differently.
+* Already below threshold → `100.0`, and the reason says this reflects the
+  current trend rather than a forecast.
+* A task whose asset has no score → the priority engine **renormalises the other
+  four weights** rather than contributing zero. Contributing zero would push a
+  task down the queue for having a data gap — a missing measurement scored as a
+  favourable finding, which is the error this project avoids everywhere else
+  (D-015, D-045).
+
+### Framing is enforced, not intended
+
+PRD Section 6 lists NG4: claiming this forecasts real failures. So the
+disclaimer is stored with the score (`Asset.failureRiskFraming`,
+`Schedule.riskModel.framing`), returned by `/risk` both per-assessment and at
+the envelope, rendered under the priority queue whenever a risk figure is shown,
+and returned by `/explain` as `context.modelFramings` — **independently of
+whether the model repeated it**. That last one matters: the prompt asks for the
+caveat, and a prompt is not a guarantee (D-050). A test drives the endpoint with
+a reply that deliberately omits the framing and asserts it reaches the response
+anyway.
+
+### One bug this found in its own reporting
+
+`Schedule.riskModel.applied` first meant "the /risk call returned". On the test
+fixture — whose assets have no degradation history — that was `true` while every
+task still ranked on four factors, i.e. the field claimed the model had been
+applied to a plan it had not touched. It now means "a risk score actually
+reached a task".
+
+
+---
+
+## D-056
+
+**T22 Phase A only: train impact is costed and reported, not made schedulable.**
+
+PRD 9.6 describes train-impact as a term in the objective function. That is
+Phase B — letting the solver treat "displace scheduled trains" as a second class
+of candidate window, penalised by λ and traded against task priority. It was
+scoped out, deliberately, and the reasons are measured rather than budgetary.
+
+### What Phase B would have bought
+
+Every one of the 53 structurally-deferred tasks is rescuable by a traffic block.
+Costed on the real corpus: **1 to 16 trains displaced, median 3; 0 to 88 minutes
+of displacement, median 22.** So the prize is not marginal — it is the entire
+deferred backlog.
+
+### Why not, anyway
+
+**1. The data cannot support a penalty term honestly.** T3's `occupiedWindows`
+carry times only; the per-service class was not retained beside them. So the
+class split of a displacement is *apportioned* from the corridor's overall mix,
+not measured. Reporting an apportioned estimate as information is fine. Putting
+it inside the objective function is not: the solver's **choices** — not merely
+its reporting — would then be driven by a number the data cannot justify, and
+every resulting schedule would inherit that. An estimate you can see is very
+different from an estimate you have baked into a decision.
+
+**2. The ripple is total, not local.** D-031's entire comparison framing rests
+on a contestable subset of 36 tasks that both engines schedule 36/36. If some of
+the 53 become schedulable, "contestable" stops being well-defined, and T7's,
+T14's, T16's and the checkpoint's before/after comparisons all need re-deriving
+rather than re-running. That is four prior tasks' findings, in a task whose own
+scope is already large.
+
+**3. The honest version of Phase B needs T3 extended first** — tagging each
+occupied window with its service's class. Then λ multiplies something measured.
+That is the sequencing this project has used everywhere else: get the data right,
+then let it drive a decision.
+
+Phase A closes what is actually broken today: T21's `TRAIN_IMPACT_CONFLICT` sat
+in `notYetDetectable`, `/explain` declined every train question, and D-024's 53
+deferrals said "this needs a traffic block" without ever saying what one costs.
+
+### The impact score
+
+Displacing one train costs its tier's weight, times the minutes displaced.
+Weights measured against alternatives across the 26 demand-carrying corridors:
+
+| weighting | spread | ties | ρ vs utilisation |
+|---|---:|---:|---:|
+| flat 1/1/1/1 | **0.00** | **325** | +0.131 |
+| binary 2/2/1/1 | 1.00 | 16 | +0.597 |
+| moderate 3/2/1/0.7 | 1.44 | 8 | +0.584 |
+| **chosen 4/2/1/0.7** | **1.63** | **5** | +0.590 |
+
+Flat weighting is the failure this measurement exists to catch: it produces a
+single value on every corridor, so the "score" would carry no information while
+looking like it did. The chosen set separates corridors best and ties fewest,
+and ρ +0.59 against utilisation shows it is related to how busy a corridor is
+without merely restating it. `unknown` sits at 1.0 — neutral, not free, so the
+2.8% of services T3 could not classify are not silently costless to displace.
+
+### The measured / estimated boundary, kept structural
+
+`impact.measured` holds trains displaced, minutes displaced and clearance
+minutes — all from T3's real timetable. `impact.estimated` holds the weighted
+cost and the tier split — apportioned. They are separate objects rather than
+separate sentences, so a consumer cannot merge them by accident, and a test
+asserts the split.
+
+Delay minutes are **displacement time, not modelled propagation**. This build
+has no delay-propagation model, and calling displacement "delay to passengers"
+would be the same overreach PRD 9.1 warns about for the risk score.
+
+### Three bugs this found
+
+**The sweep jumped undefined gaps.** Building a block from runs of adjacent
+windows first proposed blocks spanning hours the timetable says nothing about;
+requiring strict adjacency then made almost every corridor look infeasible,
+because T3 deliberately leaves a **clearance margin** so free and occupied
+windows never touch. Both were wrong. A traffic block is simply an interval on
+the day, and only its overlap with trains costs anything — so the span is placed
+freely and boundary-aligned, which a brute-force test over every start minute
+confirms is exhaustive rather than heuristic.
+
+**"0 trains" was being reported for corridors whose occupancy was never sent.**
+The first end-to-end run said *"a traffic block would displace 0 train(s) for
+0 min"* on all 53 tasks — because Node was not sending `occupiedWindows` at all.
+Zero and unknown are not the same claim, and the reassuring one was false. The
+message now says the cost was not computed when the data is absent, and no
+`displacementOption` is attached.
+
+**Mongoose silently stripped the costing.** `deferredSchema` declared only
+`taskId/reason/detail`, so `displacementOption` was dropped on write with no
+error — D-033's failure mode in a different layer. A regression test now
+asserts it survives persistence.
+
+### The conflict type graduated cleanly
+
+`TRAIN_IMPACT_CONFLICT` moved **out** of `notYetDetectable` and **into** a new
+`checkedAndClear` list, not into both. On the real corpus the count is **0** —
+and that is now an earned zero: every scheduled block is checked against the
+corridor's observed occupancy. The solver only ever assigns into free windows,
+so a non-zero count would mean the free-window data and the occupancy data
+disagree, which is worth detecting rather than assuming. A test asserts that a
+real occurrence moves it out of `checkedAndClear` and into the counts.
+
+### One finding worth keeping
+
+**One of the 53 needs no train displaced at all.** TSK-00073 on MQX-RMF needs
+174 minutes against a longest free window of 167 — it fits by taking 22 minutes
+of clearance margin and crossing no service. Reporting "0 trains" alone would
+have called that free. `clearanceMinutes` now travels with every costing, and
+placements tie-break on it.
+
+

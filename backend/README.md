@@ -138,6 +138,80 @@ a missing comparison is distinguishable from a comparison of zero (D-036).
 Schedules are **appended, never replaced** — FR6.3 needs prior plans viewable
 for audit (D-034).
 
+### Train-impact costing (T22)
+
+Gathering sends each corridor's `occupiedWindows` and `trainClassMix` alongside
+its free windows. **The solver never schedules into occupied time** — these exist
+only so a deferral can say what forcing it through as a traffic block would cost.
+
+`Schedule.deferredTasks[].displacementOption` carries that costing. It is
+declared in `deferredSchema`: Mongoose silently drops undeclared keys, which is
+exactly how this field went missing on its first run — D-033's failure mode in a
+different layer, now covered by a regression test.
+
+Absent `occupiedWindows`, no costing is attached and the deferral says the cost
+was not computed. "0 trains" and "we did not look" are different claims, and the
+first one reads as reassuring while being false.
+
+### Predictive asset risk (T16)
+
+Generation now calls `/risk` **before** the three scheduling calls, not alongside
+them: the FR2.2 score is an input to the FR2.3 priority score, so it must exist
+before `/prioritize` and `/optimize` see the tasks.
+
+A `/risk` failure is **not** fatal — it is recorded in `generationErrors`, scores
+stay null, and the priority engine renormalises its remaining four weights. That
+is D-036's rule applied to a fourth call.
+
+The score is written to both layers, deliberately: the **asset** holds the model
+output and its reasoning (`failureRiskBreakdown`, `failureRiskReason`,
+`failureRiskFraming`), and the **task** holds the number it was actually
+prioritised with — the same denormalisation T7 uses for `priorityScore`.
+
+`Schedule.riskModel` records how FR2.2 was applied to *that* plan, framing
+included, because a plan generated while `/risk` was down used the renormalised
+four-factor weights and that has to stay knowable afterwards. `applied` means
+"a risk score actually reached a task", not "the call returned".
+
+### Ask the Planner (T18)
+
+`POST /api/schedules/:id/explain` (and `/latest/explain`) take `{ question }`.
+
+Node's role is gathering only: it loads the schedule, the projected task fields
+the grounding contract reads, and the override log, then posts them to the
+optimizer's `/explain`. It selects nothing and interprets nothing — the grounding
+contract lives in `optimizer/app/core/grounding.py`, next to the scheduler whose
+decisions it explains (D-049).
+
+**Overrides are gathered too, and that is the point.** `decisionLog` records what
+the *solver* decided; by D-043 the schedule is never mutated, so after a manual
+override the log and the current plan disagree on purpose. An explanation that
+saw only the log would confidently give a Controller the time their own override
+replaced.
+
+The response carries `answer`, `groundedIn` (record ids), and `verification`
+(every number in the answer, checked against those records). `EXPLAIN_TIMEOUT_MS`
+(default 60s) is separate from `OPTIMIZER_TIMEOUT_MS` — this call waits on an LLM,
+not a solve.
+
+With no `ANTHROPIC_API_KEY` on the optimizer, this returns **503** with the
+reason intact ("no ANTHROPIC_API_KEY is set…"), not a flattened
+"Optimizer responded 503" — see D-051.
+
+### Typed conflicts (T21)
+
+The stored schedule carries two conflict reports, on **separate layers that must
+never be added together** (D-045):
+
+| Field | Layer | What it is |
+|---|---|---|
+| `conflictReport` | `optimized` | Constraints this system's solver does not yet enforce (T24, T25) |
+| `baseline.conflictReport` | `baseline` | The FR9.1 finding — what the uncoordinated process produces |
+
+Both are computed once by the optimizer, which owns the taxonomy, and stored
+verbatim (D-046). Node classifies nothing. Schedules generated before T21 have
+`conflictReport: null`, and the dashboard falls back to count-only rendering.
+
 ## Manual override (FR6.2)
 
 `GET /api/schedules/:id` and `/latest` return three things: `blocks` (the plan
