@@ -377,7 +377,9 @@ Selection: tasks and corridors named in the question pull their decision entry,
 stored record, block, conflicts and overrides. A question naming nothing gets a
 bounded slice — the highest-priority deferrals and the cross-department batches.
 Every context also carries the plan summary, the baseline comparison **with its
-D-031 caveats**, the synthetic-data provenance note, and the train-impact gap.
+D-031 caveats**, the synthetic-data provenance note, the train-impact framing,
+**the FR6.1 workflow state**, and **every approval/rejection row** — always, not
+keyword-gated (see below).
 
 ### Verification, not trust
 
@@ -393,11 +395,50 @@ quantities, which is the failure that actually happens.
 
 ### What it refuses to answer
 
-Six topics this build genuinely has no data for, each with a reason and the task
-that would supply it: train impact (T22), predictive failure risk (T16),
-approval/audit history (T19), what-if simulation (T20), policy weighting (T23),
-weather (PRD 9.9). Detection only ever *adds* a caveat — the model decides
-whether the question actually depends on the missing data.
+Three topics remain undata'd, each with a reason and the task that would supply
+it: what-if simulation (T20), policy weighting (T23), weather (PRD 9.9).
+Detection only ever *adds* a caveat — the model decides whether the question
+actually depends on the missing data.
+
+**Three topics used to be on this list and were removed as their gaps were
+filled** — failure risk (T16), train impact (T22), approval/audit history (T19).
+A system that keeps declining a question it can now answer is as wrong as one
+that overclaims, just in the flattering direction. Each removal is paired with a
+*framing* fact (`model_framing` for a model output; `workflow_framing` for a
+stored fact like approval attribution) naming the specific thing an answer can
+now get wrong instead of a blanket refusal.
+
+**Approval rows are never keyword-gated**, unlike everything else selected by
+question content. They were, briefly — a live run showed why that fails:
+*"Who signed this off?"* matches none of `approve/approval/audit/sign off`, the
+rows were dropped by the size budget, and the answer came back as a confident
+**decline**, one second after the same plan correctly answered
+*"Who approved this?"*. A system that declines depending on phrasing is worse
+than one that declines consistently — the Controller cannot tell which answer to
+trust. The state machine bounds the list structurally (at most three rows:
+`submit → approve → publish`), so there was never a size reason to gate it.
+
+### Numbers checked as what they are, not as digits (D-059)
+
+Three live runs during T19 produced false accusations of fabrication, all fixed
+in `verify_answer`:
+
+- **A cited record id** (`APR-20260824025855658-approve`) read as a 17-digit
+  invented number. Ids matching this system's generated shape are stripped
+  before the number scan — whether a cited id *exists* is checked separately,
+  exactly, as `unknownRecordIds`.
+- **An ISO instant's clock** (`2026-08-24T02:59:09.017Z`) — a date-only strip
+  left `T02:59:09Z` behind, and its `9` was flagged as invented. Whole instants
+  are now checked as strings against the context, the same way whole dates
+  already were.
+- **`float` precision above 2⁵³** made two different 17-digit ids normalise to
+  the same value on one side of a comparison and not the other. Whole-number
+  strings now bypass `float`.
+
+The reverse failure was fixed too: `numbers()` used to leak a stored timestamp's
+clock components (`09`, `59`) into the *allowed* set, which would have cleared a
+fabricated "9 trains" on any plan approved at nine minutes past. Instants now
+contribute their year and day only, same as dates already did for the month.
 
 ### Configuration
 

@@ -133,9 +133,12 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
     is checked against the values the context actually contained. Ungrounded
     figures are returned beside the answer and rendered as a warning, never
     styled as a clean answer (D-050). Mutation-verified 5 ways.
-  - **Honest refusal**: six `UNAVAILABLE_TOPICS` (train impact → T22, failure
-    risk → T16, approval/audit → T19, what-if → T20, policy → T23, weather),
-    each with a reason and the task that would supply it (D-051).
+  - **Honest refusal**: `UNAVAILABLE_TOPICS`, each with a reason and the task
+    that would supply it (D-051). Started at six; **three have since been
+    removed because the gap was filled** — failure risk (T16), train impact
+    (T22), approval/audit (T19). Three remain: what-if → T20, policy → T23,
+    weather. Each removal is paired with a *framing* fact naming what an answer
+    can now get wrong instead (D-055, D-056, D-060).
   - `POST /api/schedules/:id/explain` and `/latest/explain`; Node gathers, Python
     grounds and calls Claude. `EXPLAIN_TIMEOUT_MS` separate from the solver's.
   - No `ANTHROPIC_API_KEY` → **503 with an actionable message**, surfaced intact
@@ -153,7 +156,46 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
     false-accusation bugs in this project's own verifier** (month of an ISO
     date, thousands separator, non-breaking hyphen), all fixed with regression
     tests (D-054).
-- [ ] `todo` — **T19**: Human-in-the-loop approval workflow (FR6.1) + `audit_logs` collection + Audit Trail view
+- [x] `done` — **T19**: Human-in-the-loop approval workflow (FR6.1) + audit trail view (FR6.2) + versioned publishing (FR6.3)
+  - **The workflow state is not stored on the schedule** — it is a fold over a
+    new append-only `schedule_approvals` collection (D-057). D-043's guarantee
+    ("the schedule document is never written after generation") therefore stays
+    whole rather than gaining an exception, and **no migration was needed**: a
+    plan with no rows is a draft, which every pre-T19 plan genuinely is.
+  - Four transitions, and **only** four: `draft→under_review→approved→published`
+    plus `under_review→reject`. Refusals name the state and the legal actions.
+    Asserted by ENUMERATING all 20 (state, action) pairs and requiring the other
+    16 to be refused — the only way to know the illegal set is complete.
+  - **PRD Section 15's single `audit_logs` is stored as two collections and
+    merged on read** (D-057). An override is keyed (scheduleId, taskId) and is a
+    delta on a placement; an approval is keyed (scheduleId) and is a verdict on
+    the whole plan. One table would leave four fields structurally null on every
+    approve/reject row. `GET /:id/audit` is the PRD's view.
+  - **Publishing freezes by refusing writes, not by snapshotting** (D-058) —
+    additive to D-043, not a workaround. A `publishedPlanDigest` makes the freeze
+    *checkable*: `/audit` re-derives it and reports whether it still holds.
+    Mutation-tested by writing an override past the API that refuses it.
+  - `approve` is guarded by **whole-plan re-validation** — the plan a Controller
+    is about to sign, not the one the solver produced. Six checks, all passing on
+    the real corpus; the sign-off records **11 resource + 5 dependency**
+    conflicts as `knownUnresolved` rather than blocking on gaps every plan has.
+  - T15 is untouched. One gate was added *in front of* `recordOverride`; nothing
+    below it changed. A rejected plan's overrides are kept, not deleted.
+  - **Ask the Planner now answers approval questions**, verified live in both
+    states across five phrasings: draft → *"has not been reviewed or approved by
+    any role"* (answered, not declined); published → *"approved by the role
+    controller… published at 2026-08-24T02:59:09.017Z"*. Attribution is by ROLE —
+    this build has no user accounts, and the framing fact forbids naming a
+    person (D-060).
+  - **Three verifier bugs found by live runs** (D-059), all false accusations:
+    a cited record id read as a 17-digit quantity, an ISO instant's clock read as
+    `9`, and `float` mangling integers above 2^53. Plus one false *clearance* —
+    stored clock components were whitelisting small integers.
+  - `/api/schedules/published` is a different query from `/latest`: the newest
+    plan is not the one crews are working to (PRD Section 8's engineer view).
+  - **Tests:** 5 mutations caught (illegal transition made legal, freeze removed,
+    capacity check blinded, digest ignoring dates, reconciliation disabled).
+    Backend 98, optimizer 260, frontend 55.
 - [ ] `todo` — **T20**: What-if simulation endpoint + UI panel (FR5)
 - [x] `done` — **T21**: Conflict detection + typed classification (corridor/train-impact/resource/dependency) + display (FR4)
   - `optimizer/app/core/conflicts.py`: the PRD 9.5 taxonomy. Four detectable types
@@ -252,6 +294,14 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 _Append a dated one-line entry here each session — what was completed, what's next._
 
+- **2026-08-24** — T19 complete. The FR6.1 approval workflow, FR6.2 audit trail and
+  FR6.3 versioned publishing, built so that **D-043's immutability guarantee gained
+  no exception**: the state is derived from an append-only log and the schedule
+  document is still never written after generation. Publishing freezes by refusing
+  writes, and a digest makes that checkable rather than assumed. Three live-run
+  verifier false-accusations found and fixed, plus a phrasing-dependent decline
+  that would have contradicted itself in front of a judge. Next: **T20 (what-if)**
+  or **T23 (policy sliders)**.
 - **2026-08-23** — T15 complete. **All 🔴 must-build tasks are now done.** Manual override with real re-validation, stored as an append-only log rather than by mutating the plan. The adversarial capacity test was mutation-checked to prove it can fail. Next: 🟠 differentiators.
 - **2026-08-23** — T14 complete. `/comparison` renders the FR9.3 metrics table with D-031's framing built into the layout rather than appended as small print, and the real conflict report as evidence. Backend TypeScript conversion re-verified clean beforehand (0 `any`, strict proven enforced, all four suites green) and `CLAUDE.md` corrected. Next: **T15 — manual override**, or T16–T23 differentiators.
 - **2026-08-23** — T12 + T13 complete. First judge-facing screen: Controller Dashboard at `/dashboard`, now the landing route. Cross-department batch visualisation verified to read clearly. Generate trigger and the optimizer-down error state both verified by driving a real browser click. Next: **T14 — Baseline vs AI comparison**, the strongest judging screen, building on `comparisonToBaseline` which this task deliberately left alone.

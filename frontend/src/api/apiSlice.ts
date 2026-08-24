@@ -377,6 +377,14 @@ export interface Schedule {
   /** Manual amendments, appended never edited (FR6.2). Present on detail reads. */
   overrides?: ScheduleOverride[]
   /**
+   * FR6.1 workflow state. NOT stored on the schedule document - it is a fold
+   * over the append-only approval log, computed per read (D-057). Not to be
+   * confused with `status`, which is the CP-SAT solver result.
+   */
+  workflowState?: import('../lib/approval.ts').WorkflowState
+  /** Transitions the server will accept right now. Drives the buttons. */
+  allowedActions?: import('../lib/approval.ts').WorkflowAction[]
+  /**
    * `blocks` is what the solver produced and what `decisionLog` explains.
    * This is that plan with overrides applied - what the Controller is looking
    * at. Render this where it exists.
@@ -453,6 +461,7 @@ export const api = createApi({
   // Cache invalidation tags, extended as CRUD endpoints are added (T10-T11).
   tagTypes: [
     'Health', 'Task', 'Corridor', 'Asset', 'Resource', 'Provenance', 'Schedule', 'Override',
+    'Approval',
   ],
   endpoints: (builder) => ({
     /**
@@ -512,6 +521,20 @@ export const api = createApi({
     getProvenance: builder.query<{ data: DatasetProvenance[] }, void>({
       query: () => '/provenance',
       providesTags: ['Provenance'],
+    }),
+
+    /**
+     * The plan version history (FR6.3). Heavy fields are omitted server-side,
+     * so this is a list of headers, not of plans.
+     */
+    getSchedules: builder.query<
+      { data: Array<Pick<Schedule, '_id' | 'generatedAt' | 'horizonStart' | 'status' | 'metrics'> & {
+        workflowState?: import('../lib/approval.ts').WorkflowState
+      }> },
+      { limit?: number } | void
+    >({
+      query: (args) => `/schedules?limit=${args?.limit ?? 20}`,
+      providesTags: ['Schedule', 'Approval'],
     }),
 
     /** The most recently generated plan. 404s until one has been generated. */
@@ -578,6 +601,44 @@ export const api = createApi({
       }),
     }),
 
+    /**
+     * The full FR6.2 audit trail: generation, every override, every sign-off,
+     * in one time-ordered list.
+     */
+    getAuditTrail: builder.query<
+      { data: import('../lib/approval.ts').AuditTrail },
+      string
+    >({
+      query: (scheduleId) => `/schedules/${encodeURIComponent(scheduleId)}/audit`,
+      providesTags: ['Approval', 'Override'],
+    }),
+
+    /**
+     * FR6.1 - one transition through the approval chain.
+     *
+     * An illegal transition comes back as a 409 naming the state it was
+     * attempted from and the actions that ARE legal there; the UI shows that
+     * rather than a generic error, exactly as the override panel does.
+     *
+     * Invalidates Override too: publishing freezes the plan, so the override
+     * controls have to stop offering moves the server would now refuse.
+     */
+    runWorkflowAction: builder.mutation<
+      { data: import('../lib/approval.ts').ScheduleApproval },
+      {
+        scheduleId: string
+        action: import('../lib/approval.ts').WorkflowAction
+        reason?: string
+      }
+    >({
+      query: ({ scheduleId, ...body }) => ({
+        url: `/schedules/${encodeURIComponent(scheduleId)}/workflow`,
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: ['Schedule', 'Approval', 'Override'],
+    }),
+
     generateSchedule: builder.mutation<
       { data: Schedule },
       { horizonStart?: string; horizonDays?: number } | void
@@ -597,10 +658,13 @@ export const {
   useGetResourcesQuery,
   useGetProvenanceQuery,
   useGetLatestScheduleQuery,
+  useGetSchedulesQuery,
   useGenerateScheduleMutation,
   useGetOverrideTargetsQuery,
   useApplyOverrideMutation,
   useAskThePlannerMutation,
+  useGetAuditTrailQuery,
+  useRunWorkflowActionMutation,
 } = api
 
 /**

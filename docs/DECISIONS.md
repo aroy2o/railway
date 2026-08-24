@@ -2122,3 +2122,233 @@ have called that free. `clearanceMinutes` now travels with every costing, and
 placements tie-break on it.
 
 
+---
+
+## D-057 — The workflow state is a fold over an append-only log, and the two audit logs stay separate
+
+**Date:** 2026-08-24 · **Task:** T19
+
+**Decision.** A schedule's FR6.1 state is **not stored on the schedule
+document**. It is derived, on every read, by folding the rows in a new
+append-only `schedule_approvals` collection. `schedule_overrides` (T15) is left
+exactly as it is. The two are merged into one time-ordered trail at read time by
+`getAuditTrail`.
+
+### Why the state is derived rather than stored
+
+The obvious implementation is a `workflowState` field updated in place. It was
+rejected because of what D-043 is for.
+
+D-043 exists so `blocks` and `decisionLog` cannot shift underneath T17's
+explanations. That guarantee currently has a strong form — *the schedule
+document is never written after generation* — which is easy to state, easy to
+test, and easy for a later task to keep. Adding one mutable field turns it into
+*the schedule document is never written after generation, except for one field*,
+and a rule with an exception is a rule people stop checking. The second
+exception is always easier to argue for than the first.
+
+Deriving instead keeps the original guarantee intact and costs almost nothing:
+the fold is the last row's `toState`, the list route gets every plan's state in
+one query, and **no migration is needed** — a schedule with no rows is a draft,
+which every schedule generated before T19 genuinely is.
+
+It also makes the state machine auditable by construction. The state *is* the
+history, so "how did this plan get here" cannot disagree with "where is it now".
+
+### Why the override log and the approval log are separate collections
+
+PRD Section 15 sketches one `audit_logs` with
+`action: "override"|"approve"|"reject"`. This build stores two and joins them.
+
+**They have different arity.** An override is keyed `(scheduleId, taskId)` and
+is a delta on one *placement*: it needs `fromAssignment`, `newAssignment`,
+`originalAiAssignment`, and a six-check re-validation of that move. An approval
+is keyed `(scheduleId)` alone and is a verdict on the *whole plan*: no task, no
+assignment, and a re-validation of a different kind. In one table, four fields
+would be structurally null on every approve/reject row — a union pretending to
+be a table.
+
+**Each collection keeps one writer.** `scheduleOverrides.ts` is the only writer
+of overrides and `scheduleApprovals.ts` the only writer of approvals, so the
+append-only invariant is enforced in one place per collection rather than in one
+place for two different invariants.
+
+**And merging would mean rewriting T15.** Its collection is tested and governed
+by D-043; changing its shape to fit a sketch *is* rebuilding it.
+
+The PRD's `audit_logs` is honoured as what it is actually for — the merged view
+at `GET /api/schedules/:id/audit`. Storage and presentation are allowed to
+differ, and this is the same split D-043 already made when it computed
+`effectivePlan` on read instead of storing it.
+
+### The transitions, and why exactly these
+
+```
+draft        --submit-->  under_review
+under_review --approve--> approved      (guarded by whole-plan re-validation)
+under_review --reject-->  rejected      (terminal)
+approved     --publish--> published     (terminal)
+```
+
+**Re-validation is not a state.** FR6.1 draws it between Accept and Final
+Approval. A state a plan can only be in for the duration of one request is a
+state nobody can observe, so it is the *guard* on `approve` instead.
+
+**`rejected` does not return to `draft`.** Rejection is not a dead end for the
+*process*, because the way forward is to regenerate — and by D-034 that is a new
+document anyway. Allowing revise-and-resubmit on the same id would buy nothing
+and would mean "who approved SCH-X" had different answers at different times.
+
+**Approving does not check the solver's known gaps.** Every plan on this corpus
+carries T24/T25 conflicts (11 resource, 5 dependency on the real run), so
+blocking on them would make every plan unapprovable. They are recorded on the
+approval row as `knownUnresolved` instead: an approval is a human accepting known
+risk, and a signature has to state what was known-unresolved when it was given.
+
+### What happens to overrides
+
+**Nothing.** D-043 already keyed them to a schedule id, so a regeneration
+produces a new plan and amendments stay with the plan they amended. T19 adds one
+gate in front of `recordOverride` — the plan must still be open — and changes
+nothing below it.
+
+**A rejected plan's overrides are kept, not deleted.** Deleting audit records
+because a plan was discarded is the opposite of an audit trail.
+
+---
+
+## D-058 — Publishing freezes a plan by refusing writes, not by snapshotting it
+
+**Date:** 2026-08-24 · **Task:** T19
+
+**Decision.** `published` is terminal, and no override is accepted on a
+published plan. The freeze is enforced entirely by that refusal. Nothing is
+copied, and the schedule document is still not written to.
+
+**Why not snapshot.** Storing the effective plan at publication would create a
+second source of truth for what the plan is, and the two could disagree — the
+exact problem D-043 avoided by never mutating `blocks`. It is also unnecessary:
+immutable base blocks plus a closed override log reproduce the published plan
+deterministically, forever.
+
+This is the sense in which the freeze is **additive to D-043 rather than a
+workaround of it**: it adds a rule about what may be *written next*, and takes
+nothing away from what is already immutable.
+
+**The one input the freeze does not cover, and what is done about it.**
+`applyOverrides` reads task durations from the `tasks` collection, which the
+freeze says nothing about. This build never edits them — nothing but the seed
+writes `estBlockDurationMins` — so the risk is latent, not active. Latent is not
+absent, so publication records a `publishedPlanDigest`: a hash over corridor,
+date, window, times, task ids and the deferred set. `GET /:id/audit` re-derives
+it and reports `digestMatchesPublished`, and the plan-level re-validation
+includes a `booked-minutes-match-task-durations` check aimed at the same drift.
+
+The digest was mutation-tested by writing an override straight into the
+collection, past the API that refuses it: the check goes false, and true again
+when it is removed. A verification that cannot fail is decoration.
+
+**Why the version number is assigned at publish, not at generation.** FR6.3's
+versions are dense (1, 2, 3…) and count *published* plans. Ten discarded drafts
+should not make the second issued plan "version 11".
+
+**`/api/schedules/published` is deliberately a different query from `/latest`.**
+Generating a new plan does not retract the published one. `/latest` is the newest
+plan; `/published` is what crews are working to. Conflating them would show a
+department a possession nobody has approved — and PRD Section 8 gives engineers
+a read-only view of exactly the published one.
+
+---
+
+## D-059 — Ids and instants are checked as what they are, not as the integers they contain
+
+**Date:** 2026-08-24 · **Task:** T19
+
+**Decision.** Before the grounding verifier scans an answer for numbers, it
+removes whole ISO instants, whole ISO dates, cited record ids, and anything
+matching this system's generated-id shape (`APR-20260824025855658-approve`).
+Instants and dates are then checked as *strings* against the values the context
+actually held.
+
+**Why.** Three live runs during T19 produced three false accusations, all of the
+same shape and all of them the checker's fault:
+
+| the model wrote | flagged as invented | why it was wrong |
+|---|---|---|
+| `APR-20260824025855658-approve` | `20260824025855658` | a citation, and the prompt asks for citations |
+| `2026-08-24T02:59:09.017Z` | `9` | a date-only strip left `T02:59:09Z` to be read as quantities |
+| the same, both rows | `55`, `9` | as above |
+
+This is the third, fourth and fifth instance of the pattern D-054 recorded, and
+the reason it keeps mattering is asymmetric: **a verifier that cries wolf is
+worse than no verifier**, because a Controller who sees it flag correct answers
+learns to ignore the one flag that is real. The whole value of PRD Section 18's
+check is that it is believed.
+
+**Nothing is lost.** Whether a cited id exists is already checked separately and
+exactly, as `unknownRecordIds`. A fabricated instant is still caught — as an
+instant. A distinctive invented quantity (`987654`) is still caught. Short ids
+like `TSK-00042` are deliberately left in the scan.
+
+**Two related fixes, both surfaced by the same runs.**
+
+`_normalise_number` routed every value through `float`. Above 2^53 that cannot
+hold an integer exactly, so the 17-digit id timestamps this system generates came
+back off by one or two — and the *same* value could normalise differently
+depending on which side of the check it arrived from. Whole-number strings now
+bypass `float` entirely.
+
+`numbers()` used to strip a date and then feed the leftover clock into the
+allowed set, so `02`, `59` and `09` from a sign-off time became quotable
+integers. That is a false *clearance*, the mirror of a false accusation: a
+fabricated "9 trains" would have passed on any plan approved at nine minutes
+past. Instants now contribute their year and day only — the same withholding
+rule the month already had.
+
+---
+
+## D-060 — The approval framing is not a model framing, and approval facts are never keyword-gated
+
+**Date:** 2026-08-24 · **Task:** T19
+
+**Two decisions from the same source: T19 removing `approval and audit history`
+from `UNAVAILABLE_TOPICS`.** That claim became false the moment the workflow
+existed, and the precedent is now established three times — T16 removed its own
+"risk model not built" line, T22 removed "no train-impact data", T19 removes
+this. A system that keeps asserting a limitation it has since fixed is as wrong
+as one that overclaims, just in the flattering direction.
+
+**What replaces it is attribution, not silence.** What an approval answer can
+now get wrong is *who*: this build has roles, not user accounts, so a sign-off
+is attributable to `controller` or `drm` and to a timestamp, and to nothing
+finer. Naming an individual would be inventing the most quotable detail in an
+audit trail.
+
+**Why it is `workflow_framing` and not `model_framing`.** The prompt attaches a
+"this came from a model trained on simulated data" disclaimer to every
+`model_framing` fact. An approval record is the opposite of a model output — it
+is a stored fact about what a human role did. Filing it under the same kind
+would have made the system disclaim its own audit trail as simulated: false, in
+the humble direction, which is still false. It still renders beside the answer,
+because `model_framings()` collects both kinds.
+
+**Why approval rows are never keyword-gated.** They were, at first — promoted
+only when the question matched an approval trigger. A live run broke it
+immediately: *"Who signed this off?"* matches neither `sign off` nor
+`signed off`, the rows were dropped by the size budget, and the answer came back
+as a **decline** claiming the role was not in the data — one second after the
+same plan answered *"Who approved this plan?"* correctly. **A system that
+declines depending on phrasing is worse than one that declines consistently**,
+because a Controller cannot tell which of the two answers to believe.
+
+The gate was also unnecessary. The state machine bounds the list structurally:
+the longest legal path is `submit → approve → publish`, so a plan can never
+carry more than three rows, and each already drops its six pass/fail check
+lines. Verified across five phrasings against the live model, plus the draft
+case on a second plan.
+
+**One thing the size budget did force.** The attribution framing fact *is* gated
+— attached when the question raises approvals or the plan has been through the
+workflow. Attaching it unconditionally pushed a named task's own override past
+`MAX_CONTEXT_CHARS`, which is D-053's failure exactly: a caveat displacing the
+evidence the question asked for.

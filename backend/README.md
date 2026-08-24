@@ -97,6 +97,10 @@ with supertest and never bind a socket.
 | `POST` | `/api/schedules/:id/override` | **FR6.2** — move a task to another free window on its corridor, or defer it. Re-validated; refused with the specific failing check. |
 | `GET` | `/api/schedules/:id/overrides` | The FR6.2 audit trail for one plan. |
 | `GET` | `/api/schedules/:id/override-targets/:taskId` | Windows a task can legally move into, from the same validator the write path uses. |
+| `POST` | `/api/schedules/:id/workflow` | **FR6.1** — one transition: `submit`, `approve`, `reject` or `publish`. An illegal one is a 409 naming the state and the actions that *are* legal. |
+| `GET` | `/api/schedules/:id/approvals` | The approval/rejection history alone. |
+| `GET` | `/api/schedules/:id/audit` | **FR6.2** — the merged trail: what generated the plan, every override, every sign-off, in time order. |
+| `GET` | `/api/schedules/published` | **FR6.3** — the plan currently in force. Deliberately NOT `/latest`. |
 
 Every list endpoint answers `{ data, pagination }` and is bounded — `limit`
 defaults to 50 and is capped at 200, so no route can return all 10,149
@@ -212,7 +216,62 @@ Both are computed once by the optimizer, which owns the taxonomy, and stored
 verbatim (D-046). Node classifies nothing. Schedules generated before T21 have
 `conflictReport: null`, and the dashboard falls back to count-only rendering.
 
+## Approval workflow (FR6.1) and audit trail (FR6.2, FR6.3)
+
+```
+draft --submit--> under_review --approve--> approved --publish--> published
+                       |
+                       +--reject--> rejected
+```
+
+`rejected` and `published` are terminal. Anything else is refused with the state
+it was attempted from and the actions that are legal there — a bare 409 tells a
+Controller nothing about what to do next.
+
+**The state is not a field.** It is a fold over the append-only
+`schedule_approvals` collection, recomputed on every read. That is what keeps
+D-043's guarantee — *the schedule document is never written after generation* —
+free of exceptions, and it means no migration: a plan with no rows is a draft.
+See `docs/DECISIONS.md` D-057.
+
+**`approve` re-validates the whole plan**, not the move. FR6.1 puts constraint
+re-validation between Accept and Final Approval, so it is the guard on that
+transition and its result is stored on the row either way. Six checks, aimed at
+what nothing else has ever checked: the solver's output was valid when produced,
+and every override was validated against the plan as it stood *at that moment* —
+the plan that came out the far end has been validated by nothing.
+
+Known solver gaps (T24 resource, T25 dependency) do **not** block approval —
+every plan on this corpus has them. They are recorded as `knownUnresolved`,
+because a signature has to state what was known-open when it was given.
+
+**Publishing freezes the plan by refusing further writes, not by snapshotting
+it** (D-058). Copying the effective plan would invent a second source of truth
+for what the plan is — the exact problem D-043 avoided. A `publishedPlanDigest`
+is recorded so the freeze is *checkable*: `/audit` re-derives it and reports
+`digestMatchesPublished`. The one input the freeze does not cover is task
+durations, which `applyOverrides` reads live; nothing in this build edits them,
+and both the digest and a `booked-minutes-match-task-durations` check watch for
+it anyway.
+
+**Two collections, one view.** PRD Section 15 sketches a single `audit_logs`.
+It is stored as `schedule_overrides` (T15) and `schedule_approvals` (T19) and
+merged by `getAuditTrail`, because an override is a delta on one *placement* and
+an approval is a verdict on the *whole plan* — in one table, `taskId` and both
+assignment fields would be structurally null on every approve/reject row.
+
+**`/published` is not `/latest`.** Generating a new plan does not retract the
+published one. The newest plan is a draft; the published plan is what crews are
+working to. Conflating them would show a department a possession nobody approved.
+
+---
+
 ## Manual override (FR6.2)
+
+Overrides are accepted only while the plan is open — `draft`, `under_review` or
+`approved`. A published plan is frozen and a rejected one is discarded, and the
+refusal says which. That gate sits *in front of* everything below; the override
+engine and its re-validation are unchanged from T15.
 
 `GET /api/schedules/:id` and `/latest` return three things: `blocks` (the plan
 exactly as the solver produced it, which `decisionLog` explains), `overrides`

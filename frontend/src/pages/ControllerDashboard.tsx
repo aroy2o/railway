@@ -28,6 +28,8 @@ import type { ScheduleBlock } from '../api/apiSlice.ts'
 import DeferredTasksPanel from '../components/DeferredTasksPanel.tsx'
 import GanttTimeline from '../components/GanttTimeline.tsx'
 import OverrideHistory from '../components/OverrideHistory.tsx'
+import WorkflowPanel from '../components/WorkflowPanel.tsx'
+import { OVERRIDABLE_STATES } from '../lib/approval.ts'
 import OverridePanel from '../components/OverridePanel.tsx'
 import AskThePlanner from '../components/AskThePlanner.tsx'
 import KnownLimitations from '../components/KnownLimitations.tsx'
@@ -51,6 +53,9 @@ export function ControllerDashboard() {
   // effective plan is that with manual overrides replayed on top (D-043).
   // The Controller is looking at the latter.
   const visibleBlocks = plan?.effectivePlan?.blocks ?? plan?.blocks ?? []
+  // FR6.1: a published plan is frozen and a rejected one is discarded. Read
+  // from the same set the server enforces, rather than restating the rule here.
+  const overridable = OVERRIDABLE_STATES.has(plan?.workflowState ?? 'draft')
   // A 404 means "none generated yet", which is an empty state rather than an
   // error - the difference matters on first run.
   const noScheduleYet =
@@ -150,11 +155,14 @@ export function ControllerDashboard() {
                     blocks={visibleBlocks}
                     horizonStart={plan.horizonStart}
                     horizonDays={plan.horizonDays}
-                    onSelectBlock={setSelected}
+                    // Withheld once the workflow closes the plan: a published
+                    // plan is frozen and a rejected one is discarded, so the
+                    // server would refuse the override this click starts.
+                    onSelectBlock={overridable ? setSelected : undefined}
                     selectedBlockKey={selected ? blockKey(selected) : null}
                   />
 
-                  {selected && (
+                  {overridable && selected && (
                     <OverridePanel
                       scheduleId={plan._id}
                       // Re-read from the current plan so the panel never acts on
@@ -175,6 +183,14 @@ export function ControllerDashboard() {
                 </div>
 
                 <div className="space-y-6">
+                  {/* First in the sidebar: whether this plan has been issued
+                      changes how everything below it should be read. */}
+                  <WorkflowPanel
+                    scheduleId={plan._id}
+                    state={plan.workflowState ?? 'draft'}
+                    allowedActions={plan.allowedActions ?? []}
+                    version={null}
+                  />
                   <PriorityQueue tasks={tasks.data?.data ?? []} schedule={plan} />
                   <OverrideHistory overrides={plan.overrides ?? []} />
                   <KnownLimitations

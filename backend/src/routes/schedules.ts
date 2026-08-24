@@ -5,9 +5,10 @@
  * over HTTP, persist the result. Read paths exist so a dashboard (T13) or a
  * comparison screen (T14) can retrieve a plan without re-running the solver.
  *
- * Not in this slice: approval workflow and versioned publishing (FR6, task
- * T19), and manual override (T15). Every generation is stored, so the audit
- * trail those tasks need is already accumulating.
+ * The FR6.1 approval workflow wraps these: a generated plan is a `draft`, and
+ * `POST /:id/workflow` walks it through review, approval and publication. The
+ * state is never stored on the schedule document - it is a fold over the
+ * append-only `schedule_approvals` rows (D-057).
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -21,6 +22,15 @@ import {
   generateSchedule,
 } from '../services/scheduleOrchestrator.js';
 import { explainSchedule } from '../services/explainService.js';
+import {
+  findPublishedSchedule,
+  getAuditTrail,
+  getWorkflowState,
+  listApprovals,
+  recordTransition,
+  workflowStates,
+} from '../services/scheduleApprovals.js';
+import { allowedActions } from '../services/approvalEngine.js';
 import {
   getEffectivePlan,
   listOverrides,
@@ -81,7 +91,15 @@ router.get(
           .lean(),
         Schedule.countDocuments({}),
       ]);
-      res.json(listResponse(data, { total, limit, offset }));
+      // FR6.3's version history is this list, so each row carries its workflow
+      // state. Fetched in one query for the whole page rather than per row.
+      const states = await workflowStates(data.map((schedule) => schedule._id));
+      res.json(
+        listResponse(
+          data.map((schedule) => ({ ...schedule, workflowState: states.get(schedule._id) })),
+          { total, limit, offset },
+        ),
+      );
     } catch (err) {
       next(err);
     }
@@ -99,7 +117,50 @@ router.get('/latest', async (_req: Request, res: Response, next: NextFunction) =
     // explains those. `effectivePlan` is that plan with manual overrides
     // replayed on top, which is what a Controller is looking at (D-043).
     const { overrides, effectivePlan } = await getEffectivePlan(schedule._id);
-    res.json({ data: { ...schedule, overrides, effectivePlan } });
+    const workflowState = await getWorkflowState(schedule._id);
+    res.json({
+      data: {
+        ...schedule,
+        overrides,
+        effectivePlan,
+        workflowState,
+        allowedActions: allowedActions(workflowState),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/schedules/published - the plan currently in force (FR6.3).
+ *
+ * Deliberately a different query from `/latest`. Generating a new plan does not
+ * retract the published one: `/latest` is the newest plan, this is the one
+ * crews are working to, and PRD Section 8 gives department engineers a
+ * read-only view of exactly this. Declared before `/:id` for the same reason
+ * `/latest` is.
+ */
+router.get('/published', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const published = await findPublishedSchedule();
+    if (!published) {
+      throw ApiError.notFound(
+        'No plan has been published yet. Approve and publish a plan first (FR6.1).',
+      );
+    }
+    const schedule = await findScheduleById(published.scheduleId);
+    const { overrides, effectivePlan } = await getEffectivePlan(published.scheduleId);
+    res.json({
+      data: {
+        ...schedule,
+        overrides,
+        effectivePlan,
+        version: published.version,
+        publishedAt: published.publishedAt,
+        workflowState: 'published',
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -116,7 +177,16 @@ router.get(
       const { id } = validated<IdParam>(req.params);
       const schedule = await findScheduleById(id);
       const { overrides, effectivePlan } = await getEffectivePlan(id);
-      res.json({ data: { ...schedule, overrides, effectivePlan } });
+      const workflowState = await getWorkflowState(id);
+      res.json({
+        data: {
+          ...schedule,
+          overrides,
+          effectivePlan,
+          workflowState,
+          allowedActions: allowedActions(workflowState),
+        },
+      });
     } catch (err) {
       next(err);
     }
@@ -248,6 +318,84 @@ router.get(
     try {
       const { id, taskId } = validated<{ id: string; taskId: string }>(req.params);
       res.json({ data: await listValidTargets(id, taskId) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/* -------------------------------------------------------------------------- */
+/* Approval workflow - FR6.1, FR6.3                                            */
+/* -------------------------------------------------------------------------- */
+
+const workflowSchema = z
+  .object({
+    action: z.enum(['submit', 'approve', 'reject', 'publish']),
+    // Free-text on every action, and MANDATORY on reject - the same call FR6.2
+    // made for an override. A rejection with no stated reason tells the next
+    // reader that a plan was refused and nothing about why, which is the one
+    // thing an audit trail exists to answer.
+    reason: z.string().trim().max(500).optional(),
+    actorRole: z.enum(['controller', 'drm']).default('controller'),
+  })
+  .refine((body) => body.action !== 'reject' || (body.reason ?? '').length >= 8, {
+    message: 'Rejecting a plan requires a reason of at least 8 characters',
+    path: ['reason'],
+  });
+type WorkflowBody = z.infer<typeof workflowSchema>;
+
+/**
+ * POST /api/schedules/:id/workflow
+ *
+ * One route for the whole FR6.1 chain rather than four near-identical ones: the
+ * interesting behaviour is the transition TABLE, and splitting it across routes
+ * would put the guard in four places. An illegal transition is refused with the
+ * state it was attempted from and the actions that are legal there.
+ */
+router.post(
+  '/:id/workflow',
+  validate({ params: idParamSchema, body: workflowSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = validated<IdParam>(req.params);
+      const body = validated<WorkflowBody>(req.body);
+      const approval = await recordTransition({ scheduleId: id, ...body });
+      res.status(201).json({ data: approval });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/** The approval/rejection history alone. The merged trail is `/:id/audit`. */
+router.get(
+  '/:id/approvals',
+  validate({ params: idParamSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = validated<IdParam>(req.params);
+      res.json({ data: await listApprovals(id) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * GET /api/schedules/:id/audit - PRD Section 8 screen 5, FR6.2, FR6.3.
+ *
+ * Who or what generated the plan, every override with its reason and
+ * re-validation result, and the approval history - one time-ordered list. The
+ * two record kinds keep their own collections and are merged here, because they
+ * are one narrative and two shapes (D-057).
+ */
+router.get(
+  '/:id/audit',
+  validate({ params: idParamSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = validated<IdParam>(req.params);
+      res.json({ data: await getAuditTrail(id) });
     } catch (err) {
       next(err);
     }

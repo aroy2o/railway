@@ -88,14 +88,14 @@ nav; `/` redirects to `/corridors`.
 | `/tasks` | The maintenance backlog, filterable by department |
 | `/resources` | Crews, machines and permissions with their depot corridor scope |
 | `/comparison` | **Baseline vs AI** (FR9.3) — what coordination changes, with D-031's framing built into the layout |
+| `/audit` | **Approval & audit trail** (FR6.1–FR6.3) — plan version history, the workflow panel, and the merged FR6.2 trail |
 | `/status` | Live service wiring **and** the data provenance record |
 
 `/` redirects to `/dashboard`: PRD Section 8 calls it the primary demo screen
 (D-039). The read-only views remain in the nav — they answer "where did this
 number come from".
 
-Still to come: manual override (T15), Ask the Planner (T18), what-if simulation
-(T20) and policy sliders (T23).
+Still to come: what-if simulation (T20) and policy sliders (T23).
 
 ## The comparison screen
 
@@ -148,6 +148,43 @@ the write path, so nothing offered can be refused. The refusal path is still
 fully built, because validity can change between opening the panel and
 confirming. Both outcomes render the full six-check re-validation, not a bare
 verdict.
+
+**Withheld once the plan is closed (T19).** The timeline stops inviting a click
+— `onSelectBlock` is `undefined` — and the legend's "click a block to override"
+hint disappears, once the plan's workflow state leaves
+`{draft, under_review, approved}`. Offering an action the server would then
+refuse reads as the system being broken rather than as the plan being frozen or
+discarded, so the affordance and the guard agree by construction:
+`OVERRIDABLE_STATES` in `lib/approval.ts` mirrors the server's set exactly, and
+is the one thing this module deliberately duplicates rather than re-deriving.
+
+## Approval workflow and audit trail (FR6.1–FR6.3)
+
+`AuditPage` (`/audit`) lists every plan version in the left rail — each
+generation is its own document (D-034), so the version list *is* the history
+FR6.3 asks for — and shows the selected plan's `WorkflowPanel` and `AuditTrail`
+beside it. `ControllerDashboard` shows the same `WorkflowPanel` for the latest
+plan, so the state is visible without a second screen.
+
+**The buttons are never a second state machine.** `WorkflowPanel` renders
+exactly the `allowedActions` the API returned for this plan and nothing else —
+it does not recompute what is legal. A transition table duplicated in the
+browser is a transition table that will eventually disagree with the one the
+server enforces, and the one that drifts is always the one offering a button
+that gets refused.
+
+`reject` requires a reason (same FR6.2 rule the override panel already
+enforces); `reject` and `publish` are one click to arm, a second to confirm —
+both are terminal, and the recovery path for a mistake is generating a new plan,
+not undoing this one.
+
+`describeSignOff` in `lib/approval.ts` is the one function worth reading before
+touching this screen: a plan nobody has approved must say so as a *state*
+("Not approved yet — no sign-off recorded"), never render a blank panel. A blank
+reads as "nothing to show" and lets a Controller mistake an unreviewed plan for
+an approved one — the same failure the grounding contract's own workflow fact
+exists to prevent on the Ask-the-Planner side. Attribution throughout is by
+**role**, never a name: this prototype has no user accounts.
 
 `OverrideHistory` shows every amendment with the solver's original
 placement kept alongside it.

@@ -1,11 +1,11 @@
 /**
  * Model registry - PRD Section 15 collections.
  *
- * Collections still to come as their tasks land:
- *   decision_logs (T17), audit_logs (T19), conflicts (T21)
- *
- * `schedule_overrides` (FR6.2) is T15's; T19's formal audit_logs will likely
- * subsume or reference it when the full approval workflow lands.
+ * PRD Section 15's `audit_logs` is stored as TWO append-only collections -
+ * `schedule_overrides` (FR6.2, T15) and `schedule_approvals` (FR6.1/6.3, T19) -
+ * and merged into one time-ordered trail on read by `getAuditTrail`. The two
+ * records have different arity, so a single table would leave `taskId` and both
+ * assignment fields structurally null on every approve/reject row. See D-057.
  */
 export { Corridor } from './Corridor.js';
 export type { ICorridor, CorridorDocument, StationRef, OccupancySummary } from './Corridor.js';
@@ -46,3 +46,13 @@ export type {
   ScheduleDeferredTask,
   GenerationError,
 } from './Schedule.js';
+
+export { ScheduleApproval } from './ScheduleApproval.js';
+export type {
+  IScheduleApproval,
+  ScheduleApprovalDocument,
+  WorkflowState,
+  WorkflowAction,
+  PlanCheck,
+  PlanValidation,
+} from './ScheduleApproval.js';

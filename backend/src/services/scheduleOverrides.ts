@@ -16,6 +16,7 @@ import {
   type CorridorWindow,
   type EffectivePlan,
 } from './overrideEngine.js';
+import { assertOverridable } from './workflowState.js';
 import { ApiError } from '../utils/ApiError.js';
 import { logger } from '../utils/logger.js';
 
@@ -72,6 +73,11 @@ export async function getEffectivePlan(scheduleId: string): Promise<EffectivePla
  */
 export async function recordOverride(request: OverrideRequest): Promise<IScheduleOverride> {
   const { schedule, overrides, effectivePlan } = await getEffectivePlan(request.scheduleId);
+
+  // T19: a published plan is frozen and a rejected one is discarded. This is a
+  // gate in front of T15's logic, not a change to it - everything below runs
+  // exactly as it did before.
+  await assertOverridable(request.scheduleId);
 
   const task = await Task.findById(request.taskId).lean();
   if (!task) throw ApiError.notFound(`No task ${request.taskId}`);

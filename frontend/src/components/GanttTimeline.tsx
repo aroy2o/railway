@@ -159,7 +159,7 @@ export function GanttTimeline({
         </div>
       )}
 
-      <Legend />
+      <Legend canOverride={onSelectBlock !== undefined} />
     </section>
   )
 }
@@ -264,7 +264,7 @@ function HorizonToggle() {
   )
 }
 
-function Legend() {
+function Legend({ canOverride }: { canOverride: boolean }) {
   return (
     <div className="flex flex-wrap items-center gap-4 border-t border-slate-100 px-5 py-3 text-[11px] text-slate-500">
       {(Object.keys(DEPARTMENT_BAR) as Department[]).map((department) => (
@@ -282,7 +282,13 @@ function Legend() {
           Shared block — one possession, two departments
         </span>
       </span>
-      <span className="ml-auto text-slate-400">Click a block to override its placement</span>
+      {/* Only offered when the caller actually accepts a selection. A
+          published plan is frozen (T19), and inviting a click the server would
+          then refuse reads as the system being broken rather than as the plan
+          being closed. */}
+      {canOverride && (
+        <span className="ml-auto text-slate-400">Click a block to override its placement</span>
+      )}
     </div>
   )
 }

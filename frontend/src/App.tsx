@@ -4,14 +4,14 @@
  * The Controller Dashboard (PRD Section 8) is the landing route; the read-only
  * data views remain reachable from the nav.
  *
- * Still to come: the Baseline vs AI comparison (T14), manual override (T15),
- * Ask the Planner (T18), what-if simulation (T20) and policy sliders (T23).
+ * Still to come: what-if simulation (T20) and policy sliders (T23).
  */
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import AppHeader from './components/AppHeader.tsx'
 import PrototypeBanner from './components/PrototypeBanner.tsx'
 import AssetsPage from './pages/AssetsPage.tsx'
+import AuditPage from './pages/AuditPage.tsx'
 import ComparisonPage from './pages/ComparisonPage.tsx'
 import ControllerDashboard from './pages/ControllerDashboard.tsx'
 import CorridorDetailPage from './pages/CorridorDetailPage.tsx'
@@ -42,6 +42,7 @@ function App() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<ControllerDashboard />} />
           <Route path="/comparison" element={<ComparisonPage />} />
+          <Route path="/audit" element={<AuditPage />} />
           <Route path="/corridors" element={<CorridorsPage />} />
           <Route path="/corridors/:id" element={<CorridorDetailPage />} />
           <Route path="/assets" element={<AssetsPage />} />
