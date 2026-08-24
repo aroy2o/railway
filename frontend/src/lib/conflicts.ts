@@ -10,11 +10,12 @@
  * -----------------------------------
  * Conflicts arrive from two different plans. Baseline conflicts are the FR9.1
  * finding - the thing this system is arguing against. Optimized-plan conflicts
- * are gaps the solver does not yet close (T25). A screen that summed them
- * would show "17 conflicts" against a system whose own plan carries 16 and
- * whose comparison target carries 9, which is true of neither. `groupConflicts`
- * therefore takes the plan as a required argument and drops anything that does
- * not match. See docs/DECISIONS.md D-045.
+ * are, as of T25, normally zero - both PRD 9.5 types the solver could carry
+ * (dependency precedence, resource no-overlap) are hard constraints now. A
+ * screen that summed the two plans anyway would misattribute the baseline's
+ * own conflicts to this system's plan, which is false regardless of the
+ * count. `groupConflicts` therefore takes the plan as a required argument and
+ * drops anything that does not match. See docs/DECISIONS.md D-045.
  */
 
 export type ConflictPlan = 'optimized' | 'baseline'

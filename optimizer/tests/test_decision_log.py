@@ -178,26 +178,47 @@ def test_department_is_on_every_entry(batched):
 
 def test_conflict_types_match_the_conflict_report_exactly():
     """Two views of one fact. If they can disagree, an explanation can cite a
-    conflict the conflict screen does not show, or miss one it does."""
-    from app.core.conflicts import from_known_gaps
+    conflict the conflict screen does not show, or miss one it does.
 
-    result = solve_schedule(
-        [
-            task("E1", "Engineering", 100, required_resource_ids=("RES-tamper",)),
-            task("S1", "S&T", 80, required_resource_ids=("RES-tamper",)),
-        ],
-        {"A-B": CorridorAvailability("A-B", (DailyWindow(60, 300),))},
-        horizon_start=H, horizon_days=1,
-    )
+    T25 made resource conflicts a hard CP-SAT constraint, so a real solve can
+    no longer produce one to exercise this cross-reference against (the same
+    reason T24 did this for dependency violations) - `annotate_conflicts` is
+    exercised directly against a hand-built `known_gaps`, decoupled from
+    `solve_schedule`, matching the standalone-testability convention every
+    core module here follows."""
+    from app.core.scheduler import annotate_conflicts
 
-    from_report: dict[str, set[str]] = {}
-    for conflict in from_known_gaps(result.known_gaps):
-        for task_id in conflict.task_ids:
-            from_report.setdefault(task_id, set()).add(conflict.type)
+    known_gaps = {
+        "resourceConflicts": {
+            "count": 1,
+            "conflicts": [
+                {
+                    "taskIds": ["E1", "S1"],
+                    "sharedResourceIds": ["RES-tamper"],
+                    "date": "2026-08-24",
+                    "corridorIds": ["A-B", "A-B"],
+                    "corridorId": "A-B",
+                    "departments": ["Engineering", "S&T"],
+                    "overlapStart": "01:00",
+                    "overlapEnd": "02:20",
+                    "overlapMinutes": 80,
+                }
+            ],
+        },
+        "dependencyViolations": {"count": 0, "violations": []},
+    }
+    decision_log = [
+        {"taskId": "E1", "decision": "scheduled"},
+        {"taskId": "S1", "decision": "scheduled"},
+        {"taskId": "T1", "decision": "deferred"},
+    ]
 
-    assert from_report, "expected the fixture to produce a real conflict"
-    for entry in result.decision_log:
-        assert set(entry["conflictTypes"]) == from_report.get(entry["taskId"], set())
+    annotate_conflicts(decision_log, known_gaps)
+
+    by_task = {entry["taskId"]: set(entry["conflictTypes"]) for entry in decision_log}
+    assert by_task["E1"] == {"RESOURCE_CONTENTION"}
+    assert by_task["S1"] == {"RESOURCE_CONTENTION"}
+    assert by_task["T1"] == set()
 
 
 def test_a_task_in_no_conflict_reports_an_empty_list_not_a_missing_key(batched):

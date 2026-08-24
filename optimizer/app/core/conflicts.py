@@ -8,12 +8,15 @@ for.
 
 WHAT THIS DOES NOT DO
 ---------------------
-It does not resolve anything. Resource no-overlap is still task T25; this
-classifies and labels what is detected so a Controller can see it. Labelling a
-resolution is not performing one, and the output says so. Dependency
-precedence (PRD 9.7) is the one exception: T24 made it a hard CP-SAT
-constraint, so `DEPENDENCY_ORDER_VIOLATION` is CHECKED_AND_CLEAR below, not a
-live conflict type - see `app.core.scheduler`'s dependency constraints.
+It does not resolve anything - this classifies and labels what is detected so
+a Controller can see it, and labelling a resolution is not performing one.
+Both dependency precedence (T24) and resource no-overlap (T25) are now hard
+CP-SAT constraints rather than unmodelled gaps, so `DEPENDENCY_ORDER_VIOLATION`
+and `RESOURCE_CONTENTION` are both CHECKED_AND_CLEAR below, not live conflict
+types - see `app.core.scheduler`'s constraints. What remains genuinely
+unmodelled by the OPTIMIZED plan is nothing, on the current PRD 9.5 taxonomy;
+`TRAIN_IMPACT_CONFLICT` is CHECKED_AND_CLEAR too (T22). Baseline conflicts are
+untouched - the baseline is not this system's plan to enforce anything on.
 
 TWO CONFLICT LAYERS, KEPT APART
 -------------------------------
@@ -79,6 +82,12 @@ CHECKED_AND_CLEAR: dict[str, str] = {
         "and only if the prerequisite is itself scheduled. `solve_schedule` asserts this "
         "holds on every solve rather than trusting it silently, which is why this is checked "
         "rather than assumed."
+    ),
+    ConflictType.RESOURCE_CONTENTION: (
+        "Resource no-overlap (PRD 9.8) is enforced as a hard CP-SAT constraint (T25): two "
+        "tasks sharing a required crew, machine or permission cannot occupy overlapping "
+        "windows, on any corridor. `solve_schedule` asserts this holds on every solve "
+        "rather than trusting it silently, which is why this is checked rather than assumed."
     ),
 }
 
@@ -185,25 +194,28 @@ def resource_resolution(same_department: bool) -> Resolution:
     proceeds", which describes the cross-department case. Within one department
     it is not a contest between rival claimants - it is one office having
     double-booked its own gang, and the fix is to stagger the work rather than
-    to drop a task.
+    to drop a task. T25 already enforces both cases as a hard CP-SAT
+    constraint; reaching either of these on the optimized plan at all would
+    mean that constraint had a bug (see CHECKED_AND_CLEAR above).
     """
     if same_department:
         return Resolution(
             strategy="Stagger within the department",
             explanation=(
                 "One department has booked the same crew or machine for two jobs running at "
-                "the same time. Nobody outranks anybody here - the department sequences its "
-                "own work into different windows."
+                "the same time. The optimizer already refuses this and sequences the "
+                "department's own work into different windows instead (T25)."
             ),
-            enforced_by="T25",
+            enforced_by=None,
         )
     return Resolution(
         strategy="Only one proceeds",
         explanation=(
-            "Two departments need the same depot resource simultaneously. One task proceeds "
-            "and the other moves to a window where the resource is free."
+            "Two departments need the same depot resource simultaneously. The optimizer "
+            "already refuses this - one task proceeds and the other moves to a window "
+            "where the resource is free (T25)."
         ),
-        enforced_by="T25",
+        enforced_by=None,
     )
 
 
@@ -383,9 +395,10 @@ def summarise(conflicts: Iterable[Conflict]) -> dict[str, Any]:
         ],
         "note": (
             "Conflicts are grouped by the plan they occur in and are never totalled across "
-            "plans: baseline conflicts are the FR9.1 finding, while optimized-plan conflicts "
-            "are constraints the solver does not yet enforce (T25 - dependency precedence, "
-            "PRD 9.7, is enforced as of T24 and lives in checkedAndClear instead). "
-            "Resolutions are classified, not applied."
+            "plans: baseline conflicts are the FR9.1 finding - what the uncoordinated process "
+            "produces - while the optimized plan enforces both dependency precedence (T24) "
+            "and resource no-overlap (T25) as hard constraints, so both live in "
+            "checkedAndClear rather than as counted conflicts. Resolutions are classified, "
+            "not applied."
         ),
     }

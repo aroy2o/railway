@@ -90,8 +90,9 @@ export interface ISchedule {
   metrics: Record<string, number>;
   /** T17 builds grounded explanations from this (PRD Section 18). */
   decisionLog: unknown[];
-  /** Constraints the solver does not yet enforce (T25). Dependency precedence
-   * (PRD 9.7) is enforced as of T24, so its count here is always 0. */
+  /** Both PRD 9.7 (dependency precedence, T24) and PRD 9.8 (resource
+   * no-overlap, T25) are hard CP-SAT constraints, so both counts here are
+   * always 0 - this is now an invariant check, not a gap report. */
   knownGaps: unknown | null;
   /**
    * PRD 9.5 - the same gaps, named by type with a resolution strategy each.
@@ -230,7 +231,19 @@ const scheduleSchema = new Schema<ISchedule>(
     },
     generationErrors: { type: [generationErrorSchema], default: [] },
   },
-  { versionKey: false, _id: false },
+  {
+    versionKey: false,
+    _id: false,
+    // T25 bug, found by its own test: Mongoose's default `minimize: true`
+    // silently strips an empty nested object (e.g. `conflictReport.byPlan:
+    // {}`, now the normal shape once every PRD 9.5 type on the optimized
+    // plan is a hard constraint) before it ever reaches MongoDB - proven by
+    // reproducing it against the native driver, which stores `{}` correctly.
+    // The same failure D-015/D-033 guarded against in other layers, in a
+    // third one: `{}` is a real, meaningful value ("checked, none found"),
+    // not an omission, and must survive the round trip.
+    minimize: false,
+  },
 );
 
 scheduleSchema.index({ generatedAt: -1 });

@@ -81,7 +81,7 @@ CLAUDE.md names as testing priority #1.
 | No overlap between windows on one corridor | holds structurally (T3 emits a merged complement); asserted, not re-encoded |
 | Cross-department batching, rewarded | implemented and exercised on real data |
 | Deadline respected where feasible | implemented as a soft objective term — see D-020 |
-| Resource no-overlap (9.8) | **deferred to T25** — violations detected and reported |
+| Resource no-overlap (9.8) | **implemented (T25)** — hard constraint, checked and asserted zero violations, not merely detected |
 | Dependency precedence (9.7) | **implemented (T24)** — hard constraint, checked and asserted zero violations, not merely detected |
 | Weather/seasonal risk (9.9) | **deferred to T26** |
 
@@ -145,6 +145,41 @@ separate ~1394-minute windows instead of packing two stages into one. The old
 docs/DECISIONS.md D-066 for the full before/after table and the baseline-side
 finding (T8's FCFS algorithm commits the same kind of violation for real,
 unmonitored, in its own output).
+
+---
+
+## Resource no-overlap (PRD 9.8, T25)
+
+Two tasks sharing any `MaintenanceTask.required_resource_ids` entry (crew,
+machine or permission) may not occupy overlapping windows, on any corridor —
+resources are depot-scoped (T21), not corridor-scoped. Simpler than T24's
+constraint since resource sharing is symmetric (no prerequisite): a pairwise
+`assign[a]+assign[b]<=1` for every same-day, overlapping window pair between
+two resource-sharing tasks, matched to the exact test `detect_known_gaps`'s
+resource detector already used since T21. `solve_schedule` asserts zero
+resource conflicts on every OPTIMAL/FEASIBLE solve, the same invariant D-066
+added for dependencies.
+
+**Audited a real worry before building anything.** T4 gives Engineering and
+S&T exactly ONE permission per depot, so any two same-department tasks in
+that depot's 5-corridor scope share it by construction — 3 of the real
+corpus's 10 pre-T25 conflicts traced to ONLY that permission, no genuine
+crew/machine contention at all. Measured, not guessed, whether uniform
+enforcement would impose an unrealistic depot-wide bottleneck: solving with
+permission-type ids stripped (crew/machine only) changed the plan by exactly
+one block (32 vs 33) and scheduled the IDENTICAL 35 tasks either way — crew
+and machine scarcity (2-3 per department per depot) was already the binding
+constraint. Uniform enforcement, matching PRD line 437's type-agnostic
+wording, was kept as written.
+
+**Unlike T24, this cost zero coverage.** The scheduled set is identical
+before and after (35 tasks) — only the packing changed (blocks 28→33,
+utilisation 48.53%→45.42%). See docs/DECISIONS.md D-067 for the full
+before/after, the baseline's 27 real resource conflicts (found by reusing
+this same detector against the baseline's own placements — no baseline-side
+code needed), and two real bugs the "zero conflicts is now possible" case
+surfaced two layers away: a Mongoose `minimize: true` field-stripping bug in
+the backend, and a stale fallback-logic bug in `KnownLimitations.tsx`.
 
 ---
 
@@ -350,55 +385,62 @@ adds no detection and changes no count.
 |---|---|---|---|
 | `CORRIDOR_DOUBLE_BOOKING` | baseline | Merge into one shared possession | the optimizer already does this |
 | `WINDOW_OVER_SUBSCRIPTION` | baseline | Defer the excess work | the optimizer already does this |
-| `RESOURCE_CONTENTION` | optimized | Stagger within the department / Only one proceeds | **T25** |
+| `RESOURCE_CONTENTION` | **checked and clear (T25)** | Stagger within the department / Only one proceeds | the optimizer already does this |
 | `DEPENDENCY_ORDER_VIOLATION` | **checked and clear (T24)** | Reorder to respect precedence | the optimizer already does this |
 | `TRAIN_IMPACT_CONFLICT` | **checked and clear (T22)** | Defer, or accept the traffic block | the optimizer already does this |
 
-`DEPENDENCY_ORDER_VIOLATION` and `TRAIN_IMPACT_CONFLICT` are a third bucket,
-distinct from both "detected as a live gap" and "not checked at all" — see
+Every PRD 9.5 type on the optimized plan is now either enforced (dependency,
+resource - T24, T25) or checked and genuinely clear (train impact - T22).
+None remain in "detected as a live gap" or "not checked at all" - see
 `CHECKED_AND_CLEAR` below.
 
 ### Three things this deliberately does not do
 
-**It does not resolve anything.** A strategy is a label. Resource no-overlap is
-still T25, an unmodelled constraint, and `enforced_by` on that record says which
-task would close it.
+**It does not resolve anything.** A strategy is a label, nothing here changes
+the plan - `enforced_by` on a record says which task made the underlying
+constraint real, not that this module applied it.
 
-**It does not report train impact, or dependency order, as zero by default.**
+**It does not report any of the three checked types as zero by default.**
 PRD 9.5 names every type, so all five are in the taxonomy — but a type nothing
 checks for appears in `notYetDetectable` with a reason, and a type that IS
 checked and genuinely found clear appears in `checkedAndClear` instead. Neither
 is a bare `0`, because a bare zero cannot tell a reader which claim it is making.
 
-**It does not total across plans.** Counts nest under `byPlan`. On the real
-corpus the optimized plan carries 16 (11 + 5) and the baseline carries 9 (6 + 3);
-"25 conflicts" describes no plan that exists, and the two halves mean opposite
-things. See D-045.
+**It does not total across plans, either.** Counts nest under `byPlan`. On the
+real corpus the optimized plan carries 0 live conflicts (all three checked
+types are clear) and the baseline carries 9 (6 + 3); a combined figure would
+describe no plan that exists, and the two halves mean opposite things. See
+D-045.
 
 ### On the real corpus
 
 ```
-byPlan.optimized.byType = {RESOURCE_CONTENTION: 10}
-byPlan.baseline.byType  = {CORRIDOR_DOUBLE_BOOKING: 6, WINDOW_OVER_SUBSCRIPTION: 3}
-checkedAndClear         = [TRAIN_IMPACT_CONFLICT, DEPENDENCY_ORDER_VIOLATION]
+byPlan                  = {}
+checkedAndClear         = [TRAIN_IMPACT_CONFLICT, DEPENDENCY_ORDER_VIOLATION, RESOURCE_CONTENTION]
 ```
 
 T6/T8's `RESOURCE_CONTENTION: 11` moved to 10 as a side effect of T24's fix (the
 plan reflowing to respect precedence surfaced one conflict elsewhere and removed
-another). `DEPENDENCY_ORDER_VIOLATION: 5` is now `0` and lives in
-`checkedAndClear`, not `byType` — T24 made it a hard constraint, so
-`test_conflicts.py` now asserts it never appears as a live conflict on a real
-solve. See docs/DECISIONS.md D-066 for the full before/after.
+another), then to `0` with T25's own fix — both PRD 9.5 types the optimized plan
+could ever carry now live in `checkedAndClear`, not `byType`, so `byPlan` has no
+`optimized` key at all on a real solve. `test_conflicts.py` asserts exactly that.
+See docs/DECISIONS.md D-066 (T24) and D-067 (T25) for the full before/after,
+including the baseline's own 27 real resource conflicts (T25) - found using this
+SAME detector against the baseline's placements, no baseline-specific code
+needed.
 
-**Resource conflicts are same-department.** T4's resource catalogue is keyed by
-department, so a machine belongs to one department and cross-department
-contention cannot occur by construction. The `Only one proceeds` branch (PRD
-9.5's own wording, which describes rival departments) is therefore unreachable on
-the current data; within one department the honest fix is to stagger, not to drop
-a task. A test asserts this, so changing the resource model surfaces rather than
-silently altering the advice shown on screen. One of the 10 is cross-CORRIDOR
-though (resources are depot-scoped, not corridor-scoped) — `corridorId` is `null`
-on that record and `corridorIds` carries both.
+**Resource conflicts were same-department**, when they still occurred. T4's
+resource catalogue is keyed by department, so a machine belongs to one
+department and cross-department contention cannot occur by construction — the
+`Only one proceeds` branch (PRD 9.5's own wording, which describes rival
+departments) was therefore unreachable on the current data even before T25
+enforced it away entirely. A test still pins this against the baseline's own
+resource conflicts (T25), which are real and plentiful, so a change to the
+resource model surfaces there. One of the pre-T25 10 was cross-CORRIDOR (T21:
+resources are depot-scoped, not corridor-scoped) — `corridorId` was `null` on
+that record and `corridorIds` carried both; `conflicts.py`'s `extra` dict now
+threads `corridorIds` through for exactly this case (T25 found it had been
+silently dropped in the `Conflict` conversion).
 
 ### `knownGaps` detail (T21, D-047)
 

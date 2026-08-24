@@ -101,11 +101,11 @@ def test_saturated_gzb_sbb_is_still_deferred_over_http(optimized):
 
 
 def test_known_gaps_are_reported_over_http(optimized):
-    """T25 is unbuilt; the response says so rather than looking clean. T24 is
-    now enforced, so its count must be zero over the wire too."""
+    """Both T24 and T25 are now enforced, so both counts must be zero over
+    the wire too."""
     gaps = optimized["knownGaps"]
 
-    assert gaps["resourceConflicts"]["count"] > 0
+    assert gaps["resourceConflicts"]["count"] == 0
     assert gaps["dependencyViolations"]["count"] == 0
     assert "T25" in gaps["resourceConflicts"]["note"]
 

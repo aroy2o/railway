@@ -149,17 +149,14 @@ def test_cross_department_batching_occurs_on_the_real_data(result):
 
 
 def test_known_gaps_are_reported_with_counts(result):
-    """T25 is not built yet; the plan must say so rather than look clean while
-    quietly violating it. T24, by contrast, is now enforced (a hard CP-SAT
-    constraint, not a detector), so its count must be zero - checked every
-    solve, not merely assumed once and forgotten."""
+    """Both T24 and T25 are now enforced (hard CP-SAT constraints, not
+    detectors), so both counts must be zero - checked every solve, not
+    merely assumed once and forgotten."""
     gaps = result.known_gaps
 
     assert "T25" in gaps["resourceConflicts"]["note"]
     assert "T24" in gaps["dependencyViolations"]["note"]
-    # Resource contention is real on this corpus - T4 built it deliberately -
-    # so a zero here would mean the detector had stopped working.
-    assert gaps["resourceConflicts"]["count"] > 0
+    assert gaps["resourceConflicts"]["count"] == 0
     assert gaps["dependencyViolations"]["count"] == 0
 
 

@@ -173,21 +173,26 @@ def test_prioritize_returns_the_ranked_queue_with_breakdowns(client):
 # --------------------------------------------------------------------------- #
 
 def test_known_gaps_survive_the_http_round_trip(client):
-    """T6 reports the constraints it does NOT enforce. A response schema that
-    dropped this would make the plan look cleaner than it is - the same failure
-    D-015 guarded against in the database layer."""
+    """T25's resource no-overlap is a hard constraint now, not a detector, so
+    two tasks sharing a resource on a single-window horizon get ONE
+    scheduled and one honestly deferred - never both, double-booked. The
+    `knownGaps` shape (including the always-zero-now `resourceConflicts`)
+    must still survive the response schema intact - the same failure D-015
+    guarded against in the database layer."""
     payload = dict(SCENARIO)
     payload["tasks"] = [
         {**payload["tasks"][0], "requiredResourceIds": ["RES-tamper"]},
         {**payload["tasks"][1], "requiredResourceIds": ["RES-tamper"], "department": "TRD"},
     ]
 
-    gaps = client.post("/optimize", json=payload).json()["knownGaps"]
+    body = client.post("/optimize", json=payload).json()
+    gaps = body["knownGaps"]
 
-    assert gaps["resourceConflicts"]["count"] == 1
+    assert body["metrics"]["tasksScheduled"] == 1
+    assert body["metrics"]["tasksDeferred"] == 1
+    assert gaps["resourceConflicts"]["count"] == 0
     assert "T25" in gaps["resourceConflicts"]["note"]
     assert "T24" in gaps["dependencyViolations"]["note"]
-    assert gaps["resourceConflicts"]["conflicts"][0]["sharedResourceIds"] == ["RES-tamper"]
 
 
 def test_priority_placeholder_flag_survives_and_reflects_reality(client):

@@ -55,12 +55,11 @@ export interface PlanValidation {
   constraintsSatisfied: boolean;
   checks: PlanCheck[];
   /**
-   * Conflicts the SOLVER already reported as out of scope (T25's resource
-   * contention gap). Dependency precedence (PRD 9.7) is enforced as of T24, so
-   * it no longer contributes here. These do not block approval - every plan on
-   * this corpus has resource conflicts, so blocking would make every plan
-   * unapprovable - but a signature has to state what was known-unresolved when
-   * it was given, or it is a signature on an unstated risk.
+   * Conflicts the SOLVER reported as out of its scope. Both PRD 9.7
+   * (dependency precedence, T24) and PRD 9.8 (resource no-overlap, T25) are
+   * now hard constraints, so this is normally empty - a signature still has
+   * to state what was known-unresolved when it was given, or it is a
+   * signature on an unstated risk, even when that turns out to be nothing.
    */
   knownUnresolved: Array<{ type: string; count: number }>;
 }

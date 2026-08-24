@@ -395,7 +395,57 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
     Verified live end to end in a real browser against a freshly regenerated
     schedule: Known Limitations panel and the comparison screen both match
     every number found by the audit.
-- [ ] `todo` — **T25**: Resource-conflict constraints in CP-SAT (9.8)
+- [x] `done` — **T25**: Resource-conflict constraints in CP-SAT (9.8)
+  - **Simpler mechanism than T24's** since resource sharing is symmetric (no
+    prerequisite): a pairwise `assign[a]+assign[b]<=1` for every same-day,
+    overlapping window pair between two tasks sharing a crew, machine or
+    permission - matched to the same test T21's detector already used, so a
+    real solve can never disagree with the post-solve check. `solve_schedule`
+    asserts zero resource conflicts, mirroring T24's invariant.
+  - **Audited a real worry before building anything.** T4 gives Engineering
+    and S&T exactly ONE permission per depot, so any two same-department
+    tasks share it by construction - 3 of the real corpus's 10 conflicts were
+    attributable ONLY to that single permission, not real crew/machine
+    contention. Measured (not guessed) whether enforcing it uniformly would
+    cause an unrealistic depot-wide bottleneck: solving with permission-type
+    ids stripped changed the plan by exactly 1 block (32 vs 33) and scheduled
+    the IDENTICAL 35 tasks either way - crew/machine scarcity (2-3 per
+    department) was already the binding constraint, so uniform enforcement
+    (matching PRD 9.8's own type-agnostic wording) was kept as written.
+  - **Unlike T24, this cost ZERO coverage** - same 35-task scheduled set
+    before and after, only the packing changed (28→33 blocks, 48.53%→45.42%
+    utilisation). That the two T24/T25 findings differ in kind (one lost a
+    task, one lost nothing) is itself better evidence for D-024/D-028's
+    "structural, not contested" thesis than either alone.
+  - **A sharper baseline finding than T24's.** Reusing the SAME detector
+    against the baseline's own placements (no new baseline code) found **27**
+    real resource conflicts in FR9.1's own output - whole departments
+    double-booking their own crew and machine, e.g. three tasks all claiming
+    the same P.Way gang and traffic-block permission in one window. Far more
+    severe than T24's single dependency violation. Captured in DECISIONS.md
+    per this task's scope, not built into new production UI.
+  - **A real bug found two layers deep.** Resource conflicts reaching zero
+    for the first time made `conflictReport.byPlan` an empty object, and
+    Mongoose's default `minimize: true` was silently stripping it before it
+    ever reached MongoDB - reproduced in isolation, proven to be Mongoose
+    (not BSON: the native driver stores `{}` fine), fixed with
+    `minimize: false` on the schema. Same failure class as D-015/D-033, a
+    third layer, only reachable now that "zero conflicts" became real.
+  - **A second bug, on the frontend, found by driving the browser.**
+    `KnownLimitations.tsx` used "zero groups" to mean "this schedule predates
+    T21" and showed a hardcoded "not enforced" label - which a MODERN,
+    fully-enforced schedule also has zero groups for, and would have shown
+    the same now-false label forever. Fixed to key off whether a typed report
+    exists at all, with an honest empty-state line for the modern case.
+  - **Tests:** optimizer 299 (+5 net; several T21-era fixtures rewritten
+    because a real solve can no longer produce a resource conflict to
+    exercise the reporting path against, same reason T24 needed it), backend
+    107 (the shared 2-task fixture had `requiredResourceIds` removed - it was
+    accidentally both a batching demo and a resource-conflict demo, which
+    T25 makes mutually exclusive), frontend 71 (no new file; the fallback bug
+    was caught and fixed via live browser verification, which is how it was
+    found in the first place). Verified live end to end against a freshly
+    regenerated schedule.
 - [ ] `todo` — **T26**: Weather/monsoon risk flagging (9.9)
 - [ ] `todo` — **T27**: Emergency rolling re-optimization (9.10)
 - [ ] `todo` — **T28**: Monthly planning polish + DRM oversight view KPI hierarchy (Section 14)
@@ -432,6 +482,32 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 ## Session log
 
 _Append a dated one-line entry here each session — what was completed, what's next._
+
+- **2026-08-24** — T25 complete. Resource no-overlap (PRD 9.8) is now a hard
+  CP-SAT constraint, same discipline as T24: audited the real corpus first
+  (3 of 10 conflicts traced to a single per-depot permission every
+  same-department task shares by construction) and measured, rather than
+  guessed, whether uniform enforcement would over-restrict the plan - it
+  barely mattered (32 vs 33 blocks, identical scheduled set), because
+  crew/machine scarcity was already the binding constraint. Unlike T24, this
+  cost zero coverage - the scheduled set is unchanged, only packing shifted
+  (utilisation 48.53%→45.42%). The baseline finding this time is sharper:
+  27 real resource conflicts in FR9.1's own output (vs T24's single
+  dependency one), reusing the same detector with no new baseline code.
+  Found and fixed two real bugs along the way, both only reachable once
+  "zero conflicts" became a genuine outcome rather than a hypothetical one:
+  Mongoose's `minimize: true` was silently dropping the now-possible empty
+  `conflictReport.byPlan` before it reached MongoDB (fixed at the schema),
+  and `KnownLimitations.tsx` was about to show a permanently-false "not
+  enforced" label on every future schedule (fixed by keying off whether a
+  typed report exists, not whether it happens to be empty). 299 optimizer /
+  107 backend / 71 frontend tests, verified live end to end. **T24 and T25
+  are both done**, so PRD 9.5's taxonomy now has ZERO live-conflict-reporting
+  gaps left on the optimized plan; everything it names is either enforced
+  (dependency, resource) or checked-and-clear (train impact) - none remain
+  genuinely undetectable. Next: **T26** (weather/monsoon risk flagging) or
+  **T27/T28**, the remaining 🟡 stretch tasks, or - per the standing plan -
+  auth once every T-numbered task is verified complete.
 
 - **2026-08-24** — T24 complete, first of the 🟡 stretch tier. Task
   dependency precedence (PRD 9.7) is now a hard CP-SAT constraint, semantics

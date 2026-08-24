@@ -233,13 +233,23 @@ placement kept alongside it.
 The Gantt renders `effectivePlan.blocks` where present — the plan as amended —
 while `blocks` stays untouched as what the solver produced (D-043).
 
-**Known limitations** renders `knownGaps` — the constraint the solver does not
-enforce (T25) — plus any `generationErrors`. That report has now survived four
-hops: dataclass, HTTP, MongoDB, and screen. It also renders `checkedAndClear`
-(T22's addition, joined by dependency precedence at T24) — types that ARE
-checked, on every solve, and genuinely found clear, under its own "Checked,
-and none found" heading so an earned zero is never confused with "nothing
-checks this."
+**Known limitations** renders `knownGaps` and `generationErrors`, and has
+survived four hops to get here: dataclass, HTTP, MongoDB, screen. As of T25,
+every PRD 9.5 type on the optimized plan is enforced (dependency precedence,
+T24; resource no-overlap, T25), so there is normally nothing left to show in
+the typed conflicts list at all — it renders `checkedAndClear` instead (T22's
+addition, joined by both T24 and T25), under its own "Checked, and none found"
+heading, so an earned zero is never confused with "nothing checks this."
+
+**A real bug this surfaced (T25):** the fallback branch here used to read
+`groups.length > 0` to decide between the typed view and a "Pre-T21 fallback"
+view labelled "Resource conflicts not enforced" / "Dependency ordering not
+enforced" — correct when it meant a schedule generated before T21 existed,
+but a MODERN, fully-enforced schedule also has zero groups (nothing to group)
+and would have shown the same now-false labels forever. Fixed to key off
+whether `conflictReport` exists at all, with a plain empty-state line for the
+modern case - caught by driving the browser, not by a unit test (this
+component has never had one, per CLAUDE.md's frontend-coverage guidance).
 
 ## What-if simulation (PRD FR5, 9.4, T20)
 
@@ -333,24 +343,25 @@ never re-derives a conflict type or a resolution; both come from the optimizer
 `groupConflicts(report, plan)` takes the plan as a **required** argument and
 drops anything that does not match, and `planTotal()` has no cross-plan
 counterpart. That is not an oversight. On the real corpus the optimized plan
-carries 10 conflicts (all `RESOURCE_CONTENTION` — `DEPENDENCY_ORDER_VIOLATION`
-moved to `checkedAndClear` at T24) and the baseline carries 9; a combined "19"
-would describe no plan that exists, and would let the process being argued
-against inflate the count attributed to this system. Same class of trap as
-D-031's utilisation figure, handled the same way — the misleading shape is
-unavailable rather than merely discouraged. See D-045.
+now carries **zero** live conflicts of any type (T24 enforced dependency
+precedence, T25 enforced resource no-overlap - both moved to `checkedAndClear`)
+and the baseline carries 9; a combined figure would describe no plan that
+exists, and would let the process being argued against inflate the count
+attributed to this system. Same class of trap as D-031's utilisation figure,
+handled the same way — the misleading shape is unavailable rather than merely
+discouraged. See D-045.
 
 Two surfaces render it:
 
-- **`KnownLimitations`** (dashboard) — the optimized layer. Each type shows its
-  count, its resolution strategy, the task that would enforce it (T25), and up
-  to three real instances with corridor and date. Below them, a **"Not checked
-  for at all"** block lists types PRD 9.5 names that nothing detects (none, on
-  the current corpus — both train impact and dependency order have graduated to
-  checked), and a **"Checked, and none found"** block lists types that ARE
-  checked on every solve and genuinely found clear (train impact since T22,
-  dependency order since T24). Neither is a bare zero, because a bare zero
-  cannot say which of those two very different claims it is making.
+- **`KnownLimitations`** (dashboard) — the optimized layer. On the current
+  corpus this list is empty, since nothing PRD 9.5 names is a live gap any
+  more — the panel says so plainly rather than rendering an empty list with no
+  explanation. Below it, a **"Not checked for at all"** block lists types
+  nothing detects (currently none) and a **"Checked, and none found"** block
+  lists types that ARE checked on every solve and genuinely found clear (train
+  impact since T22, dependency order since T24, resource contention since
+  T25). Neither is a bare zero, because a bare zero cannot say which of those
+  two very different claims it is making.
 - **`ConflictEvidence`** (comparison screen) — the baseline layer, with a type
   badge and resolution above each table. The count is labelled "on the baseline
   plan" so a screenshot cannot be read as this system's conflicts.

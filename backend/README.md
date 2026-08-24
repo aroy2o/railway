@@ -238,7 +238,7 @@ never be added together** (D-045):
 
 | Field | Layer | What it is |
 |---|---|---|
-| `conflictReport` | `optimized` | Constraints this system's solver does not yet enforce (T25) — dependency precedence (T24) is a hard constraint now, so it shows up under `checkedAndClear` instead |
+| `conflictReport` | `optimized` | PRD 9.5's typed conflicts. Both dependency precedence (T24) and resource no-overlap (T25) are hard constraints now, so `byPlan` carries no `optimized` key on a real solve — both show up under `checkedAndClear` instead |
 | `baseline.conflictReport` | `baseline` | The FR9.1 finding — what the uncoordinated process produces |
 
 Both are computed once by the optimizer, which owns the taxonomy, and stored
@@ -270,11 +270,10 @@ what nothing else has ever checked: the solver's output was valid when produced,
 and every override was validated against the plan as it stood *at that moment* —
 the plan that came out the far end has been validated by nothing.
 
-Known solver gaps (T25's resource contention — dependency precedence, PRD 9.7,
-is enforced as of T24 and no longer among them) do **not** block approval —
-every plan on this corpus has resource conflicts. They are recorded as
-`knownUnresolved`, because a signature has to state what was known-open when
-it was given.
+Every PRD 9.5 gap on the optimized plan is now enforced (dependency precedence,
+T24; resource no-overlap, T25), so `knownUnresolved` is empty on a real solve —
+recorded as such rather than omitted, because a signature has to state what was
+known-open when it was given, and an empty list is itself the honest claim.
 
 **Publishing freezes the plan by refusing further writes, not by snapshotting
 it** (D-058). Copying the effective plan would invent a second source of truth

@@ -2794,3 +2794,115 @@ figures). Frontend 71 (1 new: the fewer-by-design verdict, asserted never to
 collapse to `optimizer-better`). Verified live end to end: KnownLimitations
 panel and the comparison screen both re-checked in a real browser against a
 freshly regenerated schedule, matching every number in the table above.
+
+---
+
+## D-067 — Resource no-overlap is a hard constraint too; unlike T24 it cost zero coverage, and it found a real bug two layers deep
+
+**Date:** 2026-08-24 · **Task:** T25
+
+**Mechanism, deliberately simpler than T24's.** Two tasks sharing any
+`required_resource_ids` entry (crew, machine or permission) may not occupy
+overlapping windows, on any corridor - resources are depot-scoped, not
+corridor-scoped (T21). Unlike dependency precedence this is symmetric: there
+is no "prerequisite," so no linking (`sum <= sum`) constraint is needed, only
+a pairwise `assign[a,wa] + assign[b,wb] <= 1` for every task pair sharing a
+resource and every same-day, overlapping window pair between them - matched
+exactly to the same-day-and-overlap test `detect_known_gaps`'s resource
+detector already used since T21, so the hard constraint and the post-solve
+check can never disagree. `solve_schedule` asserts zero resource conflicts on
+every OPTIMAL/FEASIBLE solve, the same invariant D-066 added for dependencies.
+
+**The audit's real question: how much of the real corpus's resource
+contention is genuine scarcity versus a synthetic-data artefact?** T4's
+resource catalogue gives Engineering and S&T exactly ONE permission per depot
+(`Traffic Block`, `Signal Disconnection`) - meaning any two same-department
+tasks in that depot's 5-corridor scope share it by construction, not by
+chance. Before writing the constraint, all 10 real conflicts (post-T24) were
+classified by resource type: **7 were genuine crew/machine contention, 3 were
+attributable ENTIRELY to the single per-depot permission** (no crew or
+machine shared between that pair at all). This raised a real worry: would
+enforcing the near-universal permission impose an unrealistic
+one-task-at-a-time bottleneck across an entire depot's 5 corridors?
+
+**Measured, not guessed: it does not.** Solving the same corpus with
+permission-type resource ids stripped (crew/machine enforcement only) versus
+the full uniform enforcement produced almost the same plan: 32 blocks vs 33,
+47.43% vs 45.42% utilisation, and the **identical 35-task scheduled set**
+either way. Crew/machine scarcity (2-3 resources per department per depot)
+was already the binding constraint; the single permission adds one more block
+of separation, not a depot-wide freeze. This justified keeping enforcement
+uniform across all three resource types - matching PRD line 437's formal,
+type-agnostic "no overlap on the same required resource" wording and T21's
+existing detector exactly, rather than inventing a permission carve-out the
+data did not actually need.
+
+**The real corpus finding, and how it differs from T24's:** T24 cost one
+scheduled task (36 → 35). T25 cost **zero** - the scheduled set is identical
+before and after (35 tasks, same set). Only the PACKING changed: blocks used
+28 → 33, utilisation 48.53% → 45.42%. The mechanism was the same kind of
+"illegal co-location, corrected" story as T24 - e.g. TSK-00015/TSK-00016 had
+been sharing a rail-grinding machine in the same window - but on this corpus,
+every resource-conflicting pair happened to have enough spare capacity
+elsewhere to be separated without displacing any other task. That this
+DIFFERS from T24's coverage cost is itself informative: not every enforced
+constraint costs coverage on this corpus, and the two findings together are
+better evidence for D-024/D-028's "structural, not contested" thesis than
+either alone.
+
+**A second, sharper finding: the FR9.1 baseline commits this violation far
+more severely than it did the dependency one.** Reusing `detect_known_gaps`
+against the baseline's own placements (no baseline-specific code needed - the
+detector is a pure function of any placements dict) found **27 real resource
+conflicts** in the baseline's own output - a full department of Engineering
+work routinely double-booked onto the same crew and machine, e.g.
+TSK-00001/002/003 all claiming `RES-D01-pway-gang` and
+`RES-D01-traffic-block` in the exact same 2026-08-24 window. This is far
+larger than the single dependency violation T24 found in the baseline, and a
+much stronger, more visceral piece of evidence for the FR9.1 comparison's
+whole thesis. Per this task's explicit scope, this is captured here rather
+than built into a new baseline-side detector or UI surface - the instruction
+was to document the finding, not add scope beyond what T25 asked for.
+
+**A real bug found two layers deep, unrelated to the CP-SAT model itself.**
+Once resource conflicts could genuinely reach zero, `conflictReport.byPlan`
+became `{}` for the first time ever - and Mongoose's default `minimize: true`
+schema option **silently strips an empty nested object before it reaches
+MongoDB**, confirmed by reproducing the exact behaviour in isolation and
+proving the native MongoDB driver stores `{}` correctly (so this is Mongoose
+casting, not BSON). The same failure class D-015 (database layer) and D-033
+(response layer) already guarded against, found for a third time in a third
+layer - and only reachable now that "zero live conflicts" became a real
+outcome rather than a hypothetical one. Fixed with `minimize: false` on
+`scheduleSchema`, not a workaround at the call site, since ANY current or
+future empty-object-valued field on this document was equally exposed.
+
+**A second bug in the same neighbourhood, on the frontend.**
+`KnownLimitations.tsx`'s fallback logic read `groups.length > 0` to decide
+between the typed T21 view and a "Pre-T21 fallback: counts only" view labelled
+"Resource conflicts not enforced" / "Dependency ordering not enforced" -
+correct when those labels meant a schedule generated before T21 existed, but
+now WRONG: a *modern*, fully-enforced schedule also has `groups.length === 0`
+(there is nothing to group), and would have silently shown the same
+now-false "not enforced" labels forever, on every schedule, from here on.
+Fixed by keying the branch on whether `conflictReport` exists at all
+(genuinely pre-T21) rather than on whether it happens to contain any live
+conflicts (now the ordinary case) - with a plain, honest empty-state line for
+the modern case, confirmed live.
+
+**Tests.** Optimizer 299 (5 net new: enforced exclusion, valid scheduling with
+room, cross-corridor enforcement, a `detect_known_gaps` isolation test, and a
+mutation-style A/B proof; several existing fixtures across `test_conflicts.py`,
+`test_decision_log.py` and `test_optimizer_api*.py` rewritten the same way
+T24 required, since a real solve can no longer produce a resource conflict to
+exercise the reporting/cross-reference path against). Backend 107 (the small
+2-task fixture had `requiredResourceIds` removed - it was accidentally both
+the cross-department-batching demo AND a resource-conflict demo, which T25
+makes mutually exclusive; the real-corpus assertions updated with the true
+numbers, `byPlan` now correctly asserted empty). Frontend 71 (no new file,
+since this component has never had one, per CLAUDE.md's frontend-coverage
+guidance - the fallback-logic bug was caught and fixed by live browser
+verification instead, which found it in the first place). Verified live end
+to end: Known Limitations panel shows the empty-state line plus all three
+`checkedAndClear` types with correct reasons, and the comparison screen shows
+45.42% utilisation and the unchanged 35/36 figure, both freshly regenerated.

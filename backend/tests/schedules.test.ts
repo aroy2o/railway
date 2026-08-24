@@ -81,16 +81,19 @@ async function insertFixture() {
   ]);
   await Task.insertMany([
     {
+      // T25 made resource no-overlap a hard constraint, so this fixture must
+      // NOT share a resource between TSK-A1 and TSK-A2 any more - it would
+      // now force one to defer instead of the cross-department batch this
+      // fixture exists to demonstrate. See the dedicated resource-conflict
+      // tests below, which build their own inline scenario instead.
       _id: 'TSK-A1', department: 'Engineering', corridorId: 'A-B', assetId: 'AST-A-B-1',
       defectType: 'rail fracture', severity: 4, dateRaised: '2026-07-01',
       slaDueDate: '2026-09-30', estBlockDurationMins: 100, status: 'pending', synthetic: true,
-      requiredResourceIds: ['RES-tamper'],
     },
     {
       _id: 'TSK-A2', department: 'S&T', corridorId: 'A-B', assetId: 'AST-A-B-2',
       defectType: 'relay fault', severity: 2, dateRaised: '2026-07-02',
       slaDueDate: '2026-10-30', estBlockDurationMins: 80, status: 'pending', synthetic: true,
-      requiredResourceIds: ['RES-tamper'],
     },
   ]);
 }
@@ -399,8 +402,10 @@ test('knownGaps and the placeholder flag survive being stored and read back', as
   assert.ok(schedule.knownGaps.resourceConflicts);
   assert.match(schedule.knownGaps.resourceConflicts.note, /T25/);
   assert.match(schedule.knownGaps.dependencyViolations.note, /T24/);
-  // Both fixture tasks need RES-tamper in the same window.
-  assert.equal(schedule.knownGaps.resourceConflicts.count, 1);
+  // T25 enforces resource no-overlap as a hard constraint, so this fixture
+  // (which no longer shares a resource between its two tasks) has none to
+  // report - the count is checked, not merely assumed, every time.
+  assert.equal(schedule.knownGaps.resourceConflicts.count, 0);
 
   const flags = new Set(
     schedule.decisionLog.map((entry: any) => entry.contributingFactors.priorityIsPlaceholder),
@@ -523,24 +528,26 @@ test('the typed conflict taxonomy survives the round trip and keeps the plans ap
 
   // PRD 9.5, optimized layer. T21's point is that this carries enough detail to
   // render an actionable row - before it, the entries had no corridor at all.
+  // T24 and T25 both moved from "detected" to "hard CP-SAT constraint", so
+  // this small fixture's optimized plan now carries ZERO live conflicts of
+  // any type - `byPlan` has no `optimized` key at all, and every PRD 9.5
+  // type this build can check for shows up in `checkedAndClear` instead.
   const report = schedule.conflictReport;
   assert.ok(report, 'typed conflict report must be stored');
-  assert.deepEqual(Object.keys(report.byPlan), ['optimized']);
-  assert.equal(report.byPlan.optimized.byType.RESOURCE_CONTENTION, 1);
+  assert.deepEqual(report.byPlan, {});
+  assert.deepEqual(report.conflicts, []);
 
-  const [conflict] = report.conflicts;
-  assert.equal(conflict.plan, 'optimized');
-  assert.equal(conflict.resolution.enforcedBy, 'T25');
-  assert.ok(conflict.resolution.strategy);
-  assert.ok(conflict.corridorId, 'a conflict with no corridor cannot be acted on');
-  assert.ok(conflict.date);
-
-  // T22 graduated this type: it moved OUT of "nothing checks for it" and INTO
-  // "checked, none found". It must appear in exactly one of those lists - being
-  // in both would let a reader take whichever reading suited them.
-  assert.ok(!report.notYetDetectable.some((e: any) => e.type === 'TRAIN_IMPACT_CONFLICT'));
-  assert.ok(report.checkedAndClear.some((e: any) => e.type === 'TRAIN_IMPACT_CONFLICT'));
-  assert.ok(!('TRAIN_IMPACT_CONFLICT' in report.byPlan.optimized.byType));
+  const checkedTypes = report.checkedAndClear.map((e: any) => e.type).sort();
+  assert.deepEqual(checkedTypes, [
+    'DEPENDENCY_ORDER_VIOLATION',
+    'RESOURCE_CONTENTION',
+    'TRAIN_IMPACT_CONFLICT',
+  ]);
+  // T22 graduated TRAIN_IMPACT_CONFLICT the same way T24/T25 graduated these
+  // two: OUT of "nothing checks for it" and INTO "checked, none found". A
+  // type must appear in exactly one of those lists - being in both would let
+  // a reader take whichever reading suited them.
+  assert.deepEqual(report.notYetDetectable, []);
 
   // D-045: the baseline's conflicts live on their own layer. No shape anywhere
   // in either payload may present a single total spanning both plans.
@@ -765,23 +772,26 @@ test('the real 89-task corpus reproduces CHECKPOINT.md numbers through this path
         schedule.comparisonToBaseline.optimized.blockUtilisationPct,
     );
 
-    // T24 dropped resourceConflicts 11 -> 10 (the reflow moved one contention
-    // elsewhere) and dependencyViolations 5 -> 0 (now enforced, not merely
-    // detected).
-    assert.equal(schedule.knownGaps.resourceConflicts.count, 10);
+    // T24 enforces dependency precedence, T25 enforces resource no-overlap -
+    // both are now hard CP-SAT constraints, so both counts are zero, checked
+    // every solve rather than merely detected.
+    assert.equal(schedule.knownGaps.resourceConflicts.count, 0);
     assert.equal(schedule.knownGaps.dependencyViolations.count, 0);
 
     // The same figures typed per PRD 9.5, still separated by plan (D-045).
-    // DEPENDENCY_ORDER_VIOLATION no longer appears as a live optimized-plan
-    // conflict type - it lives in checkedAndClear instead (T24).
-    assert.deepEqual(schedule.conflictReport.byPlan.optimized.byType, {
-      RESOURCE_CONTENTION: 10,
-    });
-    assert.ok(
-      schedule.conflictReport.checkedAndClear.some(
-        (item: { type: string }) => item.type === 'DEPENDENCY_ORDER_VIOLATION',
-      ),
-    );
+    // Neither DEPENDENCY_ORDER_VIOLATION nor RESOURCE_CONTENTION appears as a
+    // live optimized-plan conflict type any more - both live in
+    // checkedAndClear instead (T24, T25), so `byPlan` carries no `optimized`
+    // key at all.
+    assert.deepEqual(schedule.conflictReport.byPlan, {});
+    const checkedTypes = schedule.conflictReport.checkedAndClear
+      .map((item: { type: string }) => item.type)
+      .sort();
+    assert.deepEqual(checkedTypes, [
+      'DEPENDENCY_ORDER_VIOLATION',
+      'RESOURCE_CONTENTION',
+      'TRAIN_IMPACT_CONFLICT',
+    ]);
     assert.deepEqual(schedule.baseline.conflictReport.byPlan.baseline.byType, {
       CORRIDOR_DOUBLE_BOOKING: 6,
       WINDOW_OVER_SUBSCRIPTION: 3,

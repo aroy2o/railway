@@ -317,9 +317,40 @@ def test_horizon_expansion_replays_the_daily_pattern():
 # Known gaps are reported, not hidden                                          #
 # --------------------------------------------------------------------------- #
 
-def test_resource_conflicts_are_detected_and_reported():
-    """Resource no-overlap is T25. Until then a conflict must be visible in the
-    output rather than silently shipped as a valid-looking plan."""
+# --------------------------------------------------------------------------- #
+# T25 - resource no-overlap (PRD 9.8)                                         #
+# --------------------------------------------------------------------------- #
+
+def test_detect_known_gaps_still_recognises_a_resource_conflict_in_isolation():
+    """`detect_known_gaps` is exercised directly, matching the T24 pattern -
+    the standalone-testability CLAUDE.md asks of every core module. This is
+    what the CP-SAT constraint below now makes unreachable through a real
+    solve."""
+    from app.core.scheduler import WindowInstance, detect_known_gaps
+
+    tasks = [
+        MaintenanceTask("A", "XX-YY", "Engineering", 100, FUTURE, priority=3,
+                        required_resource_ids=("RES-tamper",)),
+        MaintenanceTask("B", "XX-YY", "Engineering", 100, FUTURE, priority=3,
+                        required_resource_ids=("RES-tamper",)),
+    ]
+    shared_day = HORIZON_START
+    placements = {
+        "A": WindowInstance("XX-YY|d|0", "XX-YY", shared_day, 0, 0, 100),
+        "B": WindowInstance("XX-YY|d|1", "XX-YY", shared_day, 1, 50, 150),
+    }
+
+    gaps = detect_known_gaps(tasks, placements)["resourceConflicts"]
+    assert gaps["count"] == 1
+    assert gaps["conflicts"][0]["sharedResourceIds"] == ["RES-tamper"]
+
+
+def test_a_resource_conflict_defers_rather_than_double_book_when_there_is_no_room():
+    """The exact scenario the old (pre-T25) version of this test accepted as a
+    detected-but-shipped conflict. XX-YY's only window is 300 minutes - room
+    enough for both 100-minute tasks by capacity alone - but they cannot
+    physically share ONE tamper, so the hard constraint forces exactly one of
+    them to defer rather than double-book the resource."""
     corridors = {"XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 300),))}
     tasks = [
         MaintenanceTask("A", "XX-YY", "Engineering", 100, FUTURE, priority=3,
@@ -330,10 +361,90 @@ def test_resource_conflicts_are_detected_and_reported():
 
     result = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=1)
 
-    gaps = result.known_gaps["resourceConflicts"]
-    assert gaps["count"] == 1
-    assert gaps["conflicts"][0]["sharedResourceIds"] == ["RES-tamper"]
-    assert "T25" in gaps["note"]
+    assert len(result.scheduled_task_ids) == 1
+    deferred = [d for d in result.deferred if d.task_id in {"A", "B"}]
+    assert len(deferred) == 1
+    assert deferred[0].reason == DeferralReason.NO_CAPACITY
+    assert result.known_gaps["resourceConflicts"]["count"] == 0
+
+
+def test_a_shared_resource_schedules_both_tasks_when_there_is_room():
+    """Two windows, no overlap between them: both tasks fit AND the shared
+    tamper is never needed simultaneously, so both get scheduled - the
+    constraint must not be so blunt it defers work that never actually
+    collided."""
+    corridors = {
+        "XX-YY": CorridorAvailability(
+            "XX-YY", (DailyWindow(0, 100), DailyWindow(150, 250))
+        )
+    }
+    tasks = [
+        MaintenanceTask("A", "XX-YY", "Engineering", 100, FUTURE, priority=3,
+                        required_resource_ids=("RES-tamper",)),
+        MaintenanceTask("B", "XX-YY", "Engineering", 100, FUTURE, priority=3,
+                        required_resource_ids=("RES-tamper",)),
+    ]
+
+    result = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=1)
+
+    assert result.scheduled_task_ids == {"A", "B"}
+    by_task = {tid: b for b in result.blocks for tid in b.task_ids}
+    assert by_task["A"].window_index != by_task["B"].window_index
+    assert result.known_gaps["resourceConflicts"]["count"] == 0
+
+
+def test_a_shared_resource_is_enforced_across_corridors():
+    """Resources are depot-scoped, not corridor-scoped (T21) - a crew or
+    machine shared between two DIFFERENT corridors must still be kept from
+    double-booking, exactly the real ABEO-ABU/BLRG-HTE case this task's audit
+    found on the corpus."""
+    corridors = {
+        "AA-BB": CorridorAvailability("AA-BB", (DailyWindow(0, 300),)),
+        "CC-DD": CorridorAvailability("CC-DD", (DailyWindow(0, 300),)),
+    }
+    tasks = [
+        MaintenanceTask("A", "AA-BB", "Engineering", 100, FUTURE, priority=3,
+                        required_resource_ids=("RES-tower-wagon",)),
+        MaintenanceTask("B", "CC-DD", "Engineering", 100, FUTURE, priority=3,
+                        required_resource_ids=("RES-tower-wagon",)),
+    ]
+
+    result = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=1)
+
+    assert len(result.scheduled_task_ids) == 1
+    assert result.known_gaps["resourceConflicts"]["count"] == 0
+
+
+def test_MUTATION_the_resource_constraint_visibly_changes_the_plan_the_solver_picks():
+    """Proof of teeth, same technique as T24's mutation test: solve the SAME
+    scenario with and without the shared resource id. Without it, the
+    objective-optimal choice batches both tasks into ONE window (200 of 300
+    minutes, cheaper than opening a second). With it, that choice is
+    forbidden and the solver is forced to use two windows."""
+    corridors = {
+        "XX-YY": CorridorAvailability(
+            "XX-YY", (DailyWindow(0, 300), DailyWindow(400, 700))
+        )
+    }
+    with_shared_resource = [
+        MaintenanceTask("A", "XX-YY", "Engineering", 100, FUTURE, priority=3,
+                        required_resource_ids=("RES-tamper",)),
+        MaintenanceTask("B", "XX-YY", "Engineering", 100, FUTURE, priority=3,
+                        required_resource_ids=("RES-tamper",)),
+    ]
+    without_shared_resource = [
+        MaintenanceTask("A", "XX-YY", "Engineering", 100, FUTURE, priority=3),
+        MaintenanceTask("B", "XX-YY", "Engineering", 100, FUTURE, priority=3),
+    ]
+
+    linked = solve_schedule(with_shared_resource, corridors, horizon_start=HORIZON_START, horizon_days=1)
+    unlinked = solve_schedule(without_shared_resource, corridors, horizon_start=HORIZON_START, horizon_days=1)
+
+    assert len(unlinked.blocks) == 1, "without the constraint both tasks share one window"
+    assert {tid for b in unlinked.blocks for tid in b.task_ids} == {"A", "B"}
+    assert len(linked.blocks) == 2, "the constraint must force them into separate windows"
+    assert linked.scheduled_task_ids == {"A", "B"}
+    assert linked.known_gaps["resourceConflicts"]["count"] == 0
 
 
 # --------------------------------------------------------------------------- #

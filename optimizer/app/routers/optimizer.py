@@ -219,9 +219,9 @@ def optimize(request: SolveRequest, settings: Settings = Depends(get_settings)) 
     """FR3 - the CP-SAT block schedule (PRD Section 13).
 
     Returns the plan, every deferral with a machine-readable reason (FR3.3), the
-    per-task decision log T17 builds explanations on, and `knownGaps` naming the
-    constraints this build does not yet enforce (resource no-overlap -> T25,
-    dependency precedence -> T24).
+    per-task decision log T17 builds explanations on, and `knownGaps` - now an
+    invariant check rather than a gap report, since resource no-overlap (T25)
+    and dependency precedence (T24) are both hard CP-SAT constraints.
     """
     _guard_size(request, settings)
     if request.horizon_days > settings.max_horizon_days:

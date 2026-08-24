@@ -58,13 +58,16 @@ def _resource_gap(departments: list[str]) -> dict:
 
 def test_resource_contention_within_one_department_staggers_rather_than_drops():
     """PRD 9.5's "only one proceeds" describes rival departments. One department
-    double-booking its own gang is not a contest, so the strategy differs."""
+    double-booking its own gang is not a contest, so the strategy differs.
+    T25 already enforces this in the solver, so `enforced_by` is None rather
+    than naming a future task - the same treatment T24 gave dependency
+    violations."""
     (conflict,) = from_known_gaps(_resource_gap(["Engineering", "Engineering"]))
 
     assert conflict.type == ConflictType.RESOURCE_CONTENTION
     assert conflict.plan == "optimized"
     assert conflict.resolution.strategy == "Stagger within the department"
-    assert conflict.resolution.enforced_by == "T25"
+    assert conflict.resolution.enforced_by is None
     assert conflict.as_dict()["sameDepartment"] is True
 
 
@@ -273,13 +276,13 @@ def scenario():
 
 def test_real_corpus_types_match_the_counts_t6_and_t8_established(scenario):
     """T6-T23 established 11 resource + 5 dependency conflicts on the optimized
-    side. T24 changes both: the plan reflowing to respect PRD 9.7 surfaces a
-    new cross-corridor resource conflict elsewhere (11 -> 10 net), and
-    DEPENDENCY_ORDER_VIOLATION drops to zero because it is now enforced, not
-    merely detected - so it no longer appears as a live conflict type at all
-    (see CHECKED_AND_CLEAR). The baseline side is untouched: T8's algorithm
-    has no dependency awareness, so 6 double-bookings + 3 over-subscribed
-    windows still come from T8."""
+    side. T24 enforced dependency precedence (11 resource conflicts became 10,
+    a side effect of the plan reflowing) and T25 now enforces resource
+    no-overlap too, so the OPTIMIZED plan carries zero live conflicts of
+    either type - both live in checkedAndClear instead. The baseline side is
+    untouched: neither T8's algorithm nor this comparison have anything to do
+    with what the optimizer now enforces, so 6 double-bookings + 3
+    over-subscribed windows still come from T8."""
     tasks, corridors = scenario
     solved = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
     baseline = run_baseline(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
@@ -287,23 +290,23 @@ def test_real_corpus_types_match_the_counts_t6_and_t8_established(scenario):
     optimized_summary = summarise(from_known_gaps(solved.as_dict()["knownGaps"]))
     baseline_summary = summarise(from_baseline_conflicts(baseline.as_dict()["conflicts"]))
 
-    assert optimized_summary["byPlan"]["optimized"]["byType"] == {
-        ConflictType.RESOURCE_CONTENTION: 10,
-    }
+    assert optimized_summary["byPlan"] == {}
     checked_types = {item["type"] for item in optimized_summary["checkedAndClear"]}
-    assert ConflictType.DEPENDENCY_ORDER_VIOLATION in checked_types
+    assert checked_types == {
+        ConflictType.TRAIN_IMPACT_CONFLICT,
+        ConflictType.DEPENDENCY_ORDER_VIOLATION,
+        ConflictType.RESOURCE_CONTENTION,
+    }
     assert baseline_summary["byPlan"]["baseline"]["byType"] == {
         ConflictType.CORRIDOR_DOUBLE_BOOKING: 6,
         ConflictType.WINDOW_OVER_SUBSCRIPTION: 3,
     }
 
 
-def test_all_real_resource_conflicts_are_same_department(scenario):
-    """Not a coincidence worth glossing over: T4's resource catalogue is keyed by
-    department, so a machine belongs to exactly one department and
-    cross-department contention cannot occur by construction. If this ever
-    fails, the resource model changed and the "only one proceeds" branch has
-    become reachable on real data."""
+def test_the_optimized_plan_carries_no_resource_conflicts(scenario):
+    """T25 made resource no-overlap a hard constraint, so a real solve can no
+    longer produce one - this replaces the old detected-but-shipped-anyway
+    check with the honest one: the type simply never appears."""
     tasks, corridors = scenario
     solved = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
 
@@ -311,8 +314,43 @@ def test_all_real_resource_conflicts_are_same_department(scenario):
         c for c in from_known_gaps(solved.as_dict()["knownGaps"])
         if c.type == ConflictType.RESOURCE_CONTENTION
     ]
+    assert conflicts == []
+    assert solved.known_gaps["resourceConflicts"]["count"] == 0
 
-    assert conflicts, "expected the known resource conflicts to be present"
+
+def test_the_baselines_own_resource_conflicts_are_all_same_department(scenario):
+    """T4's resource catalogue is keyed by department, so a machine belongs to
+    exactly one department and cross-department contention cannot occur by
+    construction - true of the baseline's real conflicts too, computed by
+    reusing the SAME detector against the baseline's own placements (the
+    mechanism generalises; nothing baseline-specific was written for this).
+    If this ever fails, the resource model changed and the "only one
+    proceeds" branch has become reachable on real data."""
+    from app.core.scheduler import WindowInstance, detect_known_gaps
+
+    tasks, corridors = scenario
+    baseline = run_baseline(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
+
+    placements = {
+        task_id: WindowInstance(
+            f"{b.corridor_id}|{b.day.isoformat()}|{b.window_index}",
+            b.corridor_id, b.day, b.window_index, b.start_minute, b.end_minute,
+        )
+        for b in baseline.blocks
+        for task_id in b.task_ids
+    }
+    gaps = detect_known_gaps(tasks, placements)
+    conflicts = [
+        c for c in from_known_gaps(gaps) if c.type == ConflictType.RESOURCE_CONTENTION
+    ]
+
+    # D-067: the baseline commits this violation for real, unmonitored - a
+    # much larger number than the (now zero) optimized side ever had.
+    # `detect_known_gaps` caps the listed `conflicts` at 20 (same cap as the
+    # real endpoint response), so the true count is asserted separately from
+    # the capped list `from_known_gaps` was built from.
+    assert gaps["resourceConflicts"]["count"] > 20
+    assert conflicts, "expected the capped list to still carry real conflicts"
     assert all(c.as_dict()["sameDepartment"] for c in conflicts)
     assert all(c.resolution.strategy == "Stagger within the department" for c in conflicts)
 

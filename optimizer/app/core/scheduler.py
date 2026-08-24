@@ -27,6 +27,11 @@ WHAT IS IMPLEMENTED FROM PRD SECTION 13
   is too - transitively, so a 3-stage chain with a structurally unschedulable
   first stage takes the whole chain out. See `_add_dependency_constraints` and
   `DeferralReason.PREREQUISITE_UNSCHEDULABLE`.
+* Resource no-overlap (T25, PRD 9.8): also a hard constraint. Two tasks
+  sharing any `required_resource_ids` entry (crew, machine or permission)
+  cannot occupy overlapping windows, on any corridor - resources are
+  depot-scoped, not corridor-scoped. Symmetric, unlike dependency: no linking
+  constraint is needed, only a pairwise exclusion per resource-sharing pair.
 * Objective: a simplified form of PRD 13.1 - priority-weighted coverage, SLA
   compliance and batching rewarded; unused block time and fragmentation
   penalised.
@@ -38,8 +43,6 @@ WHAT IS DEFERRED, AND TO WHERE
 * Asset risk reduction term (beta) -> T16 (FR2.2), needs failureRiskScore.
 * Train-delay-impact term (lambda) -> T22 (PRD 9.6).
 * Policy-slider weights            -> T23 (PRD 13.1). Weights are constants here.
-* Resource no-overlap              -> T25 (PRD 9.8). Same treatment: detected and
-                                    reported as a known gap.
 * Weather/seasonal risk term (xi)  -> T26 (PRD 9.9).
 """
 
@@ -591,6 +594,30 @@ def solve_schedule(
                         assign[(task.task_id, w_dep.key)] + assign[(prereq_id, w_pre.key)] <= 1
                     )
 
+    # --- constraint: resource no-overlap (T25, PRD 9.8) ---------------------
+    # "No overlap on the same required resource across concurrent tasks" (PRD
+    # line 437) - exactly the same-day-and-overlapping test
+    # `detect_known_gaps`'s resource-conflict check already used for
+    # reporting since T21, so the two can never disagree. Unlike dependency,
+    # this is symmetric (no ordering, no "prerequisite") - two tasks sharing
+    # ANY resource id simply cannot occupy overlapping windows, on any
+    # corridor, since resources are depot-scoped rather than corridor-scoped.
+    resource_pairs: set[tuple[str, str]] = set()
+    tasks_by_resource: dict[str, list[MaintenanceTask]] = {}
+    for task in schedulable:
+        for resource_id in task.required_resource_ids:
+            tasks_by_resource.setdefault(resource_id, []).append(task)
+    for group in tasks_by_resource.values():
+        for i, first in enumerate(group):
+            for second in group[i + 1 :]:
+                resource_pairs.add(tuple(sorted((first.task_id, second.task_id))))
+
+    for task_a_id, task_b_id in sorted(resource_pairs):
+        for w_a in candidates_for_task[task_a_id]:
+            for w_b in candidates_for_task[task_b_id]:
+                if w_a.day == w_b.day and _overlaps(w_a, w_b):
+                    model.add(assign[(task_a_id, w_a.key)] + assign[(task_b_id, w_b.key)] <= 1)
+
     # --- T20: the what-if pin, if one was given ------------------------------
     #
     # Validated here rather than trusted, because a pin naming a window that
@@ -888,6 +915,13 @@ def _build_result(
             raise AssertionError(
                 f"dependency precedence constraint failed to prevent violation(s): {violations}"
             )
+        # T25, same pattern: resource no-overlap is a hard constraint now, so
+        # a survivor here means the constraint has a bug.
+        resource_conflicts = result.known_gaps["resourceConflicts"]["conflicts"]
+        if resource_conflicts:
+            raise AssertionError(
+                f"resource no-overlap constraint failed to prevent conflict(s): {resource_conflicts}"
+            )
 
     return result
 
@@ -1070,13 +1104,14 @@ def annotate_conflicts(decision_log: list[dict], known_gaps: dict) -> None:
 
 
 def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:
-    """Report constraints this task deliberately does NOT enforce.
+    """Check the two PRD Section 13 constraints (9.7, 9.8) this module also
+    enforces as hard CP-SAT constraints (T24, T25).
 
-    PRD Section 13 lists resource no-overlap (9.8) and dependency precedence
-    (9.7) as constraints, but CLAUDE.md's build order assigns them to T25 and
-    T24. Rather than ship a scheduler that quietly violates them, the violations
-    are measured and reported here, so the gap is visible in the output instead
-    of being discovered later as a scheduling bug.
+    Originally written when both were unmodelled, to report a gap rather than
+    ship a scheduler that quietly violated them. Now that both are hard
+    constraints, this doubles as the invariant `_build_result` asserts on
+    every OPTIMAL/FEASIBLE solve - a non-empty result here on a real solve
+    means one of those constraints has a bug, not that a real gap exists.
     """
     tasks_by_id = {task.task_id: task for task in all_tasks}
 
@@ -1164,8 +1199,13 @@ def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:
     return {
         "resourceConflicts": {
             "count": len(resource_conflicts),
-            "note": "Resource no-overlap (PRD 9.8) is not modelled in T6; it is task T25. "
-            "Conflicts are detected and reported rather than silently produced.",
+            "note": (
+                "Resource no-overlap (PRD 9.8) is enforced as a hard CP-SAT constraint "
+                "(T25): two tasks sharing a required resource (crew, machine or "
+                "permission) cannot occupy overlapping windows. Checked, not assumed - "
+                "the count should always be zero for an OPTIMAL or FEASIBLE solve, and "
+                "`solve_schedule` asserts exactly that."
+            ),
             "conflicts": resource_conflicts[:20],
         },
         "dependencyViolations": {

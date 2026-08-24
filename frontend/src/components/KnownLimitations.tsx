@@ -2,21 +2,24 @@
  * Constraints this plan does NOT enforce, typed per PRD 9.5, plus any partial
  * failure of the generation.
  *
- * The solver reports the constraint it leaves unmodelled - resource no-overlap
- * (T25) - and that report has survived four hops to get here: dataclass,
- * taxonomy, HTTP, MongoDB. Dropping it at the last one would make the plan
- * look cleaner on screen than it is, which is the only direction that
- * actually matters. Dependency precedence (PRD 9.7) is enforced as of T24, so
- * it now renders in the "checked and found none" section below instead -
- * still visible, but as an earned zero, not a silent absence.
+ * As of T25, PRD 9.5 names nothing the optimized plan leaves genuinely
+ * unenforced any more - dependency precedence (T24) and resource no-overlap
+ * (T25) are both hard CP-SAT constraints. This screen's typed-conflicts list
+ * is normally empty; what it renders instead is the "Checked, and none
+ * found" section - an earned zero for every type this build can check, not a
+ * silent absence.
  *
- * T21 turns the counts into named types with a named resolution each. Two
- * things that must stay true on this screen:
+ * T21 turns any live conflict that DID occur into a named type with a named
+ * resolution each. Three things that must stay true on this screen:
  *
  *   1. A resolution strategy is a LABEL, not an action taken. The heading says
  *      "would resolve it", and nothing here changes the plan.
  *   2. Types nothing checks for are listed separately as not checked, never as
  *      a count of zero. Zero would claim a check that does not exist.
+ *   3. A modern schedule with zero live conflicts (the ordinary case, now)
+ *      must never be confused with a genuinely pre-T21 schedule that never
+ *      carried a typed report at all - see `hasTypedReport` below. T25 found
+ *      this component conflating the two, and fixed it.
  *
  * Deliberately understated rather than alarming: these are known, scoped gaps,
  * not defects. But they are visible.
@@ -39,6 +42,13 @@ export function KnownLimitations({
   const groups = groupConflicts(conflictReport, 'optimized', { limit: 3 })
   const notYetDetectable = conflictReport?.notYetDetectable ?? []
   const checkedAndClear = conflictReport?.checkedAndClear ?? []
+  // Pre-T21 schedules carry no `conflictReport` at all - genuinely nothing to
+  // group. That is different from a MODERN schedule with `groups.length ===
+  // 0`, which (since T24/T25 made both PRD 9.5 types on the optimized plan
+  // hard constraints) is now the ordinary case, not a legacy one - `groups`
+  // being empty must never fall back to the stale "not enforced" labels
+  // below, which would misreport a constraint that IS enforced.
+  const hasTypedReport = conflictReport != null
 
   // Pre-T21 fallback: counts only, which is what used to be shown here.
   const countsOnly = [
@@ -55,7 +65,8 @@ export function KnownLimitations({
         applied.
       </p>
 
-      {groups.length > 0 ? (
+      {hasTypedReport ? (
+        groups.length > 0 ? (
         <ul className="space-y-2">
           {groups.map((group) => (
             <li
@@ -100,6 +111,12 @@ export function KnownLimitations({
             </li>
           ))}
         </ul>
+        ) : (
+          <p className="text-xs text-slate-500">
+            No live conflicts of any PRD 9.5 type on the optimized plan — see "Checked, and none
+            found" below for what that claim is based on.
+          </p>
+        )
       ) : (
         <ul className="space-y-2">
           {countsOnly.map((item) => (
