@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/comparison', label: 'Baseline vs AI' },
   { to: '/audit', label: 'Approvals & audit' },
+  { to: '/oversight', label: 'DRM oversight' },
   { to: '/corridors', label: 'Corridors' },
   { to: '/assets', label: 'Assets' },
   { to: '/tasks', label: 'Backlog' },

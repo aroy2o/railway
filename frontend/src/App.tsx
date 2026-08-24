@@ -16,6 +16,7 @@ import ComparisonPage from './pages/ComparisonPage.tsx'
 import ControllerDashboard from './pages/ControllerDashboard.tsx'
 import CorridorDetailPage from './pages/CorridorDetailPage.tsx'
 import CorridorsPage from './pages/CorridorsPage.tsx'
+import DrmOversightPage from './pages/DrmOversightPage.tsx'
 import ResourcesPage from './pages/ResourcesPage.tsx'
 import StatusPage from './pages/StatusPage.tsx'
 import TasksPage from './pages/TasksPage.tsx'
@@ -43,6 +44,7 @@ function App() {
           <Route path="/dashboard" element={<ControllerDashboard />} />
           <Route path="/comparison" element={<ComparisonPage />} />
           <Route path="/audit" element={<AuditPage />} />
+          <Route path="/oversight" element={<DrmOversightPage />} />
           <Route path="/corridors" element={<CorridorsPage />} />
           <Route path="/corridors/:id" element={<CorridorDetailPage />} />
           <Route path="/assets" element={<AssetsPage />} />

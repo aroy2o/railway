@@ -569,7 +569,69 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
     immutability, boundary validation). Frontend: no new test file
     (consistent with T26's practice for a panel this size); verified live
     end to end, including the stale-snapshot bug found and fixed above.
-- [ ] `todo` — **T28**: Monthly planning polish + DRM oversight view KPI hierarchy (Section 14)
+- [x] `done` — **T28**: Monthly planning polish + DRM oversight view KPI hierarchy (Section 14)
+  - **Monthly is the SAME real CP-SAT solve at a longer horizon, displayed
+    coarser - not PRD 13's literal two-stage reserve-then-refine hierarchy,**
+    a deliberate, flagged scope decision. Audited on the real corpus first:
+    a 30-day solve schedules the identical 35/54 split as weekly (D-024
+    holds at any horizon, as T20/T23/T27 already found), but genuinely
+    surfaces 6 real blocks that fall entirely beyond the 7-day window
+    (spread to 2026-09-22) - real, new visibility for a DRM planning a month
+    out, not a relabelled weekly plan. `monthlyReservationRows`
+    (`lib/gantt.ts`) rolls the real blocks up to corridor-day resolution
+    (PRD 13's own "reservation-level"); `scheduler.py`'s `horizon` label now
+    recognises 28-31 days as `"monthly"`, matching PRD Section 15's stored
+    enum. See D-070.
+  - **The Weekly/Monthly toggle triggers a real re-solve, never a client-side
+    view switch** - D-040's "faking one would be inventing a plan the solver
+    never produced" still holds. The monthly grid is deliberately read-only:
+    a reservation cell can represent several blocks in one day, so it has no
+    single placement to hand T15's override endpoint.
+  - **DRM oversight (`/oversight`): all 16 PRD Section 14 KPIs audited
+    against what this data model actually supports before writing anything.**
+    Eleven computed for real (train delay/affected trains via T22's
+    displacement costing - `0 min from this plan`, an earned zero, with the
+    hypothetical traffic-block cost stated separately; blocked/unused hours;
+    overdue tasks; utilisation; batching ratio; conflict count; schedule
+    stability and high-criticality-at-risk, both new). Two of PRD's own
+    names ("tasks/critical tasks completed") assume execution tracking this
+    prototype does not have - `Task.status` is written once at seed time and
+    never updated (D-043) - relabelled honestly to "scheduled" rather than
+    silently claiming completion. Three marked unavailable with the specific
+    reason: predicted risk REDUCED (T16 has no before/after model, the same
+    boundary T16 itself states), asset availability %, and downtime (no
+    runtime asset-state model exists at all).
+  - **Two real bugs found and fixed before shipping, neither guessed -
+    found by checking a real API response.** (1) The high-criticality
+    threshold first read `priorityBreakdown.components.asset_criticality`,
+    which is FR2.3's NORMALISED 0-1 contribution weight (`0.827`), not the
+    real 0-100 criticality score - confirmed against a live task, then fixed
+    to join through the real `Asset.criticalityScore` via `assetId`. (2) The
+    conflict-count KPI initially reported a real, checked zero as "not
+    available", because `byPlan.optimized` is entirely ABSENT once T24/T25's
+    hard constraints hold (D-046) rather than kept at `{total: 0}` - the
+    exact "zero read as no data" failure class T21's `checkedAndClear`
+    exists to prevent, reintroduced in a third layer. Fixed with a dedicated
+    reader that treats report-absent as unavailable and key-absent as a real
+    zero, pinned by three tests.
+  - **Schedule stability, built for real:** a new `getSchedule`-by-id query
+    (the list endpoint omits `blocks`), restricted to the most recent OTHER
+    plan on the SAME horizon (comparing weekly against monthly placements
+    would be a meaningless ratio). Verified live: two consecutive weekly
+    regenerations with unchanged inputs measured **100%** - D-022's
+    determinism made visible, not assumed.
+  - **Tests:** optimizer 328 (+5, horizon label), frontend 85 (+11:
+    `monthlyReservationRows`, all eleven real KPIs plus both relabelled and
+    all three unavailable ones, both bugs above each pinned). Backend/data
+    untouched - both pieces are real solver output already covered, or
+    frontend display logic. Verified live end to end: Monthly toggle
+    triggering a real 0.65s OPTIMAL 30-day solve and rendering the
+    reservation grid; all 16 DRM KPI cards, before and after the
+    conflict-count fix; schedule stability's 100% result.
+  - **This closes the T-numbered backlog. T1-T28 are now all `done`.**
+    Remaining: TX1-4 (cross-cutting - Docker Compose is still unverified end
+    to end, D-005) and, per the standing plan noted since T20, authentication
+    (the rest of T10/T11) now that every feature task is real.
 
 ## Cross-cutting (interleave as needed, not a strict phase)
 
@@ -603,6 +665,30 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 ## Session log
 
 _Append a dated one-line entry here each session — what was completed, what's next._
+
+- **2026-08-24** — T28 complete. Monthly planning polish + DRM oversight KPI
+  hierarchy (PRD Section 14) - **the T-numbered backlog is now closed, T1-T28
+  all `done`.** Monthly is built as the SAME real CP-SAT solve run at a
+  longer horizon and displayed at corridor-day resolution, not PRD 13's
+  literal two-stage reserve-then-refine model - a deliberate, flagged scope
+  call, made only after confirming on the real corpus that a 30-day solve
+  genuinely surfaces 6 blocks a weekly-only view would never show, not just
+  a relabelled weekly plan. The Weekly/Monthly toggle (disabled since T12's
+  D-040) now triggers a real re-solve, never a cached view switch. The DRM
+  oversight page audits all 16 PRD Section 14 KPIs against what this data
+  model actually supports: 11 real, 2 honestly relabelled from "completed"
+  to "scheduled" (this prototype has no execution tracking), 3 marked
+  unavailable with the specific reason (no before/after risk model, no
+  runtime asset-state model). Two real bugs caught before shipping by
+  checking actual API responses rather than assuming shapes: a criticality
+  threshold that was reading a normalised 0-1 weight instead of the real
+  0-100 score, and a conflict-count KPI that reported a real, checked zero
+  as "not available" because T25/D-046's `byPlan` key-dropping behaviour
+  reappeared in a third layer. 328 optimizer / 114 backend / 85 frontend /
+  105 data tests, all four layers green as a whole-system check. See
+  docs/DECISIONS.md D-070. Next: TX1-4 (Docker Compose still unverified end
+  to end, D-005) or authentication (T10/T11's remainder), per the standing
+  plan.
 
 - **2026-08-24** — T27 complete. Emergency rolling re-optimization (PRD
   FR3.5, 9.10), the last 🟡 task with real solver work. PRD 9.10's own text

@@ -57,6 +57,9 @@ export function ControllerDashboard() {
   // T27: independent of both selections above - an emergency picks its own
   // corridor and window rather than reusing the Gantt's click-to-select.
   const [emergencyOpen, setEmergencyOpen] = useState(false)
+  // T28: tracked so a policy-slider regenerate stays on whatever horizon is
+  // currently being viewed, rather than silently reverting to weekly.
+  const [horizonDays, setHorizonDays] = useState<7 | 30>(7)
 
   const plan = schedule.data?.data
   // `blocks` is the solver's plan and what `decisionLog` explains; the
@@ -71,13 +74,18 @@ export function ControllerDashboard() {
   const noScheduleYet =
     schedule.error && (schedule.error as { status?: number }).status === 404
 
-  async function onGenerate(policyWeights?: import('../lib/policyWeights.ts').PolicyWeightsInput) {
+  async function onGenerate(
+    policyWeights?: import('../lib/policyWeights.ts').PolicyWeightsInput,
+    requestedHorizonDays?: 7 | 30,
+  ) {
+    const days = requestedHorizonDays ?? horizonDays
     try {
       await generate({
         horizonStart: DEFAULT_HORIZON_START,
-        horizonDays: 7,
+        horizonDays: days,
         ...(policyWeights && Object.keys(policyWeights).length > 0 ? { policyWeights } : {}),
       }).unwrap()
+      setHorizonDays(days)
     } catch {
       // Surfaced in the banner below; unwrap() would otherwise reject unhandled.
     }
@@ -178,11 +186,14 @@ export function ControllerDashboard() {
                     blocks={visibleBlocks}
                     horizonStart={plan.horizonStart}
                     horizonDays={plan.horizonDays}
+                    horizon={plan.horizon}
                     // Withheld once the workflow closes the plan: a published
                     // plan is frozen and a rejected one is discarded, so the
                     // server would refuse the override this click starts.
                     onSelectBlock={overridable ? setSelected : undefined}
                     selectedBlockKey={selected ? blockKey(selected) : null}
+                    onSelectHorizon={(days) => onGenerate(undefined, days)}
+                    isGeneratingHorizon={generation.isLoading}
                   />
 
                   {overridable && selected && (

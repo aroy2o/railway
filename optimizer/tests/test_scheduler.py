@@ -147,6 +147,22 @@ def test_a_longer_horizon_fits_the_work_that_did_not_fit_in_one_day():
 
 
 # --------------------------------------------------------------------------- #
+# T28: the horizon label matches PRD Section 15's own enum                     #
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize(
+    ("horizon_days", "expected"),
+    [(7, "weekly"), (28, "monthly"), (30, "monthly"), (31, "monthly"), (14, "14-day")],
+)
+def test_horizon_label_matches_the_stored_schema_enum(horizon_days, expected):
+    """PRD Section 15: `horizon: "weekly"|"monthly"`. A monthly plan is the
+    SAME exact-slot CP-SAT solve as a weekly one, just over more days (T28,
+    docs/DECISIONS.md D-070) - this only pins the label, not a second model."""
+    result = solve_schedule(TASKS, CORRIDORS, horizon_start=HORIZON_START, horizon_days=horizon_days)
+    assert result.horizon == expected
+
+
+# --------------------------------------------------------------------------- #
 # SLA is soft, deliberately                                                    #
 # --------------------------------------------------------------------------- #
 

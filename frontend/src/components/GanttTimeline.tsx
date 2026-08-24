@@ -14,7 +14,15 @@
  */
 import { useMemo, useState } from 'react'
 import type { Department, ScheduleBlock } from '../api/apiSlice.ts'
-import { HOUR_TICKS, blockKey, blockPosition, corridorRowsForDay, summariseDays } from '../lib/gantt.ts'
+import {
+  HOUR_TICKS,
+  blockKey,
+  blockPosition,
+  corridorRowsForDay,
+  monthlyReservationRows,
+  summariseDays,
+  type ReservationRow,
+} from '../lib/gantt.ts'
 
 /** Reuses the DepartmentPill palette so colour means the same thing everywhere. */
 const DEPARTMENT_BAR: Record<Department, string> = {
@@ -32,18 +40,32 @@ interface GanttTimelineProps {
   blocks: ScheduleBlock[]
   horizonStart: string
   horizonDays: number
+  /** PRD Section 15's own enum (`"weekly"|"monthly"`) - which real solve this
+   * plan came from, not a view mode chosen in the browser (T28). */
+  horizon: string
   /** When given, blocks become clickable to start a manual override (FR6.2). */
   onSelectBlock?: (block: ScheduleBlock) => void
   selectedBlockKey?: string | null
+  /** T28: re-solve at the other horizon. Omitted keeps the toggle a plain
+   * (real, not faked) indicator rather than a control - e.g. inside a
+   * what-if or emergency panel, where triggering a full regenerate makes no
+   * sense. */
+  onSelectHorizon?: (horizonDays: 7 | 30) => void
+  isGeneratingHorizon?: boolean
 }
 
 export function GanttTimeline({
   blocks,
   horizonStart,
   horizonDays,
+  horizon,
   onSelectBlock,
   selectedBlockKey,
+  onSelectHorizon,
+  isGeneratingHorizon,
 }: GanttTimelineProps) {
+  const isMonthly = horizon === 'monthly'
+
   const days = useMemo(
     () => summariseDays(blocks, horizonStart, horizonDays),
     [blocks, horizonStart, horizonDays],
@@ -67,100 +89,212 @@ export function GanttTimeline({
     <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
         <div>
-          <h2 className="text-sm font-semibold text-slate-900">Corridor possession timeline</h2>
+          <h2 className="text-sm font-semibold text-slate-900">
+            Corridor possession timeline
+          </h2>
           <p className="text-xs text-slate-500">
-            Blocks the optimizer allocated into real free windows, by corridor and time of day.
+            {isMonthly
+              ? 'The same real solve as Weekly, at corridor-day resolution (PRD 13’s reservation level) - which department(s) hold each corridor each day, not the exact time.'
+              : 'Blocks the optimizer allocated into real free windows, by corridor and time of day.'}
           </p>
         </div>
-        <HorizonToggle />
+        <HorizonToggle
+          horizon={horizon}
+          onSelect={onSelectHorizon}
+          isGenerating={isGeneratingHorizon}
+        />
       </header>
 
-      {/* Whole-week strip: every day, including the empty ones. */}
-      <div className="flex flex-wrap gap-1.5 border-b border-slate-100 px-5 py-3">
-        {days.map((day) => {
-          const isSelected = day.date === selected
-          const label = new Date(`${day.date}T00:00:00Z`).toLocaleDateString(undefined, {
-            weekday: 'short',
-            day: 'numeric',
-            timeZone: 'UTC',
-          })
-          return (
-            <button
-              key={day.date}
-              type="button"
-              onClick={() => setSelected(day.date)}
-              className={`rounded-lg border px-2.5 py-1.5 text-left transition ${
-                isSelected
-                  ? 'border-slate-900 bg-slate-900 text-white'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-              } ${day.blockCount === 0 ? 'opacity-55' : ''}`}
-            >
-              <span className="block text-xs font-medium">{label}</span>
-              <span className="block text-[11px] tabular-nums opacity-80">
-                {day.blockCount === 0 ? 'no blocks' : `${day.blockCount} block${day.blockCount > 1 ? 's' : ''}`}
-                {day.batchCount > 0 && ' · batch'}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-
-      {rows.length === 0 ? (
-        <p className="px-5 py-10 text-center text-sm text-slate-500">
-          No blocks scheduled on this day. Corridor time was either fully occupied by traffic or
-          the work did not fit the windows available.
-        </p>
+      {isMonthly ? (
+        <MonthlyReservationGrid blocks={blocks} horizonStart={horizonStart} horizonDays={horizonDays} />
       ) : (
-        <div className="overflow-x-auto px-5 py-4">
-          <div className="min-w-[720px]">
-            {/* Hour axis */}
-            <div className="mb-1 flex pl-[112px]">
-              <div className="relative h-4 flex-1">
-                {HOUR_TICKS.map((hour) => (
-                  <span
-                    key={hour}
-                    className="absolute -translate-x-1/2 text-[10px] tabular-nums text-slate-400"
-                    style={{ left: `${(hour / 24) * 100}%` }}
-                  >
-                    {String(hour).padStart(2, '0')}
+        <>
+          {/* Whole-week strip: every day, including the empty ones. */}
+          <div className="flex flex-wrap gap-1.5 border-b border-slate-100 px-5 py-3">
+            {days.map((day) => {
+              const isSelected = day.date === selected
+              const label = new Date(`${day.date}T00:00:00Z`).toLocaleDateString(undefined, {
+                weekday: 'short',
+                day: 'numeric',
+                timeZone: 'UTC',
+              })
+              return (
+                <button
+                  key={day.date}
+                  type="button"
+                  onClick={() => setSelected(day.date)}
+                  className={`rounded-lg border px-2.5 py-1.5 text-left transition ${
+                    isSelected
+                      ? 'border-slate-900 bg-slate-900 text-white'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                  } ${day.blockCount === 0 ? 'opacity-55' : ''}`}
+                >
+                  <span className="block text-xs font-medium">{label}</span>
+                  <span className="block text-[11px] tabular-nums opacity-80">
+                    {day.blockCount === 0
+                      ? 'no blocks'
+                      : `${day.blockCount} block${day.blockCount > 1 ? 's' : ''}`}
+                    {day.batchCount > 0 && ' · batch'}
                   </span>
-                ))}
-              </div>
-            </div>
+                </button>
+              )
+            })}
+          </div>
 
-            <div className="space-y-1.5">
-              {rows.map((row) => (
-                <div key={row.corridorId} className="flex items-center gap-2">
-                  <span className="w-[104px] shrink-0 truncate font-mono text-[11px] text-slate-600">
-                    {row.corridorId}
-                  </span>
-                  <div className="relative h-9 flex-1 rounded-md bg-slate-100">
-                    {/* Gridlines every 3 hours, so a bar can be read against the clock. */}
-                    {HOUR_TICKS.slice(1, -1).map((hour) => (
+          {rows.length === 0 ? (
+            <p className="px-5 py-10 text-center text-sm text-slate-500">
+              No blocks scheduled on this day. Corridor time was either fully occupied by traffic or
+              the work did not fit the windows available.
+            </p>
+          ) : (
+            <div className="overflow-x-auto px-5 py-4">
+              <div className="min-w-[720px]">
+                {/* Hour axis */}
+                <div className="mb-1 flex pl-[112px]">
+                  <div className="relative h-4 flex-1">
+                    {HOUR_TICKS.map((hour) => (
                       <span
                         key={hour}
-                        className="absolute top-0 h-full w-px bg-white/70"
+                        className="absolute -translate-x-1/2 text-[10px] tabular-nums text-slate-400"
                         style={{ left: `${(hour / 24) * 100}%` }}
-                      />
-                    ))}
-                    {row.blocks.map((block) => (
-                      <BlockBar
-                        key={`${block.windowIndex}-${block.startMinute}`}
-                        block={block}
-                        onSelect={onSelectBlock}
-                        isSelected={selectedBlockKey === blockKey(block)}
-                      />
+                      >
+                        {String(hour).padStart(2, '0')}
+                      </span>
                     ))}
                   </div>
                 </div>
-              ))}
+
+                <div className="space-y-1.5">
+                  {rows.map((row) => (
+                    <div key={row.corridorId} className="flex items-center gap-2">
+                      <span className="w-[104px] shrink-0 truncate font-mono text-[11px] text-slate-600">
+                        {row.corridorId}
+                      </span>
+                      <div className="relative h-9 flex-1 rounded-md bg-slate-100">
+                        {/* Gridlines every 3 hours, so a bar can be read against the clock. */}
+                        {HOUR_TICKS.slice(1, -1).map((hour) => (
+                          <span
+                            key={hour}
+                            className="absolute top-0 h-full w-px bg-white/70"
+                            style={{ left: `${(hour / 24) * 100}%` }}
+                          />
+                        ))}
+                        {row.blocks.map((block) => (
+                          <BlockBar
+                            key={`${block.windowIndex}-${block.startMinute}`}
+                            block={block}
+                            onSelect={onSelectBlock}
+                            isSelected={selectedBlockKey === blockKey(block)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          )}
+        </>
       )}
 
-      <Legend canOverride={onSelectBlock !== undefined} />
+      <Legend canOverride={!isMonthly && onSelectBlock !== undefined} />
     </section>
+  )
+}
+
+/**
+ * Corridor-day reservation heatmap (T28, PRD Section 13).
+ *
+ * Deliberately read-only: a reservation cell can represent SEVERAL blocks in
+ * one day, so it has no single (corridor, date, windowIndex) to hand T15's
+ * override endpoint. Overriding a specific placement still happens on the
+ * Weekly view, which is exact-slot by construction.
+ */
+function MonthlyReservationGrid({
+  blocks,
+  horizonStart,
+  horizonDays,
+}: {
+  blocks: ScheduleBlock[]
+  horizonStart: string
+  horizonDays: number
+}) {
+  const rows = useMemo(
+    () => monthlyReservationRows(blocks, horizonStart, horizonDays),
+    [blocks, horizonStart, horizonDays],
+  )
+
+  if (rows.length === 0) {
+    return (
+      <p className="px-5 py-10 text-center text-sm text-slate-500">
+        No corridor carries a reservation anywhere in this month.
+      </p>
+    )
+  }
+
+  return (
+    <div className="overflow-x-auto px-5 py-4">
+      <div className="min-w-[720px]">
+        <div className="mb-1 flex pl-[112px]">
+          {rows[0]!.days.map((day) => (
+            <span
+              key={day.date}
+              className="flex-1 text-center text-[9px] tabular-nums text-slate-400"
+            >
+              {new Date(`${day.date}T00:00:00Z`).getUTCDate()}
+            </span>
+          ))}
+        </div>
+        <div className="space-y-1">
+          {rows.map((row) => (
+            <div key={row.corridorId} className="flex items-center gap-2">
+              <span className="w-[104px] shrink-0 truncate font-mono text-[11px] text-slate-600">
+                {row.corridorId}
+              </span>
+              <div className="flex flex-1 gap-[2px]">
+                {row.days.map((day) => (
+                  <ReservationCell key={day.date} day={day} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ReservationCell({ day }: { day: ReservationRow['days'][number] }) {
+  if (day.departments.length === 0) {
+    return <span className="h-5 flex-1 rounded-sm bg-slate-100" title={`${day.date} — no reservation`} />
+  }
+  const title =
+    `${day.date} — ${day.departments.join(' + ')}` +
+    (day.isCrossDepartmentBatch ? ' (shared block)' : '') +
+    ` — ${day.blockCount} block${day.blockCount > 1 ? 's' : ''}`
+
+  if (day.departments.length === 1) {
+    return (
+      <span
+        title={title}
+        className={`h-5 flex-1 rounded-sm ${DEPARTMENT_BAR[day.departments[0]!]}`}
+      />
+    )
+  }
+  // More than one department on the same day - split the cell, and ring it
+  // the same violet the hourly view uses for a shared block, so the same
+  // colour means the same thing on both screens.
+  return (
+    <span
+      title={title}
+      className={`flex h-5 flex-1 overflow-hidden rounded-sm ${
+        day.isCrossDepartmentBatch ? 'ring-1 ring-violet-600' : ''
+      }`}
+    >
+      {day.departments.map((department) => (
+        <span key={department} className={`flex-1 ${DEPARTMENT_BAR[department]}`} />
+      ))}
+    </span>
   )
 }
 
@@ -248,18 +382,53 @@ function BlockBar({
  * one by stretching weekly data would be inventing a plan the solver never
  * produced, so the control is visibly disabled and says why.
  */
-function HorizonToggle() {
+/**
+ * T28: both horizons are real now, each a genuine re-solve at that many
+ * days (docs/DECISIONS.md D-070) - never a cached view switch over the same
+ * data, because the two ARE different real solves.
+ */
+function HorizonToggle({
+  horizon,
+  onSelect,
+  isGenerating,
+}: {
+  horizon: string
+  onSelect?: (horizonDays: 7 | 30) => void
+  isGenerating?: boolean
+}) {
+  const isMonthly = horizon === 'monthly'
+  const canSelect = Boolean(onSelect) && !isGenerating
+
+  function Option({ label, active, horizonDays }: { label: string; active: boolean; horizonDays: 7 | 30 }) {
+    if (active) {
+      return (
+        <span className="rounded bg-white px-2.5 py-1 text-xs font-medium text-slate-900 shadow-sm">
+          {label}
+        </span>
+      )
+    }
+    return (
+      <button
+        type="button"
+        disabled={!canSelect}
+        onClick={() => onSelect?.(horizonDays)}
+        title={
+          onSelect
+            ? `Re-solve for real at this horizon (a genuine ${horizonDays}-day CP-SAT run)`
+            : undefined
+        }
+        className="rounded px-2.5 py-1 text-xs font-medium text-slate-500 transition hover:bg-white hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {label}
+      </button>
+    )
+  }
+
   return (
     <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
-      <span className="rounded bg-white px-2.5 py-1 text-xs font-medium text-slate-900 shadow-sm">
-        Weekly
-      </span>
-      <span
-        title="Monthly planning needs the coarser corridor-day reservation model (PRD Section 13, task T28). Not yet built — showing a stretched weekly plan would be inventing one."
-        className="cursor-not-allowed rounded px-2.5 py-1 text-xs font-medium text-slate-400"
-      >
-        Monthly · pending
-      </span>
+      <Option label="Weekly" active={!isMonthly} horizonDays={7} />
+      <Option label="Monthly" active={isMonthly} horizonDays={30} />
+      {isGenerating && <span className="px-1.5 text-[11px] text-slate-400">solving…</span>}
     </div>
   )
 }

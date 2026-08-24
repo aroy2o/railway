@@ -556,9 +556,13 @@ export const api = createApi({
      * so this is a list of headers, not of plans.
      */
     getSchedules: builder.query<
-      { data: Array<Pick<Schedule, '_id' | 'generatedAt' | 'horizonStart' | 'status' | 'metrics'> & {
-        workflowState?: import('../lib/approval.ts').WorkflowState
-      }> },
+      {
+        data: Array<
+          Pick<Schedule, '_id' | 'generatedAt' | 'horizonStart' | 'horizonDays' | 'horizon' | 'status' | 'metrics'> & {
+            workflowState?: import('../lib/approval.ts').WorkflowState
+          }
+        >
+      },
       { limit?: number } | void
     >({
       query: (args) => `/schedules?limit=${args?.limit ?? 20}`,
@@ -568,6 +572,16 @@ export const api = createApi({
     /** The most recently generated plan. 404s until one has been generated. */
     getLatestSchedule: builder.query<{ data: Schedule }, void>({
       query: () => '/schedules/latest',
+      providesTags: ['Schedule'],
+    }),
+
+    /**
+     * One plan's full detail by id - `getSchedules` above omits `blocks` for
+     * the list view, so this is what T28's schedule-stability KPI (and
+     * anything else that needs a PAST plan's exact placements) reads.
+     */
+    getSchedule: builder.query<{ data: Schedule }, string>({
+      query: (scheduleId) => `/schedules/${encodeURIComponent(scheduleId)}`,
       providesTags: ['Schedule'],
     }),
 
@@ -732,6 +746,7 @@ export const {
   useGetResourcesQuery,
   useGetProvenanceQuery,
   useGetLatestScheduleQuery,
+  useGetScheduleQuery,
   useGetSchedulesQuery,
   useGenerateScheduleMutation,
   useGetOverrideTargetsQuery,

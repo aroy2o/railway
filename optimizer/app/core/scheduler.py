@@ -453,7 +453,17 @@ def solve_schedule(
     when nothing changed is indefensible in a demo and impossible to test.
     See docs/DECISIONS.md D-022.
     """
-    horizon = "weekly" if horizon_days == 7 else f"{horizon_days}-day"
+    # T28, PRD Section 15's own enum (`horizon: "weekly"|"monthly"`). 28-31
+    # covers every real calendar month length without hardcoding 30 - a
+    # monthly plan is still the SAME exact-slot CP-SAT solve as a weekly one,
+    # just over a longer horizon (see docs/DECISIONS.md D-070); nothing else
+    # about the model changes because of this label.
+    if horizon_days == 7:
+        horizon = "weekly"
+    elif 28 <= horizon_days <= 31:
+        horizon = "monthly"
+    else:
+        horizon = f"{horizon_days}-day"
     windows = expand_windows(corridors, horizon_start, horizon_days)
     windows_by_corridor: dict[str, list[WindowInstance]] = {}
     for window in windows:

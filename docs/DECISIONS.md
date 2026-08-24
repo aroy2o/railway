@@ -3202,3 +3202,157 @@ unknown schedule id). Frontend: no new test file (consistent with T26's
 practice for a panel this size); verified live end to end in a real browser,
 including finding and fixing the stale-snapshot bug above, plus an
 independent `curl`-based ground-truth check of the exact same disruption.
+
+---
+
+## D-070 — Monthly is the SAME real solve at a longer horizon, displayed coarser; the DRM KPI hierarchy is real where the data model supports it and says so where it does not
+
+**Date:** 2026-08-24 · **Task:** T28
+
+**Two independent pieces, PRD Section 13 (monthly horizon) and PRD Section 14
+(KPI hierarchy), joined only by both being the last item on the board and
+both being reporting/polish rather than new constraint logic.**
+
+### Monthly planning
+
+**The question, audited before writing any UI.** PRD 13 describes monthly as
+"coarse: allocate corridor-days per department cluster (reservation-level)"
+with weekly as "solve exact slot assignment WITHIN monthly reservations" - a
+two-stage hierarchy (reserve first, refine second) this codebase has never
+built; every solve since T6 has always gone straight to exact-slot
+assignment, at whatever horizon was requested. Building the literal two-stage
+model would mean a second optimization ontology - a coarse
+department-cluster-per-corridor-day solver feeding a constrained weekly
+re-solve - which is a lot of new engineering for the board's last 🟡 item,
+and TASKS.md's own name for this task is "Monthly planning **polish**", not
+"the monthly reservation solver".
+
+**Audited on the real corpus before deciding.** `solve_schedule` already
+takes `horizon_days` as a plain integer (MAX_HORIZON_DAYS=90, no config
+change needed) - so the real question was whether simply running it at 30
+days produces anything WORTH a coarser view, or whether it would just be
+"weekly, but longer, so what". Run directly against the real corpus:
+identical scheduled set (35/54, same as weekly - D-024 holds at any horizon
+length, as T20/T23/T27 already found from other angles), but genuinely NEW
+information - 6 blocks fall entirely beyond the 7-day window (spread from
+2026-09-09 to 2026-09-22), invisible to a Controller who only ever looks a
+week ahead. That is real, demonstrable value for a DRM planning a month out,
+not a relabelled weekly plan.
+
+**Decision: run the SAME real CP-SAT solve at `horizon_days=30`, and
+aggregate the DISPLAY to corridor-day resolution.** `scheduler.py` gained no
+new model logic - `monthlyReservationRows` (`lib/gantt.ts`) rolls the exact
+real blocks up to "which department(s) hold this corridor this day", exactly
+PRD 13's own resolution, dropping exact start/end times the same way a
+reservation genuinely would. This is an honest reading, not a shortcut: the
+underlying computation is exactly as trustworthy as any weekly plan (same
+model, same constraints, same objective), and what changes is only how
+coarsely a real result is SHOWN. `horizon`'s label (`scheduler.py`) now
+recognises 28-31 days as `"monthly"`, matching PRD Section 15's own
+`"weekly"|"monthly"` enum, rather than the generic `f"{horizon_days}-day"`
+fallback every other horizon length still gets.
+
+**The Weekly/Monthly toggle is a real re-solve trigger, never a client-side
+view switch.** D-040 disabled it specifically because "showing a stretched
+weekly plan would be inventing one" - that principle still holds, so clicking
+either option calls `generate` at that horizon for real (`ControllerDashboard`
+tracks `horizonDays` state so a policy-slider regenerate stays on whichever
+horizon is currently displayed, rather than silently reverting to weekly).
+The monthly view is read-only by design: a reservation cell can represent
+several blocks in one day, so it has no single (corridor, date, windowIndex)
+to hand T15's override endpoint - overriding a specific placement still
+happens on the Weekly view, which stays exact-slot by construction.
+
+**Verified live:** clicking Monthly triggered a real 0.65s OPTIMAL solve over
+30 days, rendering a 14-corridor x 30-day reservation grid with the real
+department colours and the same violet shared-block ring the hourly view
+uses, so the same colour means the same thing on both screens.
+
+### DRM oversight KPI hierarchy
+
+**Sixteen KPIs named across four categories (PRD Section 14).** Audited each
+one against what this system's real data actually supports before writing
+`lib/oversight.ts`, rather than assuming all sixteen are computable:
+
+- **Eleven are real and computed for real**: estimated train delay / affected
+  trains (T22's own displacement costing, summed - reported as `0 min from
+  this plan` for the COMMITTED plan, which is an earned zero per T22, with
+  the hypothetical traffic-block cost stated separately so the two scopes are
+  never conflated), blocked/unused corridor hours (`metrics`), overdue tasks
+  (FR2.3's `isOverdue`), block utilisation, batching ratio, conflict count,
+  schedule stability (new - see below), and high-criticality assets still at
+  risk (new - see below).
+- **Two of PRD's own names ("tasks completed", "critical tasks completed")
+  assume execution tracking this prototype does not have** - `Task.status`
+  is written once at seed time and never updated after generation (D-043
+  leaves it deliberately untouched; it does not mean what "scheduled" means
+  in this system). Relabelled honestly to "tasks scheduled" / "critical tasks
+  scheduled" - what is actually true - rather than silently reusing PRD's
+  wording for a claim this system cannot back.
+- **Three have no honest value at all and are marked unavailable, with the
+  specific reason**: predicted failure risk REDUCED (T16 extrapolates
+  time-to-threshold from a simulated trend; it does not simulate what
+  maintenance would do to that trend, so there is no before/after to report -
+  the same PRD 9.1 boundary T16 itself already states), asset availability %,
+  and downtime (this prototype has no runtime asset-state model at all -
+  assets carry a criticality score and a simulated degradation history, not
+  a live up/down status).
+
+**A real bug found and fixed before it shipped.** The first draft read
+`task.priorityBreakdown.components.asset_criticality` as "the asset's
+criticality score" for the "high-criticality" threshold. It is not - it is
+FR2.3's NORMALISED 0-1 contribution weight (`asset_criticality_score /
+CRITICALITY_MAX`), confirmed against a real task over the live API
+(`0.827`, not `82.7`). Every KPI depending on a criticality threshold now
+joins through the real `Asset.criticalityScore` (0-100, measured range
+27.92-90.75 per T4) via `task.assetId`, with the top-quartile cutoff computed
+from the live asset list each time - the same "measure, do not guess"
+discipline T7 and T16 applied to their own weights, not a remembered
+constant that would go stale if the corpus changes.
+
+**A second real bug, this one caught only by driving a real browser and
+reading a real API response.** The "conflict count" KPI's first version used
+`planTotal(report, 'optimized')`, which returns `null` whenever
+`byPlan.optimized` is absent - and T25/D-046 already established that
+`byPlan` drops the `'optimized'` key ENTIRELY once dependency precedence and
+resource no-overlap became hard constraints, rather than keeping it at
+`{total: 0}`. The oversight page rendered "Conflict count: not available" on
+a real committed plan with a genuine, checked zero - reintroducing, in a
+third layer, the exact "zero conflicts read as no data" failure class T21
+built `checkedAndClear` to prevent and T25 already fixed once for
+`KnownLimitations.tsx`. Fixed with a dedicated `conflictCountKpi` that reads
+`byPlan?.optimized?.total ?? 0` directly - report absent is genuinely
+unavailable, key absent inside a real report is a real zero - and pinned
+with three tests (report absent, key absent, key present with a real count).
+
+**Schedule stability, built for real, restricted to same-horizon
+comparisons.** PRD names it; nothing computed it before this task. Needed a
+new frontend query (`getSchedule` by id - the list endpoint already omits
+`blocks`) to fetch the most recent OTHER plan on the SAME `horizonDays` as
+the current one - comparing a weekly plan's placements against a monthly
+plan's would be a meaningless ratio (different day counts, different
+corridor-day granularity), so the comparison is explicitly scoped. Reports
+the % of currently-scheduled tasks sitting on the same (corridor, date) as
+the previous same-horizon plan; genuinely unavailable (not zero, not a
+guess) when no such plan exists yet. Verified live: two consecutive weekly
+regenerations, identical inputs, **100% stability** - the honest, expected
+result of D-022's fixed-seed determinism, not a coincidence.
+
+**Tests.** Optimizer 328 (+5: the horizon label pinned for weekly/monthly/an
+arbitrary N-day fallback). Backend and data untouched by this task - both
+pieces are real solver output (already covered) and frontend display logic.
+Frontend 85 (+11: `monthlyReservationRows`' day-collapsing and batch-marking
+in `gantt.test.ts`; `lib/oversight.ts`'s eleven real KPIs, the two relabelled
+ones, the three honestly-unavailable ones, and both bugs above, each pinned
+with a dedicated test). Verified live end to end in a real browser: the
+Monthly toggle triggering a real solve and rendering the reservation grid,
+the DRM oversight page's all sixteen KPI cards (both before and after the
+conflict-count fix), and schedule stability computing 100% across two real
+consecutive weekly regenerations.
+
+**This closes the T-numbered backlog.** T1-T28 are now all `done`. What
+remains is TX1-4 (cross-cutting: Docker Compose verification, a demo reset
+script, final pitch-deck numbers) and, per the standing plan noted since
+T20's completion, authentication (the remainder of T10/T11) - now that every
+T-numbered feature task is built and real, role-gating who can see and do
+what is the natural next phase.

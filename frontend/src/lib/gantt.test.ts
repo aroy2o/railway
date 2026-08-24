@@ -8,7 +8,13 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { ScheduleBlock } from '../api/apiSlice.ts'
-import { blockKey, blockPosition, corridorRowsForDay, summariseDays } from './gantt.ts'
+import {
+  blockKey,
+  blockPosition,
+  corridorRowsForDay,
+  monthlyReservationRows,
+  summariseDays,
+} from './gantt.ts'
 
 function block(overrides: Partial<ScheduleBlock> = {}): ScheduleBlock {
   return {
@@ -110,6 +116,53 @@ describe('blockPosition', () => {
     const position = blockPosition(block({ startMinute: 0, endMinute: 1 }))
 
     expect(position.width).toBe('1.2%')
+  })
+})
+
+describe('monthlyReservationRows', () => {
+  it('collapses a day\'s blocks to which department(s) hold the corridor, not exact times', () => {
+    const rows = monthlyReservationRows(
+      [
+        block({ corridorId: 'A-B', startMinute: 60, endMinute: 120, departments: ['Engineering'] }),
+        block({ corridorId: 'A-B', startMinute: 600, endMinute: 660, departments: ['S&T'] }),
+      ],
+      '2026-08-24',
+      2,
+    )
+
+    expect(rows).toHaveLength(1)
+    const day1 = rows[0]!.days[0]!
+    expect(day1.blockCount).toBe(2)
+    expect(day1.departments.sort()).toEqual(['Engineering', 'S&T'])
+    // The second day of the horizon carries nothing - kept explicit, not
+    // dropped, the same "empty days are a real fact" rule summariseDays uses.
+    expect(rows[0]!.days[1]).toMatchObject({ departments: [], blockCount: 0 })
+  })
+
+  it('marks a cross-department batch day distinctly', () => {
+    const rows = monthlyReservationRows(
+      [block({ isCrossDepartmentBatch: true, departments: ['S&T', 'TRD'] })],
+      '2026-08-24',
+      1,
+    )
+
+    expect(rows[0]!.days[0]!.isCrossDepartmentBatch).toBe(true)
+  })
+
+  it('orders corridors by how many days of the horizon they reserve, then by id', () => {
+    const rows = monthlyReservationRows(
+      [
+        block({ corridorId: 'QUIET', date: '2026-08-24' }),
+        block({ corridorId: 'BUSY', date: '2026-08-24' }),
+        block({ corridorId: 'BUSY', date: '2026-08-25' }),
+      ],
+      '2026-08-24',
+      2,
+    )
+
+    expect(rows.map((row) => row.corridorId)).toEqual(['BUSY', 'QUIET'])
+    expect(rows[0]!.reservedDayCount).toBe(2)
+    expect(rows[1]!.reservedDayCount).toBe(1)
   })
 })
 
