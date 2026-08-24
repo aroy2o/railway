@@ -107,13 +107,25 @@ comparable.
 screen misleads, so its rules are structural rather than small print:
 
 - a scope band states the contestable denominator **before any metric**;
-- conflicts and batching are the headline, throughput is tagged
-  `no difference` with an `=`;
+- conflicts and batching are the headline, throughput is a supporting metric,
+  never headlined;
 - utilisation renders **inside the same card** as the over-subscription count
   that causes it, tagged "reads backwards".
 
+Throughput's verdict is derived from the real numbers, not assumed equal:
+`no difference` (`=`) when the two engines schedule the same count — true on
+this corpus before T24 — or `fewer, by design` (sky-blue, its own badge) when
+the optimizer schedules fewer, which T24 made real: it refuses to place
+TSK-00025 without its PRD 9.7 prerequisite, while the baseline's FCFS pass,
+with no dependency awareness, schedules it anyway. `fewer, by design` is
+deliberately its own tone — not "reads backwards" (amber; that badge means the
+bigger number is the trap) and not "improvement" (emerald; that would claim
+the smaller number is a win it is not) — because a lower optimizer count here
+is neither of those; it is simply correct. See docs/DECISIONS.md D-066.
+
 Ordering, verdicts and the pairing live in `src/lib/comparison.ts` and are unit
-tested, so an edit that headlines throughput fails a test rather than a dry run.
+tested, so an edit that headlines throughput, or mislabels a lower count as an
+improvement, fails a test rather than a dry run.
 
 ## The Controller Dashboard
 
@@ -221,9 +233,13 @@ placement kept alongside it.
 The Gantt renders `effectivePlan.blocks` where present — the plan as amended —
 while `blocks` stays untouched as what the solver produced (D-043).
 
-**Known limitations** renders `knownGaps` — the constraints the solver does not
-enforce (T24, T25) — plus any `generationErrors`. That report has now survived
-four hops: dataclass, HTTP, MongoDB, and screen.
+**Known limitations** renders `knownGaps` — the constraint the solver does not
+enforce (T25) — plus any `generationErrors`. That report has now survived four
+hops: dataclass, HTTP, MongoDB, and screen. It also renders `checkedAndClear`
+(T22's addition, joined by dependency precedence at T24) — types that ARE
+checked, on every solve, and genuinely found clear, under its own "Checked,
+and none found" heading so an earned zero is never confused with "nothing
+checks this."
 
 ## What-if simulation (PRD FR5, 9.4, T20)
 
@@ -317,20 +333,24 @@ never re-derives a conflict type or a resolution; both come from the optimizer
 `groupConflicts(report, plan)` takes the plan as a **required** argument and
 drops anything that does not match, and `planTotal()` has no cross-plan
 counterpart. That is not an oversight. On the real corpus the optimized plan
-carries 16 conflicts and the baseline carries 9; a combined "25" would describe
-no plan that exists, and would let the process being argued against inflate the
-count attributed to this system. Same class of trap as D-031's utilisation
-figure, handled the same way — the misleading shape is unavailable rather than
-merely discouraged. See D-045.
+carries 10 conflicts (all `RESOURCE_CONTENTION` — `DEPENDENCY_ORDER_VIOLATION`
+moved to `checkedAndClear` at T24) and the baseline carries 9; a combined "19"
+would describe no plan that exists, and would let the process being argued
+against inflate the count attributed to this system. Same class of trap as
+D-031's utilisation figure, handled the same way — the misleading shape is
+unavailable rather than merely discouraged. See D-045.
 
 Two surfaces render it:
 
 - **`KnownLimitations`** (dashboard) — the optimized layer. Each type shows its
-  count, its resolution strategy, the task that would enforce it (T24/T25), and
-  up to three real instances with corridor and date. Below them, a **"Not
-  checked for at all"** block lists types PRD 9.5 names that nothing detects —
-  currently train impact, which needs T22. Listed with a reason, never as a
-  count of zero.
+  count, its resolution strategy, the task that would enforce it (T25), and up
+  to three real instances with corridor and date. Below them, a **"Not checked
+  for at all"** block lists types PRD 9.5 names that nothing detects (none, on
+  the current corpus — both train impact and dependency order have graduated to
+  checked), and a **"Checked, and none found"** block lists types that ARE
+  checked on every solve and genuinely found clear (train impact since T22,
+  dependency order since T24). Neither is a bare zero, because a bare zero
+  cannot say which of those two very different claims it is making.
 - **`ConflictEvidence`** (comparison screen) — the baseline layer, with a type
   badge and resolution above each table. The count is labelled "on the baseline
   plan" so a screenshot cannot be read as this system's conflicts.

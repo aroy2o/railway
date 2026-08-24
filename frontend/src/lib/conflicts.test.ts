@@ -40,7 +40,7 @@ function report(conflicts: TypedConflict[]): ConflictReport {
     bucket.total += 1
     bucket.byType[c.type] = (bucket.byType[c.type] ?? 0) + 1
   }
-  return { byPlan, conflicts, notYetDetectable: [], note: '' }
+  return { byPlan, conflicts, notYetDetectable: [], checkedAndClear: [], note: '' }
 }
 
 describe('groupConflicts', () => {

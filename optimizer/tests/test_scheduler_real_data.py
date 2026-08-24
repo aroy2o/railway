@@ -108,14 +108,23 @@ def test_saturated_gzb_sbb_is_deferred_not_over_packed(result, scenario):
 def test_deferrals_on_this_corpus_are_structural_not_contention(result):
     """A finding worth pinning: over a 7-day horizon nothing loses a capacity
     contest. Every deferral is a task longer than any gap its corridor offers,
-    which means the binding constraint is window LENGTH, not block-hours.
+    or (T24) a task whose PRD 9.7 prerequisite is itself unschedulable - never
+    a task that lost a fair fight for space. TSK-00025 is the one real
+    instance: its immediate prerequisite TSK-00024 is independently
+    EXCEEDS_LONGEST_WINDOW, so TSK-00025 cascades to PREREQUISITE_UNSCHEDULABLE
+    even though its own 169 minutes would fit BRMD-NIM's longest window fine.
 
     If this ever starts failing with NO_CAPACITY deferrals, the character of the
     problem has changed and the objective weights deserve a fresh look.
     """
     reasons = {d.reason for d in result.deferred}
 
-    assert reasons == {DeferralReason.EXCEEDS_LONGEST_WINDOW}
+    assert reasons == {
+        DeferralReason.EXCEEDS_LONGEST_WINDOW,
+        DeferralReason.PREREQUISITE_UNSCHEDULABLE,
+    }
+    cascaded = [d for d in result.deferred if d.reason == DeferralReason.PREREQUISITE_UNSCHEDULABLE]
+    assert {d.task_id for d in cascaded} == {"TSK-00025"}
 
 
 def test_scheduled_tasks_all_fit_the_window_they_were_given(result, scenario):
@@ -140,16 +149,18 @@ def test_cross_department_batching_occurs_on_the_real_data(result):
 
 
 def test_known_gaps_are_reported_with_counts(result):
-    """T24 and T25 are not built yet; the plan must say so rather than look
-    clean while quietly violating both."""
+    """T25 is not built yet; the plan must say so rather than look clean while
+    quietly violating it. T24, by contrast, is now enforced (a hard CP-SAT
+    constraint, not a detector), so its count must be zero - checked every
+    solve, not merely assumed once and forgotten."""
     gaps = result.known_gaps
 
     assert "T25" in gaps["resourceConflicts"]["note"]
     assert "T24" in gaps["dependencyViolations"]["note"]
-    # These are real on this corpus - T4 built the contention deliberately - so
-    # a zero here would mean the detector had stopped working.
+    # Resource contention is real on this corpus - T4 built it deliberately -
+    # so a zero here would mean the detector had stopped working.
     assert gaps["resourceConflicts"]["count"] > 0
-    assert gaps["dependencyViolations"]["count"] > 0
+    assert gaps["dependencyViolations"]["count"] == 0
 
 
 def test_the_real_solve_is_reproducible(scenario):

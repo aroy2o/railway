@@ -336,8 +336,44 @@ def test_resource_conflicts_are_detected_and_reported():
     assert "T25" in gaps["note"]
 
 
-def test_dependency_violations_are_detected_and_reported():
-    """Precedence is T24. Same treatment: measured, not hidden."""
+# --------------------------------------------------------------------------- #
+# T24 - dependency precedence (PRD 9.7)                                       #
+# --------------------------------------------------------------------------- #
+
+def test_detect_known_gaps_still_recognises_a_violation_in_isolation():
+    """`detect_known_gaps` is exercised directly, not only through a solve, so
+    the detector itself stays provably correct in isolation - the same
+    standalone-testability CLAUDE.md asks of every core module. This is what
+    the CP-SAT constraints below now make unreachable through a real solve."""
+    from app.core.scheduler import WindowInstance, detect_known_gaps
+
+    tasks = [
+        MaintenanceTask("STEP1", "XX-YY", "Engineering", 100, FUTURE, priority=1),
+        MaintenanceTask("STEP2", "XX-YY", "Engineering", 100, FUTURE, priority=5,
+                        depends_on_task_id="STEP1"),
+    ]
+    # STEP2 placed on the SAME day, starting before STEP1 even finishes.
+    shared_day = HORIZON_START
+    placements = {
+        "STEP1": WindowInstance("XX-YY|d|0", "XX-YY", shared_day, 0, 100, 200),
+        "STEP2": WindowInstance("XX-YY|d|1", "XX-YY", shared_day, 1, 0, 100),
+    }
+
+    gaps = detect_known_gaps(tasks, placements)["dependencyViolations"]
+    assert gaps["count"] == 1
+    assert gaps["violations"][0]["taskId"] == "STEP2"
+    assert gaps["violations"][0]["issue"] == "scheduled before its prerequisite completes"
+
+
+def test_a_dependent_defers_rather_than_violate_order_when_there_is_no_room():
+    """The exact scenario the old (pre-T24) version of this test accepted as a
+    detected-but-shipped violation. Now the hard constraint means STEP2 cannot
+    share XX-YY's only window with STEP1 (that would place them "at the same
+    time"), and cannot be scheduled anywhere else either - so despite STEP2
+    outranking STEP1 on priority (5 vs 1), the solver schedules the
+    PREREQUISITE and defers the higher-priority dependent. Coverage still
+    beats nothing: scheduling STEP1 alone earns more objective value than
+    deferring both."""
     corridors = {"XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 300),))}
     tasks = [
         MaintenanceTask("STEP1", "XX-YY", "Engineering", 100, FUTURE, priority=1),
@@ -347,9 +383,134 @@ def test_dependency_violations_are_detected_and_reported():
 
     result = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=1)
 
-    gaps = result.known_gaps["dependencyViolations"]
-    assert "T24" in gaps["note"]
-    assert isinstance(gaps["count"], int)
+    assert result.scheduled_task_ids == {"STEP1"}
+    deferred = {d.task_id: d for d in result.deferred}
+    assert deferred["STEP2"].reason == DeferralReason.NO_CAPACITY
+    assert result.known_gaps["dependencyViolations"]["count"] == 0
+
+
+def test_a_dependent_can_share_the_same_day_once_the_prerequisite_completes():
+    """PRD 9.7's exact wording is "before its prerequisite COMPLETES", not
+    "on an earlier day" - a coarser day-only rule would needlessly waste a
+    same-day gap. Two windows on one day, ordered with a real gap between
+    them, must let both stages run on the SAME day."""
+    corridors = {
+        "XX-YY": CorridorAvailability(
+            "XX-YY", (DailyWindow(0, 100), DailyWindow(150, 250))
+        )
+    }
+    tasks = [
+        MaintenanceTask("STEP1", "XX-YY", "Engineering", 100, FUTURE, priority=3),
+        MaintenanceTask("STEP2", "XX-YY", "Engineering", 100, FUTURE, priority=3,
+                        depends_on_task_id="STEP1"),
+    ]
+
+    result = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=1)
+
+    assert result.scheduled_task_ids == {"STEP1", "STEP2"}
+    by_task = {tid: b for b in result.blocks for tid in b.task_ids}
+    assert by_task["STEP1"].window_index == 0
+    assert by_task["STEP2"].window_index == 1
+    assert result.known_gaps["dependencyViolations"]["count"] == 0
+
+
+def test_a_dependent_moves_to_a_later_day_when_the_same_day_has_no_room():
+    """One window a day, three days: STEP1 cannot free its own window for
+    STEP2 to also use, so precedence forces STEP2 onto a LATER day rather
+    than the model illegally co-placing both in one day's single window."""
+    corridors = {"XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 300),))}
+    tasks = [
+        MaintenanceTask("STEP1", "XX-YY", "Engineering", 100, FUTURE, priority=3),
+        MaintenanceTask("STEP2", "XX-YY", "Engineering", 100, FUTURE, priority=3,
+                        depends_on_task_id="STEP1"),
+    ]
+
+    result = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=3)
+
+    assert result.scheduled_task_ids == {"STEP1", "STEP2"}
+    by_task = {tid: b for b in result.blocks for tid in b.task_ids}
+    assert by_task["STEP1"].day < by_task["STEP2"].day
+    assert result.known_gaps["dependencyViolations"]["count"] == 0
+
+
+def test_a_structurally_unschedulable_prerequisite_takes_its_dependent_out_too():
+    """T24's answer to D-024's separation of structural impossibility from a
+    lost contest: STEP1 physically exceeds the only window on its corridor, so
+    it is deferred EXCEEDS_LONGEST_WINDOW before the solver even runs. STEP2
+    depends on it and fits perfectly well on its own - but PRD 9.7 makes that
+    irrelevant, so it must be deferred too, and honestly (not NO_CAPACITY,
+    which would wrongly imply it lost a contest it never entered)."""
+    corridors = {"XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 100),))}
+    tasks = [
+        MaintenanceTask("STEP1", "XX-YY", "Engineering", 500, FUTURE, priority=3),
+        MaintenanceTask("STEP2", "XX-YY", "Engineering", 50, FUTURE, priority=3,
+                        depends_on_task_id="STEP1"),
+    ]
+
+    result = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=1)
+
+    deferred = {d.task_id: d for d in result.deferred}
+    assert deferred["STEP1"].reason == DeferralReason.EXCEEDS_LONGEST_WINDOW
+    assert deferred["STEP2"].reason == DeferralReason.PREREQUISITE_UNSCHEDULABLE
+    assert "STEP1" in deferred["STEP2"].detail
+    assert result.scheduled_task_ids == set()
+
+
+def test_the_prerequisite_unschedulable_cascade_reaches_a_third_stage():
+    """A 3-stage inspection -> repair -> testing chain (T4's real shape), with
+    the FIRST stage structurally infeasible. The fixed-point pass over the
+    chain must carry the deferral through BOTH downstream stages, not just the
+    immediate dependent - proving it is a real fixed point, not one pass."""
+    corridors = {"XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 100),))}
+    tasks = [
+        MaintenanceTask("INSPECT", "XX-YY", "Engineering", 500, FUTURE, priority=3),
+        MaintenanceTask("REPAIR", "XX-YY", "Engineering", 50, FUTURE, priority=3,
+                        depends_on_task_id="INSPECT"),
+        MaintenanceTask("TEST", "XX-YY", "Engineering", 50, FUTURE, priority=3,
+                        depends_on_task_id="REPAIR"),
+    ]
+
+    result = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=1)
+
+    deferred = {d.task_id: d for d in result.deferred}
+    assert deferred["INSPECT"].reason == DeferralReason.EXCEEDS_LONGEST_WINDOW
+    assert deferred["REPAIR"].reason == DeferralReason.PREREQUISITE_UNSCHEDULABLE
+    assert deferred["TEST"].reason == DeferralReason.PREREQUISITE_UNSCHEDULABLE
+    assert "REPAIR" in deferred["TEST"].detail
+
+
+def test_MUTATION_the_constraint_visibly_changes_the_plan_the_solver_picks():
+    """Proof the constraint has teeth, in the style of this project's other
+    mutation tests: solve the SAME scenario twice, once with the dependency
+    link present and once with it stripped (simulating the pre-T24 model that
+    did not know about it), and show the plans genuinely differ. Without the
+    link, the solver's objective-optimal choice is to batch both tasks into
+    the SAME window (100+100 = 200 of a 300-minute window, cheaper than
+    opening a second window - exactly the real ABEO-ABU case this task found).
+    With the link, that choice is forbidden and the solver is forced to use
+    two windows instead."""
+    corridors = {
+        "XX-YY": CorridorAvailability(
+            "XX-YY", (DailyWindow(0, 300), DailyWindow(400, 700))
+        )
+    }
+    with_link = [
+        MaintenanceTask("STEP1", "XX-YY", "Engineering", 100, FUTURE, priority=3),
+        MaintenanceTask("STEP2", "XX-YY", "Engineering", 100, FUTURE, priority=3,
+                        depends_on_task_id="STEP1"),
+    ]
+    without_link = [
+        MaintenanceTask("STEP1", "XX-YY", "Engineering", 100, FUTURE, priority=3),
+        MaintenanceTask("STEP2", "XX-YY", "Engineering", 100, FUTURE, priority=3),
+    ]
+
+    linked = solve_schedule(with_link, corridors, horizon_start=HORIZON_START, horizon_days=1)
+    unlinked = solve_schedule(without_link, corridors, horizon_start=HORIZON_START, horizon_days=1)
+
+    assert len(unlinked.blocks) == 1, "without the constraint both tasks share one window"
+    assert {tid for b in unlinked.blocks for tid in b.task_ids} == {"STEP1", "STEP2"}
+    assert len(linked.blocks) == 2, "the constraint must force them into separate windows"
+    assert linked.known_gaps["dependencyViolations"]["count"] == 0
 
 
 def test_decision_log_covers_every_task_with_factors(one_day):

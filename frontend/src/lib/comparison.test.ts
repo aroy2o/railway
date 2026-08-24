@@ -66,6 +66,24 @@ describe('D-031 rule: conflicts lead, throughput does not', () => {
     const scheduled = buildMetricRows(diverged).find((row) => row.key === 'scheduled')!
     expect(scheduled.verdict).toBe('optimizer-better')
   })
+
+  it('tags a LOWER optimizer count as fewer-by-design, never as a win', () => {
+    // T24's real, live case: the optimizer schedules one fewer contestable
+    // task than the baseline (TSK-00025, correctly held back for its PRD 9.7
+    // prerequisite). Tagging this `optimizer-better` would render a green
+    // "improvement" badge over a SMALLER number for the optimizer - the
+    // mirror of the utilisation trap this module already guards against.
+    const diverged = {
+      ...REAL,
+      optimized: { ...REAL.optimized, contestableScheduled: 35 },
+    }
+
+    const scheduled = buildMetricRows(diverged).find((row) => row.key === 'scheduled')!
+    expect(scheduled.verdict).toBe('optimizer-fewer-by-design')
+    expect(scheduled.verdict).not.toBe('optimizer-better')
+    expect(scheduled.note).toMatch(/prerequisite/i)
+    expect(scheduled.note).not.toMatch(/no throughput advantage/i)
+  })
 })
 
 describe('D-031 rule: utilisation cannot be shown alone', () => {

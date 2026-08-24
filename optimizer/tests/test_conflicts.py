@@ -75,7 +75,11 @@ def test_resource_contention_across_departments_uses_the_prd_wording():
     assert conflict.as_dict()["sameDepartment"] is False
 
 
-def test_dependency_violations_are_typed_and_point_at_t24():
+def test_dependency_violations_are_typed_with_no_further_enforcement_needed():
+    """T24 already enforces this in the solver - `from_known_gaps` typing a
+    violation here (a hand-fed one; a real solve can no longer produce one) is
+    a defensive fallback, not a live gap, so `enforced_by` is None rather than
+    naming a future task."""
     gaps = {
         "resourceConflicts": {"count": 0, "conflicts": []},
         "dependencyViolations": {
@@ -97,7 +101,7 @@ def test_dependency_violations_are_typed_and_point_at_t24():
 
     assert conflict.type == ConflictType.DEPENDENCY_ORDER_VIOLATION
     assert conflict.task_ids == ["TSK-B", "TSK-A"]
-    assert conflict.resolution.enforced_by == "T24"
+    assert conflict.resolution.enforced_by is None
 
 
 def test_baseline_conflicts_are_typed_on_the_baseline_layer():
@@ -268,9 +272,14 @@ def scenario():
 
 
 def test_real_corpus_types_match_the_counts_t6_and_t8_established(scenario):
-    """The taxonomy must not invent or lose conflicts: 11 resource + 5
-    dependency on the optimized side, 6 double-bookings + 3 over-subscribed
-    windows on the baseline side. Those figures come from T6 and T8."""
+    """T6-T23 established 11 resource + 5 dependency conflicts on the optimized
+    side. T24 changes both: the plan reflowing to respect PRD 9.7 surfaces a
+    new cross-corridor resource conflict elsewhere (11 -> 10 net), and
+    DEPENDENCY_ORDER_VIOLATION drops to zero because it is now enforced, not
+    merely detected - so it no longer appears as a live conflict type at all
+    (see CHECKED_AND_CLEAR). The baseline side is untouched: T8's algorithm
+    has no dependency awareness, so 6 double-bookings + 3 over-subscribed
+    windows still come from T8."""
     tasks, corridors = scenario
     solved = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
     baseline = run_baseline(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
@@ -279,9 +288,10 @@ def test_real_corpus_types_match_the_counts_t6_and_t8_established(scenario):
     baseline_summary = summarise(from_baseline_conflicts(baseline.as_dict()["conflicts"]))
 
     assert optimized_summary["byPlan"]["optimized"]["byType"] == {
-        ConflictType.RESOURCE_CONTENTION: 11,
-        ConflictType.DEPENDENCY_ORDER_VIOLATION: 5,
+        ConflictType.RESOURCE_CONTENTION: 10,
     }
+    checked_types = {item["type"] for item in optimized_summary["checkedAndClear"]}
+    assert ConflictType.DEPENDENCY_ORDER_VIOLATION in checked_types
     assert baseline_summary["byPlan"]["baseline"]["byType"] == {
         ConflictType.CORRIDOR_DOUBLE_BOOKING: 6,
         ConflictType.WINDOW_OVER_SUBSCRIPTION: 3,
@@ -309,11 +319,23 @@ def test_all_real_resource_conflicts_are_same_department(scenario):
 
 def test_real_conflicts_all_carry_corridor_and_date(scenario):
     """T21's whole point: enough detail to render a row a Controller can act on.
-    Before T21 the solver's entries carried no corridor and no time window."""
+    Before T21 the solver's entries carried no corridor and no time window.
+
+    A resource conflict is the one legitimate exception to "a single
+    corridorId": resources are depot-scoped across corridors (T21), so two
+    tasks on DIFFERENT corridors can genuinely contend for one. `corridorId`
+    is None there by design and `corridorIds` (both) carries the detail
+    instead - T24's reflow surfaced the first real instance of this on the
+    corpus, which is exactly the case this test must not paper over."""
     tasks, corridors = scenario
     solved = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
 
     for conflict in from_known_gaps(solved.as_dict()["knownGaps"]):
-        assert conflict.corridor_id, f"{conflict.type} has no corridor"
+        if conflict.type == ConflictType.RESOURCE_CONTENTION and conflict.corridor_id is None:
+            assert len(conflict.extra.get("corridorIds") or []) == 2, (
+                "a cross-corridor resource conflict must still name both corridors"
+            )
+        else:
+            assert conflict.corridor_id, f"{conflict.type} has no corridor"
         assert conflict.date, f"{conflict.type} has no date"
         assert conflict.departments, f"{conflict.type} has no department"

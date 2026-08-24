@@ -256,6 +256,25 @@ function buildComparison(
   const optimizedScheduled = scheduledIn(optimized);
   const baselineScheduled = scheduledIn(baseline);
 
+  // T24 changed this from a constant to a real either/or: on this corpus the
+  // optimizer now schedules one FEWER contestable task than the baseline
+  // (TSK-00025, whose PRD 9.7 prerequisite the baseline places nowhere but
+  // schedules anyway - see docs/DECISIONS.md). A hardcoded "both engines
+  // schedule the same work" caveat would misreport that as a tie, so the
+  // wording is derived from the real counts every time instead.
+  const throughputCaveat =
+    optimizedScheduled.size === baselineScheduled.size
+      ? 'Do not lead with a scheduled-task count: on this dataset both engines schedule the ' +
+        'same work. The real difference is that the baseline double-books corridors and ' +
+        'cannot batch across departments.'
+      : `Do not lead with a scheduled-task count as if higher were simply better: the ` +
+        `optimizer schedules ${optimizedScheduled.size} of ${contestable.size} contestable ` +
+        `tasks against the baseline's ${baselineScheduled.size}. The optimizer's figure is ` +
+        `lower because it enforces PRD 9.7 dependency precedence and refuses to schedule a ` +
+        `task before its prerequisite - a real constraint the baseline, which has no ` +
+        `dependency awareness, silently ignores. The baseline also still double-books ` +
+        `corridors and cannot batch across departments.`;
+
   return {
     contestableTaskCount: contestable.size,
     structurallyImpossibleCount:
@@ -285,9 +304,7 @@ function buildComparison(
     caveats: [
       'Counts are drawn from the structurally contestable subset. Tasks longer than ' +
         'any window on their corridor are impossible for both algorithms and are excluded.',
-      'Do not lead with a scheduled-task count: on this dataset both engines schedule the ' +
-        'same work. The real difference is that the baseline double-books corridors and ' +
-        'cannot batch across departments.',
+      throughputCaveat,
       "Baseline block utilisation is HIGHER than the optimizer's because it over-subscribes " +
         'windows. Never render utilisation without the double-booking count beside it.',
     ],

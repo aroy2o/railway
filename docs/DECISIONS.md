@@ -2663,3 +2663,134 @@ placement, `schedule.blocks` stayed byte-identical (D-043 held), and
 `effectivePlan` reflected the new placement through the replay - exactly the
 D-043 mechanism already in production, doing exactly what it has always
 done, now reached from a second entry point.
+
+---
+
+## D-066 — Dependency precedence means "completes before starts", enforced as a hard constraint, and it was already being violated on the real corpus
+
+**Date:** 2026-08-24 · **Task:** T24
+
+**The semantics question, settled by evidence already in the codebase rather
+than guessed.** PRD 9.7's own wording is exact: *"a task cannot be scheduled
+before its prerequisite completes"* (PRD line 438) - not "on a later day."
+T6's `detect_known_gaps` had already been comparing
+`(prerequisite.day, prerequisite.end_minute) > (dependent.day,
+dependent.start_minute)` to flag a violation, for reporting only, since T21.
+Rather than invent a coarser day-only rule, T24 makes the CP-SAT constraint
+match that exact comparison exactly - so the hard constraint and the
+post-solve check can never disagree about what counts as a violation. This
+also turned out to matter concretely: the real corpus has a genuine same-day
+case (TSK-00053 finishes at minute 429, TSK-00054 starts at minute 1143, same
+day) that a day-only rule would have needlessly pushed to a second day.
+
+**Mechanism.** Two additions to `solve_schedule`, both gated on
+`depends_on_task_id`:
+1. A pre-solve fixed-point pass: if a task's prerequisite is itself
+   structurally deferred (`EXCEEDS_LONGEST_WINDOW` / `NO_WINDOW_ON_CORRIDOR`),
+   the dependent is deferred too, with a new code,
+   `PREREQUISITE_UNSCHEDULABLE`, naming the blocking ancestor. Looped to a
+   fixed point so a 3-stage chain (T4's `inspection -> repair -> testing`)
+   cascades fully, not just one hop.
+2. A hard CP-SAT constraint on every remaining dependent: `sum(assign[dep]) <=
+   sum(assign[prereq])` (scheduled at all implies the prerequisite is too),
+   plus a pairwise `assign[dep, w_dep] + assign[prereq, w_pre] <= 1` for every
+   window pair that would violate "completes before starts."
+
+**`solve_schedule` now asserts its own invariant.** Mirroring the existing
+FR3.3 "no task may vanish" check, `_build_result` raises `AssertionError` if
+`detect_known_gaps` ever finds a violation on an OPTIMAL/FEASIBLE solve - a
+non-empty result would mean the constraint above has a bug, not that a real
+conflict exists. `DEPENDENCY_ORDER_VIOLATION` also moved from a live
+`optimized`-plan conflict type into `CHECKED_AND_CLEAR` (T22's
+"checked-and-found-none" pattern, joining `TRAIN_IMPACT_CONFLICT`) - the same
+"checked, not merely absent" distinction this project draws everywhere else.
+
+**The real corpus was already violating this rule, and not narrowly.**
+Auditing before writing the constraint (same discipline as T20/T23) found 5
+live violations on the committed 89-task corpus, T21's own detector having
+reported them since its own task without anyone reading the number as
+alarming. Two were not near-misses: TSK-00001/002/003 (an
+inspection-repair-testing chain on ABEO-ABU) were scheduled with
+TSK-00001 and TSK-00002 in the **exact same window, same day**
+(`2026-08-26`, `00:46-24:00`) - not merely out of order, but literally
+simultaneous, which is physically nonsensical for one defect's own repair
+sequence. The same pattern held for TSK-00053/054. A fifth violation was
+different in kind: TSK-00025 was scheduled even though its immediate
+prerequisite, TSK-00024, was never scheduled at all (independently
+`EXCEEDS_LONGEST_WINDOW`) - the solver had no way to know it should care.
+
+**Fixing it changed real numbers, not just added a check.** Before -> after,
+same corpus, same weights:
+
+| Metric | Before (T6-T23) | After (T24) |
+|---|---:|---:|
+| Tasks scheduled | 36 | 35 |
+| Tasks deferred | 53 | 54 |
+| Blocks used | 25 | 28 |
+| Block utilisation | 74.33% | 48.53% |
+| `dependencyViolations.count` | 5 | 0 |
+| `resourceConflicts.count` | 11 | 10 |
+
+TSK-00025 now correctly cascades to `PREREQUISITE_UNSCHEDULABLE`, one fewer
+scheduled task. The utilisation drop is real and traced, not a regression to
+paper over: the three ABEO-ABU chain tasks now each require their OWN
+~1394-minute window on a SEPARATE day, instead of two of them sharing one
+window as before - 3 newly opened, very long windows account for essentially
+the entire +3,142 minutes of new capacity, most of it now genuinely unused.
+**74.33% was flattered by a physically impossible co-location.** 48.53% is
+the honest number for the same corpus under the same weights. Confirmed by
+diffing the exact block sets before and after (not assumed from the topline
+change alone). Resource contention shifted 11 -> 10 net: the reflow removed
+one contention and, on a different corridor, created a genuinely NEW
+cross-corridor one (TSK-00003, now on 2026-08-30, contends for a
+department-D01 resource with TSK-00015/16/17 on an unrelated corridor -
+resources are depot-scoped across corridors per T21, so this is a legitimate
+occurrence the taxonomy already had a slot for, just one that had never
+actually happened on this corpus before).
+
+**A second, sharper finding: the baseline was already committing this exact
+violation, for real, in its own output.** TSK-00025 is structurally
+contestable (`structurally_contestable` is a pure window-length check,
+unaware of dependencies) and the FR9.1 baseline - which has never read
+`dependsOnTaskId` - schedules it in its FCFS pass regardless of whether
+TSK-00024 ever gets a window. It does not. This is not hypothetical: it is
+sitting inside `run_baseline`'s real output on the real corpus, a genuine,
+demonstrable dependency-order violation the baseline commits silently every
+time it runs. D-031's "no throughput advantage, both engines schedule the
+same 36" is therefore no longer exactly true - the optimizer schedules 35 of
+36, one fewer than the baseline's 36, and the gap is not a shortfall to
+explain away. It is the honest cost of the optimizer refusing to make the
+mistake the baseline still makes.
+
+**Where this surfaces, and why each was worth changing rather than leaving
+stale.** A hardcoded "both engines schedule the same work" claim, now false,
+would have been a worse failure mode than the topline number changing -
+D-033's whole point about response shapes applies just as much to prose.
+Three places carried it and now compute it dynamically from the real counts
+instead:
+- `scheduleOrchestrator.ts`'s `buildComparison` caveat (backend, feeds every
+  consumer of `comparisonToBaseline`).
+- `frontend/src/lib/comparison.ts`'s `scheduled` row: a new `Verdict` value,
+  `optimizer-fewer-by-design`, distinct from both `optimizer-better`
+  (would have rendered a misleading green "improvement" badge over a SMALLER
+  optimizer number) and `baseline-higher-but-worse` (this is not a trap - the
+  lower number is genuinely correct, not a defect wearing a disguise). Its own
+  sky-blue "fewer, by design" badge on the comparison screen, confirmed live.
+- `KnownLimitations.tsx`, which had never rendered `checkedAndClear` at all
+  since T22 introduced it - a pre-existing, adjacent gap this task's own
+  `CHECKED_AND_CLEAR` addition made worth closing rather than leaving a
+  second earned-zero silently unsurfaced. Confirmed live: both
+  `TRAIN_IMPACT_CONFLICT` and `DEPENDENCY_ORDER_VIOLATION` now render under
+  "Checked, and none found."
+
+**Tests.** Optimizer 294 (7 new hand-built scenarios: enforced exclusion with
+no room to sequence, valid same-day sequencing, valid cross-day sequencing,
+single-stage and 3-stage `PREREQUISITE_UNSCHEDULABLE` cascades, a
+`detect_known_gaps` isolation test, and a mutation-style A/B proof that
+solving the same scenario with and without the dependency link produces
+genuinely different plans - one window shared, two windows forced). Backend
+107 (real-corpus numbers updated with the reasoning inline, not just the
+figures). Frontend 71 (1 new: the fewer-by-design verdict, asserted never to
+collapse to `optimizer-better`). Verified live end to end: KnownLimitations
+panel and the comparison screen both re-checked in a real browser against a
+freshly regenerated schedule, matching every number in the table above.

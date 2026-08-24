@@ -10,7 +10,7 @@
  * -----------------------------------
  * Conflicts arrive from two different plans. Baseline conflicts are the FR9.1
  * finding - the thing this system is arguing against. Optimized-plan conflicts
- * are gaps the solver does not yet close (T24, T25). A screen that summed them
+ * are gaps the solver does not yet close (T25). A screen that summed them
  * would show "17 conflicts" against a system whose own plan carries 16 and
  * whose comparison target carries 9, which is true of neither. `groupConflicts`
  * therefore takes the plan as a required argument and drops anything that does
@@ -44,6 +44,14 @@ export interface ConflictReport {
   conflicts: TypedConflict[]
   /** Types PRD 9.5 names that nothing checks for yet - not counted as zero. */
   notYetDetectable: Array<{ type: string; reason: string }>
+  /**
+   * Types that ARE checked, on every solve, and found to have no occurrences -
+   * "checked and found none" is a different claim from "nothing checks", and
+   * this is the list that earns it. Dependency precedence (PRD 9.7) joined
+   * train-impact here at T24 - see `checkedAndCleared` types in
+   * `optimizer/app/core/conflicts.py`.
+   */
+  checkedAndClear: Array<{ type: string; reason: string }>
   note: string
 }
 

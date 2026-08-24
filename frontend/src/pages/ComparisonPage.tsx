@@ -197,11 +197,20 @@ function HeadlineCard({ row }: { row: MetricRow }) {
 function SupportingCard({ row }: { row: MetricRow }) {
   const misleading = row.verdict === 'baseline-higher-but-worse'
   const neutral = row.verdict === 'no-difference'
+  // T24: a smaller optimizer number that is CORRECT, not a defect - its own
+  // tone, distinct from both "reads backwards" (amber, a trap) and
+  // "improvement" (emerald, a bigger/better number). Sky keeps it visually
+  // neutral-to-positive without claiming either of those.
+  const fewerByDesign = row.verdict === 'optimizer-fewer-by-design'
 
   return (
     <section
       className={`rounded-xl border p-5 shadow-sm ${
-        misleading ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-white'
+        misleading
+          ? 'border-amber-300 bg-amber-50'
+          : fewerByDesign
+            ? 'border-sky-300 bg-sky-50'
+            : 'border-slate-200 bg-white'
       }`}
     >
       <div className="flex items-baseline justify-between gap-2">
@@ -212,10 +221,18 @@ function SupportingCard({ row }: { row: MetricRow }) {
               ? 'bg-amber-200 text-amber-900'
               : neutral
                 ? 'bg-slate-200 text-slate-700'
-                : 'bg-emerald-100 text-emerald-800'
+                : fewerByDesign
+                  ? 'bg-sky-200 text-sky-900'
+                  : 'bg-emerald-100 text-emerald-800'
           }`}
         >
-          {misleading ? 'reads backwards' : neutral ? 'no difference' : 'improvement'}
+          {misleading
+            ? 'reads backwards'
+            : neutral
+              ? 'no difference'
+              : fewerByDesign
+                ? 'fewer, by design'
+                : 'improvement'}
         </span>
       </div>
 

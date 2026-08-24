@@ -236,9 +236,12 @@ test('known solver gaps are summarised on the record but do NOT block approval',
       { type: 'DEPENDENCY_ORDER_VIOLATION' },
     ],
   });
-  // Every plan on the real corpus carries T24/T25 gaps, so blocking on them
-  // would make every plan unapprovable. They are recorded instead, because a
+  // Every plan on the real corpus carries T25's resource gap, so blocking on
+  // it would make every plan unapprovable. It is recorded instead, because a
   // signature has to state what was known-unresolved when it was given.
+  // (DEPENDENCY_ORDER_VIOLATION is fed in here as a hand-built type to prove
+  // the summariser groups ANY conflict type correctly - T24 means a real
+  // solve can no longer actually produce one; see docs/DECISIONS.md.)
   assert.equal(result.constraintsSatisfied, true);
   assert.deepEqual(result.knownUnresolved, [
     { type: 'RESOURCE_DOUBLE_BOOKING', count: 2 },

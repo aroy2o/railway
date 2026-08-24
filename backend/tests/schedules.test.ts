@@ -729,11 +729,16 @@ test('the real 89-task corpus reproduces CHECKPOINT.md numbers through this path
 
     // Exactly the figures CHECKPOINT.md recorded, now arriving via
     // MongoDB -> Node -> optimizer HTTP -> MongoDB.
+    //
+    // T24 moved tasksScheduled from 36 to 35 and tasksDeferred from 53 to 54:
+    // TSK-00025 now correctly cascades to PREREQUISITE_UNSCHEDULABLE, because
+    // its own prerequisite TSK-00024 is independently EXCEEDS_LONGEST_WINDOW.
+    // See docs/DECISIONS.md for the full before/after.
     assert.equal(schedule.inputSummary.taskCount, 89);
     assert.equal(schedule.inputSummary.corridorCount, 30);
     assert.equal(schedule.status, 'OPTIMAL');
-    assert.equal(schedule.metrics.tasksScheduled, 36);
-    assert.equal(schedule.metrics.tasksDeferred, 53);
+    assert.equal(schedule.metrics.tasksScheduled, 35);
+    assert.equal(schedule.metrics.tasksDeferred, 54);
     assert.equal(schedule.metrics.crossDepartmentBatches, 2);
     assert.ok(schedule.solveSeconds < 10, 'PRD Section 7 budget');
 
@@ -742,12 +747,17 @@ test('the real 89-task corpus reproduces CHECKPOINT.md numbers through this path
     assert.equal(schedule.baseline.metrics.overSubscribedWindows, 3);
     assert.equal(schedule.baseline.metrics.crossDepartmentBatches, 0);
 
+    // `contestableTaskIds` is baseline's pure window-length check (T8),
+    // unaffected by dependency awareness, so it still stands at 36.
     assert.equal(schedule.contestableTaskIds.length, 36);
     assert.equal(schedule.comparisonToBaseline.contestableTaskCount, 36);
     assert.equal(schedule.comparisonToBaseline.structurallyImpossibleCount, 53);
-    // D-031's core finding: no throughput advantage, so the screen must not
-    // claim one.
-    assert.equal(schedule.comparisonToBaseline.optimized.contestableScheduled, 36);
+    // T6-T23's "no throughput advantage" (D-031) is no longer an exact tie:
+    // the optimizer schedules one FEWER contestable task than the baseline,
+    // because it (T24) will not place TSK-00025 without its prerequisite,
+    // while the baseline - no dependency awareness - schedules it anyway.
+    // A lower number here is the honest cost of correctness, not a defect.
+    assert.equal(schedule.comparisonToBaseline.optimized.contestableScheduled, 35);
     assert.equal(schedule.comparisonToBaseline.baseline.contestableScheduled, 36);
     // And the trap: baseline utilisation reads higher.
     assert.ok(
@@ -755,14 +765,23 @@ test('the real 89-task corpus reproduces CHECKPOINT.md numbers through this path
         schedule.comparisonToBaseline.optimized.blockUtilisationPct,
     );
 
-    assert.equal(schedule.knownGaps.resourceConflicts.count, 11);
-    assert.equal(schedule.knownGaps.dependencyViolations.count, 5);
+    // T24 dropped resourceConflicts 11 -> 10 (the reflow moved one contention
+    // elsewhere) and dependencyViolations 5 -> 0 (now enforced, not merely
+    // detected).
+    assert.equal(schedule.knownGaps.resourceConflicts.count, 10);
+    assert.equal(schedule.knownGaps.dependencyViolations.count, 0);
 
     // The same figures typed per PRD 9.5, still separated by plan (D-045).
+    // DEPENDENCY_ORDER_VIOLATION no longer appears as a live optimized-plan
+    // conflict type - it lives in checkedAndClear instead (T24).
     assert.deepEqual(schedule.conflictReport.byPlan.optimized.byType, {
-      RESOURCE_CONTENTION: 11,
-      DEPENDENCY_ORDER_VIOLATION: 5,
+      RESOURCE_CONTENTION: 10,
     });
+    assert.ok(
+      schedule.conflictReport.checkedAndClear.some(
+        (item: { type: string }) => item.type === 'DEPENDENCY_ORDER_VIOLATION',
+      ),
+    );
     assert.deepEqual(schedule.baseline.conflictReport.byPlan.baseline.byType, {
       CORRIDOR_DOUBLE_BOOKING: 6,
       WINDOW_OVER_SUBSCRIPTION: 3,

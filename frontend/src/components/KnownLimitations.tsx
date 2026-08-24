@@ -2,11 +2,13 @@
  * Constraints this plan does NOT enforce, typed per PRD 9.5, plus any partial
  * failure of the generation.
  *
- * The solver reports the constraints it leaves unmodelled - resource
- * no-overlap (T25) and dependency precedence (T24) - and that report has
- * survived four hops to get here: dataclass, taxonomy, HTTP, MongoDB. Dropping
- * it at the last one would make the plan look cleaner on screen than it is,
- * which is the only direction that actually matters.
+ * The solver reports the constraint it leaves unmodelled - resource no-overlap
+ * (T25) - and that report has survived four hops to get here: dataclass,
+ * taxonomy, HTTP, MongoDB. Dropping it at the last one would make the plan
+ * look cleaner on screen than it is, which is the only direction that
+ * actually matters. Dependency precedence (PRD 9.7) is enforced as of T24, so
+ * it now renders in the "checked and found none" section below instead -
+ * still visible, but as an earned zero, not a silent absence.
  *
  * T21 turns the counts into named types with a named resolution each. Two
  * things that must stay true on this screen:
@@ -36,6 +38,7 @@ export function KnownLimitations({
 }: KnownLimitationsProps) {
   const groups = groupConflicts(conflictReport, 'optimized', { limit: 3 })
   const notYetDetectable = conflictReport?.notYetDetectable ?? []
+  const checkedAndClear = conflictReport?.checkedAndClear ?? []
 
   // Pre-T21 fallback: counts only, which is what used to be shown here.
   const countsOnly = [
@@ -118,6 +121,22 @@ export function KnownLimitations({
           <p className="text-[11px] font-medium text-slate-700">Not checked for at all</p>
           <ul className="mt-1 space-y-1">
             {notYetDetectable.map((entry) => (
+              <li key={entry.type} className="text-[11px] text-slate-500">
+                <span className="font-medium text-slate-600">
+                  {entry.type.replace(/_/g, ' ').toLowerCase()}
+                </span>{' '}
+                — {entry.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {checkedAndClear.length > 0 && (
+        <div className="mt-3 border-t border-slate-200 pt-2.5">
+          <p className="text-[11px] font-medium text-emerald-700">Checked, and none found</p>
+          <ul className="mt-1 space-y-1">
+            {checkedAndClear.map((entry) => (
               <li key={entry.type} className="text-[11px] text-slate-500">
                 <span className="font-medium text-slate-600">
                   {entry.type.replace(/_/g, ' ').toLowerCase()}

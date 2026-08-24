@@ -349,7 +349,52 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 ## 🟡 Stretch (only if time remains after 🟠 is done)
 
-- [ ] `todo` — **T24**: Task dependency constraints in CP-SAT (9.7)
+- [x] `done` — **T24**: Task dependency constraints in CP-SAT (9.7)
+  - **Semantics settled by evidence already in the codebase, not guessed.**
+    PRD 9.7 says "before its prerequisite COMPLETES", and T6's own
+    `detect_known_gaps` had been comparing exactly that (day, then minute)
+    for reporting since T21. The hard constraint matches it exactly, so a
+    genuine same-day case (TSK-00053 finishes 429, TSK-00054 starts 1143,
+    same day) sequences correctly instead of being pushed to a wasted extra
+    day by a coarser day-only rule.
+  - **Mechanism:** a pre-solve fixed-point pass defers a task whose
+    prerequisite is itself structurally unschedulable
+    (`PREREQUISITE_UNSCHEDULABLE`, cascades through a 3-stage chain), plus a
+    hard CP-SAT constraint on the rest - scheduled-at-all implies the
+    prerequisite is too, and every window pair that would violate ordering
+    is forbidden outright. `solve_schedule` now asserts zero violations on
+    every OPTIMAL/FEASIBLE solve (mirrors the existing FR3.3 invariant).
+  - **The real corpus was already violating this rule, not narrowly.**
+    Audited before writing any code: 5 live violations, including
+    TSK-00001/TSK-00002 scheduled in the EXACT SAME window on the same day
+    (physically simultaneous, not just out of order) and TSK-00025 scheduled
+    despite its prerequisite TSK-00024 never getting a window at all.
+  - **Fixing it moved real numbers.** 36→35 scheduled, 74.33%→48.53%
+    utilisation. The utilisation drop is real and traced: the ABEO-ABU chain
+    now needs 3 SEPARATE ~1394-min windows instead of packing into one, which
+    accounts for essentially the entire capacity jump. 74.33% was flattered
+    by a physically impossible co-location; 48.53% is the honest figure.
+  - **A sharper finding: the baseline commits this exact violation for
+    real.** FR9.1's FCFS baseline has never read `dependsOnTaskId` and
+    schedules TSK-00025 regardless of TSK-00024's fate. D-031's "no
+    throughput advantage, identical 36" is no longer exactly true - the
+    optimizer schedules 35, one fewer than the baseline's 36, and that gap
+    is the honest cost of not making the mistake the baseline still makes.
+  - **Every place that claimed "identical throughput" now computes the
+    claim dynamically instead of asserting a stale constant:** the backend
+    comparison caveat, a new `optimizer-fewer-by-design` verdict on the
+    comparison screen (distinct from a misleading green "improvement" badge),
+    and a `KnownLimitations.tsx` gap from T22 that had never rendered
+    `checkedAndClear` at all - now closed, so both `TRAIN_IMPACT_CONFLICT`
+    and `DEPENDENCY_ORDER_VIOLATION` show under "Checked, and none found."
+  - **Tests:** optimizer 294 (7 new: enforced exclusion, valid same-day and
+    cross-day sequencing, single- and 3-stage cascade, an isolated detector
+    test, and a mutation-style A/B proof the constraint changes the real
+    plan), backend 107 (real-corpus numbers updated with reasoning inline),
+    frontend 71 (1 new, asserting the lower count never reads as a win).
+    Verified live end to end in a real browser against a freshly regenerated
+    schedule: Known Limitations panel and the comparison screen both match
+    every number found by the audit.
 - [ ] `todo` — **T25**: Resource-conflict constraints in CP-SAT (9.8)
 - [ ] `todo` — **T26**: Weather/monsoon risk flagging (9.9)
 - [ ] `todo` — **T27**: Emergency rolling re-optimization (9.10)
@@ -387,6 +432,26 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 ## Session log
 
 _Append a dated one-line entry here each session — what was completed, what's next._
+
+- **2026-08-24** — T24 complete, first of the 🟡 stretch tier. Task
+  dependency precedence (PRD 9.7) is now a hard CP-SAT constraint, semantics
+  matched exactly to the "completes before starts" wording T6's own violation
+  detector had already been using since T21 - a same-day case sequences
+  correctly rather than being pushed to a wasted extra day by a coarser rule.
+  Audited before writing the constraint: the real corpus was ALREADY
+  violating this rule 5 times, including two workflow stages scheduled into
+  the exact same window at the exact same time. Fixing it moved real numbers
+  - 36→35 scheduled, 74.33%→48.53% utilisation, both traced to their exact
+  cause rather than asserted. A sharper finding along the way: the FR9.1
+  baseline commits this same violation for real in its own output (it has
+  never read `dependsOnTaskId`), which means D-031's "identical throughput"
+  claim needed to become dynamic rather than a stale constant - now true in
+  three places (backend caveat, a new comparison-screen verdict, and a
+  `KnownLimitations` gap from T22 that had never rendered `checkedAndClear`
+  at all, closed as part of the same pass). 294 optimizer / 107 backend / 71
+  frontend tests, verified live end to end. Next: **T25** (resource-conflict
+  constraints, PRD 9.8) is the natural continuation - same taxonomy, same
+  "detected but not enforced" gap this task just closed for dependencies.
 
 - **2026-08-24** — T20 complete. What-if simulation, built as a real re-solve
   of the same CP-SAT model (a `Pin` constraint forcing one task's placement),

@@ -8,10 +8,12 @@ for.
 
 WHAT THIS DOES NOT DO
 ---------------------
-It does not resolve anything. Resource no-overlap is still task T25 and
-dependency precedence is still T24; this classifies and labels what is
-detected so a Controller can see it. Labelling a resolution is not performing
-one, and the output says so.
+It does not resolve anything. Resource no-overlap is still task T25; this
+classifies and labels what is detected so a Controller can see it. Labelling a
+resolution is not performing one, and the output says so. Dependency
+precedence (PRD 9.7) is the one exception: T24 made it a hard CP-SAT
+constraint, so `DEPENDENCY_ORDER_VIOLATION` is CHECKED_AND_CLEAR below, not a
+live conflict type - see `app.core.scheduler`'s dependency constraints.
 
 TWO CONFLICT LAYERS, KEPT APART
 -------------------------------
@@ -70,6 +72,13 @@ CHECKED_AND_CLEAR: dict[str, str] = {
         "(T3's ISL-wise timetable). The optimizer only ever places work in free windows, so "
         "a collision would mean a defect in the window data or the model - which is why this "
         "is checked rather than assumed."
+    ),
+    ConflictType.DEPENDENCY_ORDER_VIOLATION: (
+        "Dependency precedence (PRD 9.7) is enforced as a hard CP-SAT constraint (T24): a "
+        "dependent task's window can only start once its prerequisite's window has ended, "
+        "and only if the prerequisite is itself scheduled. `solve_schedule` asserts this "
+        "holds on every solve rather than trusting it silently, which is why this is checked "
+        "rather than assumed."
     ),
 }
 
@@ -161,10 +170,11 @@ TRAIN_IMPACT_RESOLUTION = Resolution(
 DEPENDENCY_RESOLUTION = Resolution(
     strategy="Reorder to respect precedence",
     explanation=(
-        "A maintenance workflow runs inspection, then repair, then testing. This plan plays "
-        "them out of order, so the later stage must move after its prerequisite completes."
+        "A maintenance workflow runs inspection, then repair, then testing. The optimizer "
+        "already refuses to place a later stage before its prerequisite completes (T24); "
+        "reaching this record at all would mean that constraint had a bug."
     ),
-    enforced_by="T24",
+    enforced_by=None,  # the optimizer already does this - see CHECKED_AND_CLEAR above
 )
 
 
@@ -228,6 +238,11 @@ def from_known_gaps(known_gaps: dict[str, Any]) -> list[Conflict]:
                     "overlapStart": raw.get("overlapStart"),
                     "overlapEnd": raw.get("overlapEnd"),
                     "overlapMinutes": raw.get("overlapMinutes"),
+                    # `corridorId` above is None for a cross-corridor pair (T24
+                    # surfaced the first real one: resources are depot-scoped
+                    # across corridors, not corridor-scoped) - `corridorIds`
+                    # always carries both so that case is not silently dropped.
+                    "corridorIds": raw.get("corridorIds"),
                 },
             )
         )
@@ -369,7 +384,8 @@ def summarise(conflicts: Iterable[Conflict]) -> dict[str, Any]:
         "note": (
             "Conflicts are grouped by the plan they occur in and are never totalled across "
             "plans: baseline conflicts are the FR9.1 finding, while optimized-plan conflicts "
-            "are constraints the solver does not yet enforce (T24, T25). Resolutions are "
-            "classified, not applied."
+            "are constraints the solver does not yet enforce (T25 - dependency precedence, "
+            "PRD 9.7, is enforced as of T24 and lives in checkedAndClear instead). "
+            "Resolutions are classified, not applied."
         ),
     }

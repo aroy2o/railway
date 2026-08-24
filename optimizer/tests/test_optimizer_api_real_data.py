@@ -51,12 +51,20 @@ def test_the_payload_is_the_real_corpus(payload):
 
 
 def test_optimize_reproduces_the_t6_t7_numbers_over_http(optimized):
-    """36 scheduled / 53 deferred, OPTIMAL, inside PRD Section 7's 10s budget."""
+    """35 scheduled / 54 deferred, OPTIMAL, inside PRD Section 7's 10s budget.
+
+    T6-T23 reproduced 36/53 here. T24 moves it to 35/54: TSK-00025 (which
+    T6-T23's unconstrained model happily scheduled anyway) now correctly
+    cascades to PREREQUISITE_UNSCHEDULABLE, because its own prerequisite,
+    TSK-00024, is independently EXCEEDS_LONGEST_WINDOW. One fewer task
+    scheduled is the honest cost of no longer violating PRD 9.7 - see
+    docs/DECISIONS.md for the full before/after.
+    """
     metrics = optimized["metrics"]
 
     assert optimized["status"] == "OPTIMAL"
-    assert metrics["tasksScheduled"] == 36
-    assert metrics["tasksDeferred"] == 53
+    assert metrics["tasksScheduled"] == 35
+    assert metrics["tasksDeferred"] == 54
     assert metrics["crossDepartmentBatches"] == 2
     assert optimized["solveSeconds"] < 10.0
 
@@ -71,10 +79,12 @@ def test_all_89_tasks_are_accounted_for_in_the_response(optimized, payload):
 
 
 def test_every_deferral_over_http_is_structural(optimized):
-    """D-024: on this corpus nothing loses a capacity contest over a week."""
+    """D-024: on this corpus nothing loses a capacity contest over a week.
+    T24 adds a second structural reason - a task whose PRD 9.7 prerequisite is
+    itself unschedulable - which is still structural, never a contest loss."""
     reasons = {item["reason"] for item in optimized["deferredTasks"]}
 
-    assert reasons == {"EXCEEDS_LONGEST_WINDOW"}
+    assert reasons == {"EXCEEDS_LONGEST_WINDOW", "PREREQUISITE_UNSCHEDULABLE"}
 
 
 def test_saturated_gzb_sbb_is_still_deferred_over_http(optimized):
@@ -91,11 +101,12 @@ def test_saturated_gzb_sbb_is_still_deferred_over_http(optimized):
 
 
 def test_known_gaps_are_reported_over_http(optimized):
-    """T24 and T25 are unbuilt; the response says so rather than looking clean."""
+    """T25 is unbuilt; the response says so rather than looking clean. T24 is
+    now enforced, so its count must be zero over the wire too."""
     gaps = optimized["knownGaps"]
 
     assert gaps["resourceConflicts"]["count"] > 0
-    assert gaps["dependencyViolations"]["count"] > 0
+    assert gaps["dependencyViolations"]["count"] == 0
     assert "T25" in gaps["resourceConflicts"]["note"]
 
 
@@ -126,15 +137,32 @@ def test_the_contestable_subset_comes_back_for_t14(naive):
 
 
 def test_the_honest_comparison_holds_over_http(optimized, naive):
-    """Both engines schedule the same contestable work; the difference is that
-    the baseline's plan is not executable. This is the claim T14 may make."""
+    """T6-T23 found the two engines scheduled the identical 36 contestable
+    tasks, so the story was purely coordination vs chaos, never throughput.
+    T24 changes this in a real and slightly less tidy way: the optimizer now
+    schedules 35 of the 36, one FEWER than the baseline's 36 - not a
+    regression, but the honest cost of respecting PRD 9.7. TSK-00025 is
+    structurally contestable (it physically fits a BRMD-NIM window on its own)
+    and the naive per-department baseline, which has never known about
+    `dependsOnTaskId`, schedules it anyway - even though TSK-00024, the
+    prerequisite it depends on, never gets a window in the baseline's plan
+    either. That is a genuine, demonstrated dependency-order violation sitting
+    inside the baseline's own output, on the real corpus - not a hypothetical.
+    """
     contestable = set(naive["contestableTaskIds"])
     opt = {t for b in optimized["blocks"] for t in b["taskIds"]} & contestable
     base = {t for b in naive["blocks"] for t in b["taskIds"]} & contestable
 
-    assert len(opt) == len(base) == 36, "there is no throughput advantage - do not claim one"
+    assert len(opt) == 35, "the optimizer must not place TSK-00025 without its prerequisite"
+    assert len(base) == 36, "the baseline, ignorant of dependsOnTaskId, still does"
     assert naive["metrics"]["doubleBookings"] == 6
     assert optimized["metrics"]["crossDepartmentBatches"] == 2
+
+    # The dependency violation living inside the baseline's own plan: TSK-00025
+    # scheduled, its prerequisite TSK-00024 not, and the baseline never checks.
+    base_scheduled = {t for b in naive["blocks"] for t in b["taskIds"]}
+    assert "TSK-00025" in base_scheduled
+    assert "TSK-00024" not in base_scheduled
 
     # And the trap: the baseline's utilisation looks BETTER because it
     # over-subscribes. Never render it without the conflict count.

@@ -40,8 +40,20 @@ export interface ComparisonToBaseline {
  * utilisation beats the optimizer's, and rendered as a bare pair of numbers it
  * reads as the baseline winning. It is higher *because* it over-subscribes
  * windows it cannot physically honour.
+ *
+ * `optimizer-fewer-by-design` is T24's addition, and the mirror case: the
+ * optimizer's contestable-scheduled count can now be genuinely LOWER than the
+ * baseline's, because it (unlike the baseline) refuses to place a task before
+ * its PRD 9.7 prerequisite. Tagging that `optimizer-better` (the old default
+ * for "the numbers differ") would render a green "improvement" badge over a
+ * smaller number - exactly the kind of bare-number trap this module exists to
+ * prevent, just in the opposite direction from `baseline-higher-but-worse`.
  */
-export type Verdict = 'optimizer-better' | 'no-difference' | 'baseline-higher-but-worse';
+export type Verdict =
+  | 'optimizer-better'
+  | 'no-difference'
+  | 'baseline-higher-but-worse'
+  | 'optimizer-fewer-by-design';
 
 export interface MetricRow {
   key: string;
@@ -116,20 +128,32 @@ export function buildMetricRows(comparison: ComparisonToBaseline): MetricRow[] {
         note: 'Windows claimed for more work than they can hold — the cause of the number above.',
       },
     },
-    {
-      key: 'scheduled',
-      label: 'Contestable tasks scheduled',
-      baseline: `${fmt(baseline.contestableScheduled)} / ${fmt(contestableTaskCount)}`,
-      optimized: `${fmt(optimized.contestableScheduled)} / ${fmt(contestableTaskCount)}`,
-      verdict:
-        baseline.contestableScheduled === optimized.contestableScheduled
+    (() => {
+      const same = baseline.contestableScheduled === optimized.contestableScheduled;
+      const fewer = optimized.contestableScheduled < baseline.contestableScheduled;
+      return {
+        key: 'scheduled',
+        label: 'Contestable tasks scheduled',
+        baseline: `${fmt(baseline.contestableScheduled)} / ${fmt(contestableTaskCount)}`,
+        optimized: `${fmt(optimized.contestableScheduled)} / ${fmt(contestableTaskCount)}`,
+        verdict: same
           ? 'no-difference'
-          : 'optimizer-better',
-      note:
-        'No throughput advantage on this dataset — both engines place the same work. The ' +
-        'optimizer’s advantage is that its plan is executable, not that it does more.',
-      emphasis: 'supporting',
-    },
+          : fewer
+            ? 'optimizer-fewer-by-design'
+            : 'optimizer-better',
+        note: same
+          ? 'No throughput advantage on this dataset — both engines place the same work. The ' +
+            'optimizer’s advantage is that its plan is executable, not that it does more.'
+          : fewer
+            ? `The optimizer schedules ${fmt(baseline.contestableScheduled - optimized.contestableScheduled)} ` +
+              `fewer contestable task(s) than the baseline, and that is not a regression: it ` +
+              `refuses to schedule a task before its PRD 9.7 prerequisite completes, a real ` +
+              `workflow-ordering rule the baseline - no dependency awareness - silently breaks. ` +
+              `A smaller number here is the honest cost of not violating that rule.`
+            : 'The optimizer schedules more of the contestable backlog than the baseline.',
+        emphasis: 'supporting',
+      } satisfies MetricRow;
+    })(),
   ];
 }
 

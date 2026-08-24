@@ -90,7 +90,8 @@ export interface ISchedule {
   metrics: Record<string, number>;
   /** T17 builds grounded explanations from this (PRD Section 18). */
   decisionLog: unknown[];
-  /** Constraints the solver does not yet enforce (T24, T25). */
+  /** Constraints the solver does not yet enforce (T25). Dependency precedence
+   * (PRD 9.7) is enforced as of T24, so its count here is always 0. */
   knownGaps: unknown | null;
   /**
    * PRD 9.5 - the same gaps, named by type with a resolution strategy each.

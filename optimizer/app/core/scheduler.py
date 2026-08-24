@@ -21,6 +21,12 @@ WHAT IS IMPLEMENTED FROM PRD SECTION 13
   see `_add_batching`).
 * Deadline: SLA compliance is an objective reward, not a hard constraint - see
   the note on `WEIGHT_SLA` below for why the data forces this.
+* Dependency precedence (T24, PRD 9.7): a hard constraint, not an objective
+  term. A dependent task's window may only start at or after its prerequisite's
+  window ends, and a dependent may only be scheduled at all if its prerequisite
+  is too - transitively, so a 3-stage chain with a structurally unschedulable
+  first stage takes the whole chain out. See `_add_dependency_constraints` and
+  `DeferralReason.PREREQUISITE_UNSCHEDULABLE`.
 * Objective: a simplified form of PRD 13.1 - priority-weighted coverage, SLA
   compliance and batching rewarded; unused block time and fragmentation
   penalised.
@@ -32,8 +38,6 @@ WHAT IS DEFERRED, AND TO WHERE
 * Asset risk reduction term (beta) -> T16 (FR2.2), needs failureRiskScore.
 * Train-delay-impact term (lambda) -> T22 (PRD 9.6).
 * Policy-slider weights            -> T23 (PRD 13.1). Weights are constants here.
-* Dependency precedence            -> T24 (PRD 9.7). Violations are DETECTED and
-                                    reported, never silently produced.
 * Resource no-overlap              -> T25 (PRD 9.8). Same treatment: detected and
                                     reported as a known gap.
 * Weather/seasonal risk term (xi)  -> T26 (PRD 9.9).
@@ -213,6 +217,12 @@ class DeferralReason:
     NO_WINDOW_ON_CORRIDOR = "NO_WINDOW_ON_CORRIDOR"
     EXCEEDS_LONGEST_WINDOW = "EXCEEDS_LONGEST_WINDOW"
     NO_CAPACITY = "NO_CAPACITY"
+    #: T24, PRD 9.7: this task's prerequisite (`dependsOnTaskId`) cannot itself
+    #: be scheduled in this horizon, so precedence makes this task unschedulable
+    #: too - discovered before the solver runs, by walking the chain to a fixed
+    #: point, so a 3-stage chain whose first stage is structural takes the whole
+    #: chain out rather than leaving stages 2-3 to lose an unwinnable contest.
+    PREREQUISITE_UNSCHEDULABLE = "PREREQUISITE_UNSCHEDULABLE"
 
 
 @dataclass
@@ -495,6 +505,39 @@ def solve_schedule(
 
         schedulable.append(task)
 
+    # --- T24: prerequisite chains, walked to a fixed point ------------------
+    # A task whose prerequisite already failed the physical-fit check above
+    # (EXCEEDS_LONGEST_WINDOW / NO_WINDOW_ON_CORRIDOR) can never satisfy PRD
+    # 9.7's ordering rule either, no matter how the solver arranges everything
+    # else - so it is removed here, structurally, exactly like D-024 removes a
+    # task that cannot fit any window on its own. Looping to a fixed point
+    # (rather than one pass) is what makes a 3-stage chain work: if stage 1 is
+    # structural, stage 2 is deferred on this pass, and stage 3 - whose
+    # prerequisite is stage 2 - is deferred on the next.
+    deferred_by_id = {item.task_id: item for item in deferred}
+    changed = True
+    while changed:
+        changed = False
+        still_schedulable: list[MaintenanceTask] = []
+        for task in schedulable:
+            prereq_id = task.depends_on_task_id
+            prereq_deferral = deferred_by_id.get(prereq_id) if prereq_id else None
+            if prereq_deferral is not None:
+                item = DeferredTask(
+                    task.task_id,
+                    DeferralReason.PREREQUISITE_UNSCHEDULABLE,
+                    f"depends on {prereq_id}, which cannot be scheduled in this {horizon} "
+                    f"horizon ({prereq_deferral.reason}: {prereq_deferral.detail}) - PRD 9.7 "
+                    f"requires the prerequisite to complete first, so this task cannot be "
+                    f"scheduled either",
+                )
+                deferred.append(item)
+                deferred_by_id[task.task_id] = item
+                changed = True
+            else:
+                still_schedulable.append(task)
+        schedulable = still_schedulable
+
     model = cp_model.CpModel()
 
     # --- decision variables: assign[i][j] (PRD Section 13) ------------------
@@ -514,6 +557,39 @@ def solve_schedule(
             assign[(task.task_id, window.key)] = model.new_bool_var(
                 f"assign[{task.task_id}][{window.key}]"
             )
+
+    # --- constraint: dependency precedence (T24, PRD 9.7) -------------------
+    # "A task cannot be scheduled before its prerequisite completes" - the
+    # exact PRD 9.7 wording, and the exact ordering `detect_known_gaps`'s
+    # violation check already used for reporting, so the hard constraint and
+    # the post-solve check can never disagree about what counts as a
+    # violation. Two constraints per dependent task with a schedulable
+    # prerequisite:
+    #   1. scheduled at all implies the prerequisite is scheduled at all;
+    #   2. every (dependent window, prerequisite window) pair that would have
+    #      the prerequisite still running (or not yet started) when the
+    #      dependent begins is forbidden outright.
+    # A dangling or already-excluded prerequisite is skipped here - the
+    # pre-solve fixed-point pass above already removed every task whose
+    # prerequisite is structurally deferred, so reaching this loop with an
+    # unresolvable prerequisite only happens for a dangling reference, which
+    # the post-solve check reports as "prerequisite not scheduled".
+    for task in schedulable:
+        prereq_id = task.depends_on_task_id
+        if prereq_id is None or prereq_id not in candidates_for_task:
+            continue
+        dep_windows = candidates_for_task[task.task_id]
+        pre_windows = candidates_for_task[prereq_id]
+        model.add(
+            sum(assign[(task.task_id, w.key)] for w in dep_windows)
+            <= sum(assign[(prereq_id, w.key)] for w in pre_windows)
+        )
+        for w_dep in dep_windows:
+            for w_pre in pre_windows:
+                if (w_pre.day, w_pre.end_minute) > (w_dep.day, w_dep.start_minute):
+                    model.add(
+                        assign[(task.task_id, w_dep.key)] + assign[(prereq_id, w_pre.key)] <= 1
+                    )
 
     # --- T20: the what-if pin, if one was given ------------------------------
     #
@@ -801,6 +877,18 @@ def _build_result(
     if missing:
         raise AssertionError(f"tasks missing from the result: {sorted(missing)}")
 
+    # T24 as an invariant too: the CP-SAT constraints above make a dependency
+    # violation structurally impossible in an OPTIMAL/FEASIBLE solve, so this
+    # is checked rather than trusted - the same discipline as the FR3.3 check
+    # just above. A non-empty result here means the constraint itself has a
+    # bug, not that a real conflict was found.
+    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        violations = result.known_gaps["dependencyViolations"]["violations"]
+        if violations:
+            raise AssertionError(
+                f"dependency precedence constraint failed to prevent violation(s): {violations}"
+            )
+
     return result
 
 
@@ -1082,7 +1170,14 @@ def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:
         },
         "dependencyViolations": {
             "count": len(dependency_violations),
-            "note": "Dependency precedence (PRD 9.7) is not modelled in T6; it is task T24.",
+            "note": (
+                "Dependency precedence (PRD 9.7) is enforced as a hard CP-SAT constraint "
+                "(T24): a dependent task's window can only start at or after its "
+                "prerequisite's window ends, and only if the prerequisite is itself "
+                "scheduled. This is therefore checked, not assumed - the count should "
+                "always be zero for an OPTIMAL or FEASIBLE solve, and `solve_schedule` "
+                "asserts exactly that rather than trusting the constraint silently."
+            ),
             "violations": dependency_violations[:20],
         },
     }

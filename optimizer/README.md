@@ -82,7 +82,7 @@ CLAUDE.md names as testing priority #1.
 | Cross-department batching, rewarded | implemented and exercised on real data |
 | Deadline respected where feasible | implemented as a soft objective term — see D-020 |
 | Resource no-overlap (9.8) | **deferred to T25** — violations detected and reported |
-| Dependency precedence (9.7) | **deferred to T24** — violations detected and reported |
+| Dependency precedence (9.7) | **implemented (T24)** — hard constraint, checked and asserted zero violations, not merely detected |
 | Weather/seasonal risk (9.9) | **deferred to T26** |
 
 ### Objective (simplified PRD 13.1)
@@ -106,6 +106,45 @@ structural one. Everything else breaks ties.
 `app/core/priority.py` (0–100), and the decision log reports
 `priorityIsPlaceholder: false`. Set `use_priority_engine=False` in
 `load_scenario` to reproduce T6's severity-only behaviour for comparison.
+
+---
+
+## Dependency precedence (PRD 9.7, T24)
+
+`solve_schedule` accepts `MaintenanceTask.depends_on_task_id` as a **hard
+constraint**, not an objective term. Semantics: a dependent task may only start
+once its prerequisite's window has ended — matched exactly to PRD 9.7's own
+wording ("before its prerequisite completes") and to the comparison
+`detect_known_gaps` had already been using since T21 for reporting, so the
+constraint and the post-solve check can never disagree. Same-day sequencing is
+allowed when there is a real gap; only a day-only rule would have needlessly
+forbidden it.
+
+Two pieces:
+1. **Pre-solve, a fixed-point pass.** If a task's prerequisite is itself
+   structurally deferred (`EXCEEDS_LONGEST_WINDOW` / `NO_WINDOW_ON_CORRIDOR`),
+   the dependent is deferred too, with `PREREQUISITE_UNSCHEDULABLE`, before the
+   solver ever runs. Looped to a fixed point so a 3-stage
+   `inspection → repair → testing` chain (T4's shape) cascades fully.
+2. **In the model, two CP-SAT constraints per remaining dependent:**
+   `sum(assign[dependent]) <= sum(assign[prerequisite])` (scheduled at all
+   implies the prerequisite is too), and a pairwise exclusion for every window
+   pair that would violate the ordering.
+
+`solve_schedule` asserts `dependencyViolations.count == 0` on every
+OPTIMAL/FEASIBLE solve — the same discipline as the existing FR3.3 "no task
+vanishes" check. A non-zero result would mean the constraint has a bug.
+
+**Audited on the real corpus before writing any of this**, and the corpus was
+already violating the rule: 5 live cases, including two workflow stages
+(TSK-00001, TSK-00002) scheduled into the **exact same window, same day** —
+not merely out of order, but simultaneous. Fixing it moved real numbers: 36→35
+scheduled, 74.33%→48.53% utilisation — traced to the ABEO-ABU chain needing 3
+separate ~1394-minute windows instead of packing two stages into one. The old
+74.33% was flattered by a physically impossible co-location. See
+docs/DECISIONS.md D-066 for the full before/after table and the baseline-side
+finding (T8's FCFS algorithm commits the same kind of violation for real,
+unmonitored, in its own output).
 
 ---
 
@@ -312,18 +351,24 @@ adds no detection and changes no count.
 | `CORRIDOR_DOUBLE_BOOKING` | baseline | Merge into one shared possession | the optimizer already does this |
 | `WINDOW_OVER_SUBSCRIPTION` | baseline | Defer the excess work | the optimizer already does this |
 | `RESOURCE_CONTENTION` | optimized | Stagger within the department / Only one proceeds | **T25** |
-| `DEPENDENCY_ORDER_VIOLATION` | optimized | Reorder to respect precedence | **T24** |
-| `TRAIN_IMPACT_CONFLICT` | **nothing detects this** | — | **T22** |
+| `DEPENDENCY_ORDER_VIOLATION` | **checked and clear (T24)** | Reorder to respect precedence | the optimizer already does this |
+| `TRAIN_IMPACT_CONFLICT` | **checked and clear (T22)** | Defer, or accept the traffic block | the optimizer already does this |
+
+`DEPENDENCY_ORDER_VIOLATION` and `TRAIN_IMPACT_CONFLICT` are a third bucket,
+distinct from both "detected as a live gap" and "not checked at all" — see
+`CHECKED_AND_CLEAR` below.
 
 ### Three things this deliberately does not do
 
 **It does not resolve anything.** A strategy is a label. Resource no-overlap is
-T25 and dependency precedence is T24; both are still unmodelled constraints, and
-`enforced_by` on every record says which task would close it.
+still T25, an unmodelled constraint, and `enforced_by` on that record says which
+task would close it.
 
-**It does not report train impact as zero.** PRD 9.5 names the type, so it is in
-the taxonomy — but it appears in `notYetDetectable` with a reason, not as a count
-of `0`. Zero would claim a check that does not exist.
+**It does not report train impact, or dependency order, as zero by default.**
+PRD 9.5 names every type, so all five are in the taxonomy — but a type nothing
+checks for appears in `notYetDetectable` with a reason, and a type that IS
+checked and genuinely found clear appears in `checkedAndClear` instead. Neither
+is a bare `0`, because a bare zero cannot tell a reader which claim it is making.
 
 **It does not total across plans.** Counts nest under `byPlan`. On the real
 corpus the optimized plan carries 16 (11 + 5) and the baseline carries 9 (6 + 3);
@@ -333,20 +378,27 @@ things. See D-045.
 ### On the real corpus
 
 ```
-byPlan.optimized.byType = {RESOURCE_CONTENTION: 11, DEPENDENCY_ORDER_VIOLATION: 5}
+byPlan.optimized.byType = {RESOURCE_CONTENTION: 10}
 byPlan.baseline.byType  = {CORRIDOR_DOUBLE_BOOKING: 6, WINDOW_OVER_SUBSCRIPTION: 3}
+checkedAndClear         = [TRAIN_IMPACT_CONFLICT, DEPENDENCY_ORDER_VIOLATION]
 ```
 
-Same numbers T6 and T8 produced — the taxonomy names them, it does not re-derive
-them, and `test_conflicts.py` asserts exactly that.
+T6/T8's `RESOURCE_CONTENTION: 11` moved to 10 as a side effect of T24's fix (the
+plan reflowing to respect precedence surfaced one conflict elsewhere and removed
+another). `DEPENDENCY_ORDER_VIOLATION: 5` is now `0` and lives in
+`checkedAndClear`, not `byType` — T24 made it a hard constraint, so
+`test_conflicts.py` now asserts it never appears as a live conflict on a real
+solve. See docs/DECISIONS.md D-066 for the full before/after.
 
-**All 11 resource conflicts are same-department.** T4's resource catalogue is
-keyed by department, so a machine belongs to one department and cross-department
+**Resource conflicts are same-department.** T4's resource catalogue is keyed by
+department, so a machine belongs to one department and cross-department
 contention cannot occur by construction. The `Only one proceeds` branch (PRD
 9.5's own wording, which describes rival departments) is therefore unreachable on
 the current data; within one department the honest fix is to stagger, not to drop
 a task. A test asserts this, so changing the resource model surfaces rather than
-silently altering the advice shown on screen.
+silently altering the advice shown on screen. One of the 10 is cross-CORRIDOR
+though (resources are depot-scoped, not corridor-scoped) — `corridorId` is `null`
+on that record and `corridorIds` carries both.
 
 ### `knownGaps` detail (T21, D-047)
 
