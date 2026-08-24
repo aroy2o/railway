@@ -282,6 +282,24 @@ def test_the_verifier_is_a_net_not_a_proof(context):
     )
 
 
+def test_naming_a_task_the_question_did_not_ask_about_is_not_flagged_either(context):
+    """D-059's sixth instance, found by deliberately auditing for the SHAPE
+    rather than waiting for it to surface live. Every earlier live run of this
+    bug happened to ask about the same task id it then answered with, which
+    whitelisted that id's digits BY ACCIDENT via the question-echo path - so
+    the bug was invisible until an answer named a DIFFERENT task than the one
+    asked about, which is what "what got batched today" actually produces."""
+    verification = verify_answer(
+        "TSK-00099 and TSK-00013 share a window today.", context, [],
+    )
+    assert verification.ungrounded_numbers == []
+
+    # And a genuinely fabricated quantity is still caught - the strip is exact
+    # to the task-id SHAPE, not a blanket exemption for short numbers.
+    invented = verify_answer("It affects 654321 trains.", context, [])
+    assert invented.ungrounded_numbers == ["654321"]
+
+
 def test_citing_a_record_id_is_not_reported_as_inventing_a_number(context):
     """D-059, found on a live run. Record ids carry a 17-digit timestamp run
     that no fact's DATA contains, so a model that cited its sources exactly as

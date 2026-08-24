@@ -95,7 +95,7 @@ nav; `/` redirects to `/corridors`.
 (D-039). The read-only views remain in the nav — they answer "where did this
 number come from".
 
-Still to come: what-if simulation (T20) and policy sliders (T23).
+Still to come: what-if simulation (T20).
 
 ## The comparison screen
 
@@ -129,9 +129,38 @@ cross-department batch, and those blocks are drawn structurally differently:
 split into a segment per department, ringed, and labelled (D-040).
 
 **Unbuilt controls are visibly disabled.** The monthly toggle is greyed with a
-tooltip naming task T28; no policy sliders are drawn at all, because
-`policyWeights` is null. Faking either would be presenting a plan the solver
-never produced.
+tooltip naming task T28. Faking a control that does nothing would be presenting
+a plan the solver never produced.
+
+## Policy weights (PRD Section 8, 13.1, T23)
+
+`PolicySliders` exposes the five REAL D-023 objective terms, not PRD's four
+named ones. Two of PRD's names - "Risk avoidance" and "Train punctuality" -
+reference objective terms (`beta`, `lambda`) that D-023 itself defers and do
+not exist in the objective yet; labelling a slider after them would claim
+control this build does not have. `src/lib/policyWeights.ts` documents this
+choice and every bound.
+
+**The caption states D-061's finding, not a guess.** On the real 7-day corpus,
+every deferral is structural (D-024) - there is no capacity contest for any
+weight to arbitrate, so none of the five sliders changes WHICH tasks get
+scheduled. What they demonstrably do change, verified for all five at every
+multiplier from 0.1x to 10x, is WHICH DAY a scheduled task lands on and how it
+is grouped. The panel says exactly that, next to the Deferred Work panel that
+substantiates it, rather than let a Controller assume a slider does something
+it does not on this dataset.
+
+**Regenerating** runs `generateSchedule` with only the sliders a Controller
+actually moved (`toOverride` in `policyWeights.ts` diffs against the D-023
+defaults) - a plan generated with every slider left alone posts an empty
+override, so it is indistinguishable from a pre-T23 generation. `Reset to
+defaults` reappears only once something has moved.
+
+**Bounds are enforced server-side, not just clamped by the `<input
+type="range">`.** A value outside [0.1x, 10x] of a default cannot be reached by
+dragging the slider at all - the HTML `min`/`max` already prevent it - but the
+request is still validated on arrival (D-061), because the slider is not the
+only way to reach the endpoint.
 
 **Deferred work is a full panel, not a footnote.** FR3.3 makes deferred-with-
 reason a first-class outcome, and on the real corpus it is the larger half of

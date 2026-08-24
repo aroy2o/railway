@@ -97,6 +97,18 @@ def test_optimize_matches_calling_the_solver_directly(client):
     from app.core.conflicts import from_known_gaps, summarise
 
     assert body.pop("conflictReport") == summarise(from_known_gaps(direct["knownGaps"]))
+    # T23: the endpoint also adds the weights actually used, since the request
+    # named none and the D-023 defaults were applied - never an absence a
+    # caller could mistake for "no weights applied".
+    from app.core.scheduler import DEFAULT_WEIGHTS
+
+    assert body.pop("policyWeights") == {
+        "coverage": DEFAULT_WEIGHTS.coverage,
+        "slaCompliance": DEFAULT_WEIGHTS.sla_compliance,
+        "batching": DEFAULT_WEIGHTS.batching,
+        "unusedMinute": DEFAULT_WEIGHTS.unused_minute,
+        "fragmentation": DEFAULT_WEIGHTS.fragmentation,
+    }
     assert body == direct
 
 

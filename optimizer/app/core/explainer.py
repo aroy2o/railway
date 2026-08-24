@@ -29,7 +29,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.grounding import (
+    CORRIDOR_ID_PATTERN,
     ISO_TIMESTAMP_PATTERN,
+    TASK_ID_PATTERN,
     GroundingContext,
     _normalise_number,
 )
@@ -408,9 +410,28 @@ def verify_answer(answer: str, context: GroundingContext, record_ids: list[str])
     # writes the bare record id - `APR-20260824025855658-approve`, not
     # `approval:APR-...`. So the generated-id SHAPE is stripped too: three
     # letters, a hyphen, and eight or more digits. A run that long inside a
-    # hyphenated identifier is never a quantity a Controller would read as one,
-    # and short ids like TSK-00042 are deliberately left alone.
+    # hyphenated identifier is never a quantity a Controller would read as one.
     text = GENERATED_ID_IN_TEXT.sub(" ", text)
+
+    # TSK-00042. Found by deliberately auditing for the D-059 SHAPE rather than
+    # waiting for a seventh live accusation: a task id echoed in the QUESTION
+    # was already whitelisted by accident (the loop below adds every number in
+    # the question), which is why this was not caught by the earlier live
+    # runs - every one of those happened to ask about the same task it then
+    # named. The moment an answer names a task the question did NOT
+    # ("TSK-00099 and TSK-00013 share a window today"), its digits are
+    # completely unrelated to anything in the grounding data and get flagged as
+    # invented - which is the single most common sentence shape this endpoint
+    # produces. Task ids are the one kind of short digit-bearing id this system
+    # generates that ISN'T covered by the 8-digit GENERATED_ID_IN_TEXT shape, so
+    # they need their own strip, using the same pattern `assemble_context` uses
+    # to find them in a question.
+    text = TASK_ID_PATTERN.sub(" ", text)
+    # Corridor ids (AAA-BBB) contain no digits and so were never at risk, but
+    # stripped anyway for symmetry with how they are extracted everywhere else -
+    # cheap, and it means a future corridor-naming change cannot reintroduce
+    # this class of bug silently.
+    text = CORRIDOR_ID_PATTERN.sub(" ", text)
 
     for match in NUMBER_PATTERN.findall(text):
         normalised = _normalise_number(match)

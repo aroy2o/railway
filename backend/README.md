@@ -89,7 +89,7 @@ with supertest and never bind a socket.
 | `GET` | `/api/tasks/:id` | One task. |
 | `GET` | `/api/resources` | Filter by `corridorId` (matches `corridorScope`), `department`, `type`, `depot`. |
 | `GET` | `/api/provenance` | Per-collection disclaimer and field-level real/synthetic map (D-015). |
-| `POST` | `/api/schedules/generate` | **Orchestration.** Gathers from MongoDB, calls the optimizer, persists the plan. Returns `201` with the stored schedule. |
+| `POST` | `/api/schedules/generate` | **Orchestration.** Gathers from MongoDB, calls the optimizer, persists the plan. Optional `policyWeights` (T23) overrides D-023's objective terms. Returns `201` with the stored schedule. |
 | `GET` | `/api/schedules` | Generated plans, newest first (heavy fields excluded). |
 | `GET` | `/api/schedules/latest` | The most recent plan, in full. |
 | `GET` | `/api/schedules/:id` | One plan by id. |
@@ -176,6 +176,34 @@ prioritised with — the same denormalisation T7 uses for `priorityScore`.
 included, because a plan generated while `/risk` was down used the renormalised
 four-factor weights and that has to stay knowable afterwards. `applied` means
 "a risk score actually reached a task", not "the call returned".
+
+### Policy weights (T23)
+
+`POST /api/schedules/generate`'s optional `policyWeights` overrides D-023's
+five CP-SAT objective terms, attached only to the `/optimize` call - `/baseline`
+has no objective (D-029's fixed FCFS) and `/prioritize` scores tasks, not
+windows, so sending either a weight it would silently ignore is worse than not
+sending it.
+
+**Bounds are `[0.1x, 10x]` of each D-023 default, and are REFUSED outside that
+range, never clamped.** `policyWeightsSchema` duplicates the optimizer's own
+validation for an immediate 400 - simple numeric ranges, unlike the workflow
+state machine, are safe to state twice - and `.strict()` refuses a typo'd field
+name rather than silently dropping it (a real bug a test caught: `coveragee`
+for `coverage` returned 201 before this was added, meaning a Controller's
+override would have been silently ignored while the response claimed success).
+
+D-061 explains why this specific range: verified safe on the real corpus not
+just per-weight but in worst-case combination, with a wide margin to the
+nearest point (coverage down at 0.01x combined with the penalty terms at their
+ceiling, 27 of 36 scheduled) where D-023's "coverage is never traded for
+tidiness" genuinely breaks.
+
+**`schedule.policyWeights` stores the weights actually used, always** - the
+optimizer fills in the D-023 default for every term the request omitted, and
+that filled-in object is what gets persisted, never the request's raw partial
+input and never `null` just because the request sent nothing. See D-062 for why
+this is a plain field rather than a fold like FR6.1's workflow state (D-057).
 
 ### Ask the Planner (T18)
 

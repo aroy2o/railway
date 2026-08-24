@@ -353,7 +353,7 @@ export interface Schedule {
   objectiveValue: number
   solveSeconds: number
   /** null until T23's policy sliders exist. Do not render as controllable. */
-  policyWeights: unknown | null
+  policyWeights: import('../lib/policyWeights.ts').PolicyWeightsInput | null
   metrics: ScheduleMetrics
   blocks: ScheduleBlock[]
   deferredTasks: DeferredTask[]
@@ -641,7 +641,12 @@ export const api = createApi({
 
     generateSchedule: builder.mutation<
       { data: Schedule },
-      { horizonStart?: string; horizonDays?: number } | void
+      {
+        horizonStart?: string
+        horizonDays?: number
+        /** T23. Omitted terms use the D-023 default. */
+        policyWeights?: import('../lib/policyWeights.ts').PolicyWeightsInput
+      } | void
     >({
       query: (body) => ({ url: '/schedules/generate', method: 'POST', body: body ?? {} }),
       invalidatesTags: ['Schedule', 'Task'],

@@ -54,6 +54,7 @@ without starting a server (`CLAUDE.md` Python convention).
 | Module | Task | Implements | Status |
 |---|---|---|---|
 | `scheduler.py` | T6 | CP-SAT model + solve (PRD Section 13) | **done** |
+| `scheduler.py`'s `ObjectiveWeights` | T23 | Policy sliders on the objective (PRD 13.1) | **done** |
 | `priority.py` | T7 | Priority scoring + ranked queue (FR2.3/FR2.4) | **done** |
 | `baseline.py` | T8 | Naive per-department scheduler (FR9.1) | **done** |
 | `conflicts.py` | T21 | Typed conflict taxonomy + resolutions (PRD 9.5) | **done** |
@@ -96,8 +97,10 @@ MAXIMIZE  10000 x priority-weighted coverage
 
 The magnitudes are a **priority order, not a tuning**: covering the lowest
 priority task (10,000) always beats the worst possible waste penalty on one
-window (~1,440 + 500), so coverage is never traded for tidiness. Everything else
-breaks ties. Full multi-term objective with policy sliders is T23 (D-023).
+window (~1,440 + 500), so coverage is never traded for tidiness *at these
+magnitudes* — D-061 found that guarantee genuinely breaks outside the range
+T23 exposes (see below), so it is a property of the chosen weights, not a
+structural one. Everything else breaks ties.
 
 `MaintenanceTask.priority` now carries the real FR2.3 score from
 `app/core/priority.py` (0–100), and the decision log reports
@@ -434,6 +437,12 @@ in `verify_answer`:
 - **`float` precision above 2⁵³** made two different 17-digit ids normalise to
   the same value on one side of a comparison and not the other. Whole-number
   strings now bypass `float`.
+- **Task ids** (`TSK-00042`) were never added to the strip list at all - found
+  by a deliberate audit, not a live failure, because every prior catch's
+  question happened to echo the same task the answer then named, which
+  whitelisted the digits by accident. `TSK-00099 and TSK-00013 share a window`
+  is the single most common sentence shape this endpoint produces, and it was
+  broken from T18 onward. See D-063.
 
 The reverse failure was fixed too: `numbers()` used to leak a stored timestamp's
 clock components (`09`, `59`) into the *allowed* set, which would have cleared a
@@ -625,3 +634,77 @@ Reporting "0 trains" alone would have called that free, which is why
 
 `TRAIN_IMPACT_CONFLICT` is now **checked, not undetectable** — count 0, earned by
 checking every block against observed occupancy rather than assumed.
+
+
+---
+
+## Policy weights (`ObjectiveWeights` in `scheduler.py`, `PolicyWeightsIn` in `models/scheduling.py`) — PRD Section 8, 13.1, T23
+
+D-023's five objective terms, exposed as overridable request parameters
+instead of fixed constants.
+
+### What was checked before anything was built
+
+D-024 found every deferral on the real 7-day corpus is `EXCEEDS_LONGEST_WINDOW`
+— structural, not a contest loss — and D-028 found swapping the entire priority
+engine left the scheduled set unchanged, because there is nothing to arbitrate.
+Before building sliders for five weights, the honest question was whether that
+holds for all five, or whether some were about to become decoration.
+
+Answered by running the real corpus directly against `solve_schedule` — no new
+code, the function already took `weights` — at five multipliers of each
+default (0.1x, 0.5x, 2x, 5x, 10x):
+
+* The **scheduled/deferred set never changed**, for any weight, at any
+  multiplier tested.
+* **Every** weight moved which DAY 7-25 of the 36 scheduled tasks land on
+  (batching and fragmentation were the initial guess for what would matter;
+  coverage and SLA compliance moved just as much placement).
+
+So a slider panel here cannot honestly claim to control coverage — nothing
+does, on this dataset, short of T22 Phase B or a shorter horizon. What it
+demonstrably controls is **when and how work is arranged**. See D-061 for the
+full evidence table.
+
+### The safety bound that same audit found
+
+Pushed further than the slider range (coverage down to 1, penalties up),
+coverage-never-traded-for-tidiness **genuinely breaks** — 36 scheduled drops to
+27, then to 3. D-023's guarantee is a property of its chosen magnitudes, not
+something that survives arbitrary weights.
+
+`PolicyWeightsIn` therefore bounds every term to **[0.1x, 10x] of its D-023
+default** — verified safe not just per-weight but in the worst-case
+**combination** (coverage at its floor together with both penalty terms at
+their ceiling still schedules all 36), with a 10x margin to the nearest
+known-broken point. Outside the bound, the request is **refused with the
+specific term and limit**, never silently clamped to the nearest legal value —
+PRD Section 6 treats an invalid input as something to explain, not
+reinterpret.
+
+### The response always names what was actually used
+
+`/optimize` returns `policyWeights` with every term present — the D-023
+default filled in for whatever the request omitted. Never the request's raw
+(possibly partial) object, so `schedule.policyWeights` (persisted by Node) can
+never be confused with "no weights were used".
+
+```json
+POST /optimize
+{ ..., "policyWeights": { "fragmentation": 2500 } }
+
+200 OK
+{ ..., "policyWeights": {
+    "coverage": 10000, "slaCompliance": 2000, "batching": 3000,
+    "unusedMinute": 1, "fragmentation": 2500
+} }
+```
+
+### Tests
+
+`tests/test_policy_weights.py` — bound validation (refused, not clamped),
+default fill-in, an unknown field name refused (`extra="forbid"`), and the
+safety property mutation-tested against the real corpus: one test asserts
+coverage survives the worst-case-within-range combination, a second asserts
+the SAME combination pushed outside the range genuinely collapses it — proving
+the boundary is real rather than a property that would hold regardless.

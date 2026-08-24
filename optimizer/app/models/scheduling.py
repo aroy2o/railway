@@ -172,14 +172,55 @@ class ScenarioIn(ApiModel):
         return self
 
 
+#: Bounds on each policy weight, as a multiplier of its D-023 default.
+#:
+#: Independently AND in worst-case combination, this range was verified never
+#: to trade away coverage: at the floor of every weight simultaneously (0.1x
+#: coverage against the 10x CEILING of unused_minute and fragmentation - the
+#: combination that most favours "tidiness" over "get the work done") the real
+#: corpus still schedules all 36 tasks. Going further out breaks it - coverage
+#: at 0.01x with the same ceiling drops scheduling to 27 tasks, and at 0.0001x
+#: to 3 - so the chosen range sits with a wide margin inside "safe", not on the
+#: edge of it. See docs/DECISIONS.md D-061.
+#:
+#: A fixed multiplier range was chosen over deriving a formula from the
+#: corpus's minimum priority score (24 on the real corpus) because a formula
+#: tied to today's data would need re-deriving the moment the corpus changes;
+#: a margin this wide does not.
+WEIGHT_MIN_MULTIPLIER = 0.1
+WEIGHT_MAX_MULTIPLIER = 10.0
+
+
+class PolicyWeightsIn(ApiModel):
+    """T23 (PRD 13.1) - the five D-023 objective terms, as overridable inputs.
+
+    Every field is optional; an omitted term keeps its D-023 default. Bounds
+    are validated, not clamped - PRD Section 6 treats an invalid input as
+    something to refuse and explain, not to quietly reinterpret. A caller who
+    asked for `coverage=1` almost certainly did not mean "silently use the
+    nearest safe value"; they meant something the system cannot honestly do.
+    """
+
+    coverage: int | None = Field(default=None, ge=1000, le=100_000)
+    sla_compliance: int | None = Field(default=None, ge=200, le=20_000)
+    batching: int | None = Field(default=None, ge=300, le=30_000)
+    unused_minute: int | None = Field(default=None, ge=1, le=10)
+    fragmentation: int | None = Field(default=None, ge=50, le=5_000)
+
+
 class SolveRequest(ScenarioIn):
-    """A scheduling request. Solver weights arrive with T23's policy sliders."""
+    """A scheduling request."""
 
     horizon_start: date
     horizon_days: int = Field(default=7, ge=1)
     #: Optional per-request cap. Clamped to the service's configured ceiling so
     #: a client cannot ask the solver to run indefinitely.
     max_seconds: float | None = Field(default=None, gt=0)
+    #: T23's policy sliders (PRD Section 8, 13.1). Omitted terms use the
+    #: D-023 default; the weights actually used are always returned in the
+    #: response so a caller (and `schedule.policyWeights`) can see the real
+    #: values, never an assumed default.
+    policy_weights: PolicyWeightsIn | None = None
 
 
 class PrioritizeRequest(ApiModel):

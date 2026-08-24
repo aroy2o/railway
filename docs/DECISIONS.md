@@ -2352,3 +2352,198 @@ case on a second plan.
 workflow. Attaching it unconditionally pushed a named task's own override past
 `MAX_CONTEXT_CHARS`, which is D-053's failure exactly: a caveat displacing the
 evidence the question asked for.
+
+---
+
+## D-061 — Every objective weight reshapes placement, none change coverage; the slider range is the widest verified safe
+
+**Date:** 2026-08-24 · **Task:** T23
+
+**The question, asked before any slider was built.** D-024 found that on the
+real 7-day corpus, every deferral is `EXCEEDS_LONGEST_WINDOW` — structural,
+not a contest loss — and zero tasks are ever deferred for `NO_CAPACITY`.
+D-028 found that swapping the entire priority engine left the scheduled set
+identical, because there was nothing to arbitrate. Before building sliders for
+five weights, the honest question was whether that finding holds for **all**
+of them, or whether some were about to be built as decoration.
+
+**Method.** `solve_schedule` already took `weights` as a parameter (T6), so no
+code was written to answer this — the real corpus was run directly against it,
+once per weight, at five multipliers of its D-023 default (0.1x, 0.5x, 2x, 5x,
+10x), diffing the resulting `scheduled_task_ids` and per-task placement
+(corridor, day, window) against the default run.
+
+**Finding.** At every multiplier tested, for all five weights:
+
+| Weight | Scheduled set changed | Placements moved (of 36) |
+|---|:---:|---:|
+| coverage (α) | never | 13–24 |
+| sla_compliance (ε) | never | 13–23 |
+| batching (δ) | never | 7–11 |
+| unused_minute (μ) | never | 0 at ≤0.5x (rounds to no-op), 17–20 above |
+| fragmentation (ν) | never | 19–25 |
+
+Every placement change moved a task to a **different day**, not just a
+different window on the same day — genuinely visible on the Gantt, not a
+same-day reshuffle.
+
+**This is the opposite of the guess going in.** D-024/D-028 predicted batching
+and fragmentation as the plausible candidates, on the theory that they affect
+tie-breaking rather than contests. What the run showed is broader: on this
+corpus **every** term is a tie-breaker, because D-028 already noted the reason
+— "the objective is flat across days for a task whose SLA any day satisfies,"
+so the day dimension is under-determined for most of the 36 scheduled tasks,
+and any weight nudge resolves those ties differently. Coverage moved as much
+placement as anything else; it just never changed *which* 36.
+
+**The honest framing this forces.** A slider UI cannot claim to control "how
+much gets done" on this dataset — nothing does, structurally, until T22 Phase
+B or a shorter horizon changes the character of the problem. What sliders
+honestly demo is **when and how work is arranged**: which day, how tightly
+packed, how much cross-department batching. The UI copy says this explicitly
+rather than let a Controller assume otherwise.
+
+**The safety bound.** Pushed further out (coverage down to 100, fragmentation
+and unused_minute up to their probed ceiling), the scheduled set **did**
+collapse — 36 down to 27, then to 3 at coverage=1 — confirming D-023's "coverage
+is never traded for tidiness" is a property of the *chosen magnitudes*, not a
+structural guarantee that survives arbitrary weights. The range exposed to a
+Controller is therefore bounded to **[0.1x, 10x] of each D-023 default**, and
+that range was verified safe not just per-weight but in worst-case
+**combination** — coverage at its floor together with fragmentation and
+unused_minute simultaneously at their ceiling still schedules all 36. The
+nearest known-broken point (coverage at 0.01x with the same ceiling, 27
+scheduled) sits a further 10x outside the allowed range, so the bound has a
+wide margin rather than sitting on the edge of the failure.
+
+A fixed multiplier range was chosen over deriving a formula from the corpus's
+minimum priority score (24, empirically) because a formula tied to today's
+data would need re-deriving the moment the corpus changes; a margin this wide
+does not need to be re-verified for every new dataset.
+
+**Enforcement.** `PolicyWeightsIn` (optimizer) validates the bound and rejects
+outside it — never clamps, per PRD Section 6's stance that an invalid input is
+refused and explained, not silently reinterpreted. Node's `policyWeightsSchema`
+duplicates the same simple numeric range so the rejection is immediate rather
+than round-tripping to the optimizer for the same answer; this is the same
+kind of duplication as the override reason's `min(8)` already living in both
+layers (FR6.2), not a second state machine of the kind D-057/D-060 warn
+against — a numeric bound cannot drift the way a transition table can.
+
+---
+
+## D-062 — `policyWeights` stays a plain stored field; D-057's "derive, do not store" rule does not apply to it
+
+**Date:** 2026-08-24 · **Task:** T23
+
+**The question.** D-057 made the FR6.1 workflow state a *fold* over an
+append-only log rather than a field on the schedule document, specifically so
+D-043's immutability guarantee could gain no exception. `policyWeights` is
+about to become a real, populated field on the same document for the first
+time. Does it need the same treatment?
+
+**Decision: no.** `policyWeights` is stored as a plain field, written once at
+`Schedule.create()` and never updated afterwards.
+
+**Why the two are different in kind, not just in degree.**
+
+Workflow state needed deriving because it **changes after the document
+exists** — a plan is `draft` when generated and may become `under_review`,
+`approved`, `published` or `rejected` hours or days later, through actions a
+Controller takes against a document that has already been persisted. Storing
+it as a field would have meant writing to the schedule document after
+generation, which is exactly the second mutable surface D-043 exists to
+prevent (see D-057's reasoning in full).
+
+`policyWeights` **never changes after the document exists.** It is not a state
+the plan moves through; it is an input the solve was run with, fully decided
+before `solve_schedule` is ever called, and unaffected by anything that
+happens to the plan afterwards — an override, an approval, a publication. A
+plan cannot get a *different* `policyWeights` any more than it can get a
+different `horizonStart`. It is written once at generation, alongside
+`objectiveValue` and `solveSeconds` — themselves plain fields, for the same
+reason.
+
+**The general rule this confirms, not overturns.** D-057's principle is "derive
+what changes after creation; store what does not" — not "derive everything on
+a schedule document, in general." `blocks` and `decisionLog` are also plain
+stored fields, because they too are decided once, at generation, and D-043
+never asked them to be folds. `policyWeights` belongs in that category, and
+checking it against D-057 explicitly (rather than assuming by analogy) is what
+confirms it, rather than merely asserting it.
+
+**What would have changed the answer.** If a future task let a Controller
+re-weight and re-solve *the same* schedule document in place — rather than
+D-034's existing rule that any new solve is a new document — `policyWeights`
+would need the fold treatment too, for exactly D-057's reason. That is not
+this system's model: T20's what-if simulation and a slider move both produce a
+**new** schedule (D-034), so the question never arises.
+
+---
+
+## D-063 — The task-id false accusation was invisible in every prior live run for one reason, and that reason is why it needed a deliberate audit
+
+**Date:** 2026-08-24 · **Task:** T23
+
+**Found by design, not by a live failure.** T19's report promised a specific
+follow-up: before touching T23, spend the time asking what other
+structured-looking strings this system's data generates could collide with the
+grounding verifier's number scanner, rather than waiting for a sixth live
+accusation. This is what that audit found on its first check.
+
+**The bug.** `verify_answer` strips known-safe id shapes (dates, timestamps,
+cited record ids, the `SCH-`/`OVR-`/`APR-` generated-id pattern) before
+scanning an answer's remaining text for numbers. Task ids - `TSK-00042` - were
+never added to that list. `TSK-00042`'s digits parse as the number 42, and
+unless 42 happens to coincide with some other real value in the context, the
+verifier reports it as invented.
+
+**Why five prior live runs never surfaced it.** `verify_answer` also
+whitelists every number that appears in the CONTROLLER'S OWN QUESTION - "echo
+the asker is not fabricating" (test 
+`test_numbers_the_controller_supplied_are_not_treated_as_invented`, T18). Every
+one of D-054's and D-059's live catches happened to be a question that named
+the same task or record the answer then discussed, so the task id's digits
+were coincidentally whitelisted by the echo path before the missing strip
+could ever matter. The bug was real from T18 onward and load-bearing on the
+single most common sentence shape this endpoint produces - "TSK-00042 was
+deferred because..." - and stayed invisible because nobody had asked a
+question shaped like "what got batched today?", which answers by naming tasks
+the question never mentioned.
+
+**Reproduced directly, then confirmed live.** `verify_answer("TSK-00099 and
+TSK-00013 share a window today.", ...)` on a context that never mentioned
+either id returned `ungrounded_numbers: ['99', '13']` before the fix. Over the
+real HTTP path, asking the live schedule "Which tasks were batched together?"
+- a question that cannot echo the task ids its own answer would need to name -
+returned `TSK-00004, TSK-00006 and TSK-00007` with `grounded: true` after it.
+
+**The fix.** `TASK_ID_PATTERN` (already defined in `grounding.py` for
+reference extraction) is stripped from the answer text before the number scan,
+alongside the existing timestamp/date/id strips. `CORRIDOR_ID_PATTERN` is
+stripped too, though corridor ids contain no digits and were never actually at
+risk - added for symmetry, so a future corridor-naming convention with digits
+in it cannot reintroduce this silently.
+
+**What the audit did NOT find a live-reproducible case for, and left as a
+named residual risk rather than a fix.** Asset ids (`AST-<corridor>-<index>`)
+and resource ids (`RES-<depot>-<slug>`) were checked. Resource ids contain no
+digits. Asset ids end in a small index (1-3 digits, no leading-zero padding),
+which is lower-risk than a task id for two reasons: assets are named in an
+Ask-the-Planner answer far less often than tasks (the decision log's subject
+is always a task), and an unpadded 1-3 digit index is far more likely to
+coincidentally coincide with a real small number already in context (a
+severity score, a count) than a task id's zero-padded 5-digit run is. Not
+fixed pre-emptively, because a strip added without a reproducing case is a
+guess, and this project's standard - PRD 9.1's own framing rule - is to state a
+residual risk plainly rather than paper over it with an untested fix.
+
+**The standing practice this confirms.** D-059 named the general shape -
+"the verifier flagged a correct answer as fabricated" - as a pattern worth a
+deliberate audit rather than only reactive fixes. This is that audit's first
+result, and it found the single highest-frequency instance of the pattern
+across all six now-fixed cases. The audit is not closed permanently: any new
+id-shaped field this system starts surfacing in an answer (a future
+`resourceId`, an asset id used more heavily once T16's per-asset framing grows)
+should get the same fifteen-minute check before it ships, not after it fails
+live in front of a judge.

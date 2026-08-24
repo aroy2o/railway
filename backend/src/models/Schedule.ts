@@ -35,6 +35,20 @@ export interface ScheduleBlock {
   trainImpact: unknown | null;
 }
 
+/**
+ * T23 (PRD 13.1) - the D-023 objective weights actually used to build this
+ * plan. Every term present, whether the generation request named it or not -
+ * see D-062 for why this stays a plain field rather than a fold like FR6.1's
+ * workflow state (D-057).
+ */
+export interface PolicyWeights {
+  coverage: number;
+  slaCompliance: number;
+  batching: number;
+  unusedMinute: number;
+  fragmentation: number;
+}
+
 export interface ScheduleDeferredTask {
   taskId: string;
   reason?: string;
@@ -56,8 +70,13 @@ export interface ISchedule {
   // --- PRD Section 15 shape ---------------------------------------------
   horizon: string;
   generatedAt: Date;
-  /** Exposed as policy sliders in T23; null until then rather than faked. */
-  policyWeights: unknown | null;
+  /**
+   * T23: the weights this generation actually used. Recorded once, at
+   * creation, and never touched again - see D-062 for why that makes it safe
+   * to store as a plain field despite D-057's "derive, do not store" rule for
+   * workflow state.
+   */
+  policyWeights: PolicyWeights | null;
   blocks: ScheduleBlock[];
   deferredTasks: ScheduleDeferredTask[];
   comparisonToBaseline: unknown | null;
@@ -173,7 +192,19 @@ const scheduleSchema = new Schema<ISchedule>(
 
     horizon: { type: String, required: true },
     generatedAt: { type: Date, required: true, index: true },
-    policyWeights: { type: Schema.Types.Mixed, default: null },
+    policyWeights: {
+      type: new Schema(
+        {
+          coverage: { type: Number, required: true },
+          slaCompliance: { type: Number, required: true },
+          batching: { type: Number, required: true },
+          unusedMinute: { type: Number, required: true },
+          fragmentation: { type: Number, required: true },
+        },
+        { _id: false },
+      ),
+      default: null,
+    },
     blocks: { type: [blockSchema], default: [] },
     deferredTasks: { type: [deferredSchema], default: [] },
     comparisonToBaseline: { type: Schema.Types.Mixed, default: null },

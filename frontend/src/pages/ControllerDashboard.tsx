@@ -29,6 +29,7 @@ import DeferredTasksPanel from '../components/DeferredTasksPanel.tsx'
 import GanttTimeline from '../components/GanttTimeline.tsx'
 import OverrideHistory from '../components/OverrideHistory.tsx'
 import WorkflowPanel from '../components/WorkflowPanel.tsx'
+import PolicySliders from '../components/PolicySliders.tsx'
 import { OVERRIDABLE_STATES } from '../lib/approval.ts'
 import OverridePanel from '../components/OverridePanel.tsx'
 import AskThePlanner from '../components/AskThePlanner.tsx'
@@ -61,9 +62,13 @@ export function ControllerDashboard() {
   const noScheduleYet =
     schedule.error && (schedule.error as { status?: number }).status === 404
 
-  async function onGenerate() {
+  async function onGenerate(policyWeights?: import('../lib/policyWeights.ts').PolicyWeightsInput) {
     try {
-      await generate({ horizonStart: DEFAULT_HORIZON_START, horizonDays: 7 }).unwrap()
+      await generate({
+        horizonStart: DEFAULT_HORIZON_START,
+        horizonDays: 7,
+        ...(policyWeights && Object.keys(policyWeights).length > 0 ? { policyWeights } : {}),
+      }).unwrap()
     } catch {
       // Surfaced in the banner below; unwrap() would otherwise reject unhandled.
     }
@@ -83,7 +88,7 @@ export function ControllerDashboard() {
             )}
             <button
               type="button"
-              onClick={onGenerate}
+              onClick={() => onGenerate()}
               disabled={generation.isLoading}
               className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -191,6 +196,7 @@ export function ControllerDashboard() {
                     allowedActions={plan.allowedActions ?? []}
                     version={null}
                   />
+                  <PolicySliders onRegenerate={onGenerate} isLoading={generation.isLoading} />
                   <PriorityQueue tasks={tasks.data?.data ?? []} schedule={plan} />
                   <OverrideHistory overrides={plan.overrides ?? []} />
                   <KnownLimitations

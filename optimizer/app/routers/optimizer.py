@@ -39,6 +39,8 @@ from app.core.conflicts import (
 )
 from app.core.priority import PriorityInputs, rank_tasks
 from app.core.scheduler import (
+    DEFAULT_WEIGHTS,
+    ObjectiveWeights,
     CorridorAvailability,
     DailyWindow,
     MaintenanceTask,
@@ -73,6 +75,23 @@ def _to_corridors(payload: list[CorridorIn]) -> dict[str, CorridorAvailability]:
         )
         for corridor in payload
     }
+
+
+def _resolve_weights(overrides) -> ObjectiveWeights:
+    """Merge T23's per-request overrides onto the D-023 defaults.
+
+    A term the request omitted keeps its default rather than some other
+    fallback - `PolicyWeightsIn`'s own validation already refused anything
+    outside the range D-061 verified safe, so nothing further to check here.
+    """
+    if overrides is None:
+        return DEFAULT_WEIGHTS
+    updates = {
+        field: value
+        for field, value in overrides.model_dump().items()
+        if value is not None
+    }
+    return ObjectiveWeights(**{**DEFAULT_WEIGHTS.__dict__, **updates})
 
 
 def _to_tasks(payload: list[TaskIn], as_of) -> list[MaintenanceTask]:
@@ -206,12 +225,18 @@ def optimize(request: SolveRequest, settings: Settings = Depends(get_settings)) 
     # A client may ask for less time than the service allows, never more.
     budget = min(request.max_seconds or settings.solver_max_seconds, settings.solver_max_seconds)
 
+    # T23: an omitted term keeps its D-023 default. Built here rather than in
+    # the pydantic model, because `ObjectiveWeights` is the solver's own type
+    # and this is the one seam allowed to know about both.
+    weights = _resolve_weights(request.policy_weights)
+
     try:
         result = solve_schedule(
             _to_tasks(request.tasks, request.horizon_start),
             _to_corridors(request.corridors),
             horizon_start=request.horizon_start,
             horizon_days=request.horizon_days,
+            weights=weights,
             max_seconds=budget,
             num_workers=1,  # reproducibility over speed - D-022
         )
@@ -231,6 +256,17 @@ def optimize(request: SolveRequest, settings: Settings = Depends(get_settings)) 
         from_known_gaps(payload["knownGaps"])
         + from_train_impact(payload["knownGaps"]["trainImpactConflicts"]["conflicts"])
     )
+    # The values ACTUALLY used, never the request's raw (possibly-omitted)
+    # object. Node persists this verbatim onto schedule.policyWeights (D-061) -
+    # a Controller who omitted `fragmentation` must see the D-023 default that
+    # was actually applied, not an absence that could be misread as "not used".
+    payload["policyWeights"] = {
+        "coverage": weights.coverage,
+        "slaCompliance": weights.sla_compliance,
+        "batching": weights.batching,
+        "unusedMinute": weights.unused_minute,
+        "fragmentation": weights.fragmentation,
+    }
     return payload
 
 

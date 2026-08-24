@@ -198,6 +198,68 @@ test('generate returns 201 and persists a schedule', async (t) => {
   assert.equal(await Schedule.countDocuments({}), 1);
 });
 
+test('T23: policyWeights persists exactly what the solve used, defaults filled in', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  const res = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 1, policyWeights: { fragmentation: 2500 } })
+    .expect(201);
+
+  const weights = res.body.data.policyWeights;
+  assert.equal(weights.fragmentation, 2500, 'the term the request named');
+  // D-023's defaults, filled in for every term the request did NOT name -
+  // never omitted, never a guess.
+  assert.equal(weights.coverage, 10000);
+  assert.equal(weights.slaCompliance, 2000);
+  assert.equal(weights.batching, 3000);
+  assert.equal(weights.unusedMinute, 1);
+});
+
+test('T23: omitting policyWeights entirely still records the real defaults, never null', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  const res = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 1 })
+    .expect(201);
+
+  assert.deepEqual(res.body.data.policyWeights, {
+    coverage: 10000,
+    slaCompliance: 2000,
+    batching: 3000,
+    unusedMinute: 1,
+    fragmentation: 500,
+  });
+});
+
+test('T23: a weight outside D-061s verified-safe range is refused before any optimizer call', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  const before = await Schedule.countDocuments({});
+
+  const res = await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 1, policyWeights: { coverage: 500 } })
+    .expect(400);
+
+  assert.match(res.body.error.message, /validation failed/i);
+  assert.match(JSON.stringify(res.body.error.details), /coverage/);
+  // Refused at the boundary means no NEW schedule was created for it - other
+  // tests in this suite share the collection, so the count is compared
+  // relative to before the request, never asserted as an absolute zero.
+  assert.equal(await Schedule.countDocuments({}), before);
+});
+
+test('T23: an unknown weight field name is refused, not silently ignored', async (t) => {
+  if (!needs(t, { optimizer: true })) return;
+
+  await request(app)
+    .post('/api/schedules/generate')
+    .send({ horizonStart: HORIZON, horizonDays: 1, policyWeights: { coveragee: 20000 } })
+    .expect(400);
+});
+
 test('priorityScore is null before generation and real after it', async (t) => {
   if (!needs(t, { optimizer: true })) return;
 

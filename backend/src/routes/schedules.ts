@@ -41,6 +41,31 @@ import { ApiError } from '../utils/ApiError.js';
 
 const router = Router();
 
+/**
+ * T23's policy sliders (PRD 13.1). Bounds are the SAME range D-061 verified
+ * safe on the real corpus - duplicated here (a simple numeric range, not
+ * complex logic) so an out-of-range slider is refused immediately with a
+ * specific reason, rather than round-tripping to the optimizer for the same
+ * answer. The optimizer's own validation stays authoritative regardless: this
+ * is a fast-fail convenience, not the source of truth.
+ */
+const policyWeightsSchema = z
+  .object({
+    coverage: z.coerce.number().int().min(1000).max(100_000).optional(),
+    slaCompliance: z.coerce.number().int().min(200).max(20_000).optional(),
+    batching: z.coerce.number().int().min(300).max(30_000).optional(),
+    unusedMinute: z.coerce.number().int().min(1).max(10).optional(),
+    fragmentation: z.coerce.number().int().min(50).max(5_000).optional(),
+  })
+  // zod silently STRIPS unknown keys by default. A typo'd slider name -
+  // `coveragee` for `coverage` - would then be dropped and the request would
+  // proceed as if no override had been requested at all: the Controller sees
+  // 201 and believes their change was applied when nothing happened. `.strict()`
+  // turns that into a 400 naming the field, the same "refuse, don't silently
+  // reinterpret" rule PRD Section 6 already applies everywhere else.
+  .strict()
+  .optional();
+
 const generateSchema = z.object({
   // ISO date the plan starts from. Defaults to today when omitted; pinning it
   // is what makes a run reproducible against a fixed corpus.
@@ -49,6 +74,7 @@ const generateSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'horizonStart must be an ISO date (YYYY-MM-DD)')
     .optional(),
   horizonDays: z.coerce.number().int().min(1).max(90).default(7),
+  policyWeights: policyWeightsSchema,
 });
 type GenerateBody = z.infer<typeof generateSchema>;
 

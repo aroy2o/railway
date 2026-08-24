@@ -182,11 +182,26 @@ export interface OptimizerTask {
   failureRiskScore: number | null;
 }
 
+/**
+ * T23's policy sliders (PRD 13.1). Every term optional - an omitted one keeps
+ * its D-023 default, decided and validated by the optimizer (D-061), not
+ * re-derived here.
+ */
+export interface PolicyWeightsOverride {
+  coverage?: number;
+  slaCompliance?: number;
+  batching?: number;
+  unusedMinute?: number;
+  fragmentation?: number;
+}
+
 export interface OptimizerScenario {
   tasks: OptimizerTask[];
   corridors: OptimizerCorridor[];
   horizonStart: string;
   horizonDays: number;
+  /** T23. Omitted means "use every D-023 default". */
+  policyWeights?: PolicyWeightsOverride;
 }
 
 /**
@@ -219,6 +234,13 @@ export interface OptimizedSchedule {
   knownGaps: unknown;
   /** PRD 9.5 typed conflicts derived from knownGaps by the optimizer. */
   conflictReport: unknown;
+  /**
+   * T23: the weights actually applied to THIS solve - every term present,
+   * defaults filled in for whatever the request omitted. Never the request's
+   * raw (possibly partial) object; persisted onto `schedule.policyWeights`
+   * verbatim so "what was this plan built with" never has to be guessed.
+   */
+  policyWeights: Required<PolicyWeightsOverride>;
 }
 
 export interface BaselineSchedule {

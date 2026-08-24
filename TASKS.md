@@ -251,7 +251,51 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
     0-train block is never reported as free.
   - Tests: 31 on the impact model (4 mutation-verified, plus a brute-force check
     that boundary-aligned search is exhaustive), backend persistence regression.
-- [ ] `todo` — **T23**: Policy sliders on Controller Dashboard, wired to objective function weights (13.1)
+- [x] `done` — **T23**: Policy sliders on Controller Dashboard, wired to objective function weights (13.1)
+  - **Audited before building anything, on the real corpus.** All five D-023
+    weights were run at five multipliers each (0.1x-10x) directly against
+    `solve_schedule`. Result, contrary to the initial guess: the SCHEDULED SET
+    never changed at any multiplier, for any weight - confirming D-024/D-028
+    generalises completely - but every one of the five visibly moved WHICH DAY
+    7-25 of the 36 scheduled tasks land on. Batching and fragmentation were not
+    uniquely special; the whole objective is a tie-breaker on this corpus, not
+    a contest-decider. See D-061.
+  - **A real safety issue found and closed.** Pushed further out (coverage down
+    to 1, penalties up), the scheduled set genuinely collapsed - 36 to 3.
+    D-023's "coverage is never traded for tidiness" is a property of the
+    CHOSEN magnitudes, not a structural guarantee. The exposed slider range is
+    bounded to [0.1x, 10x] of each default, verified safe not just per-weight
+    but in worst-case combination, with a 10x margin to the nearest known-broken
+    point.
+  - `PolicyWeightsIn` (optimizer) validates and REFUSES an out-of-range weight
+    with the specific bound - never clamps. Node's `policyWeightsSchema`
+    duplicates the same simple numeric range for an immediate 400 rather than
+    a round trip; `.strict()` also refused a typo'd field name after a test
+    caught it silently being dropped instead.
+  - The weights ACTUALLY used (every term present, defaults filled in for
+    whatever was omitted) are returned by `/optimize` and persisted onto
+    `schedule.policyWeights` - never the request's raw partial input, never
+    faked when the request sent nothing.
+  - **D-057's "derive, do not store" rule does not apply here** - checked
+    explicitly, not assumed by analogy (D-062). Workflow state changes after
+    the document exists; `policyWeights` is decided once, before the solve
+    runs, same category as `blocks` and `decisionLog`.
+  - **UI decision:** the five raw D-023 weights, not PRD's four named sliders
+    ("Risk avoidance" and "Train punctuality" reference terms - beta, lambda -
+    that D-023 itself defers and do not exist in the objective yet; labelling a
+    slider after them would overclaim). Caption states D-061's finding plainly:
+    "changes when work happens... no combination changes which tasks get
+    scheduled."
+  - Verified live end to end, not just over HTTP: a slider dragged to its
+    ceiling in a real browser, Regenerate clicked, a new schedule persisted,
+    Monday's block count visibly changed (10 -> 14), coverage held at 36/53
+    exactly as predicted, and the slider's own value survived the resulting
+    re-render.
+  - **Tests:** optimizer 273 (13 new, including a mutation test that
+    demonstrates the safety boundary is real - not vacuous - on the real
+    corpus), backend 102 (4 new; two caught real bugs: a shared-DB test-count
+    assumption, and a typo'd weight field silently passing before `.strict()`
+    was added), frontend 62 (7 new).
 
 ## 🟡 Stretch (only if time remains after 🟠 is done)
 
@@ -293,6 +337,20 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 ## Session log
 
 _Append a dated one-line entry here each session — what was completed, what's next._
+
+- **2026-08-24** — T23 complete. Policy sliders wired to the real D-023 objective
+  weights, built only after auditing what a slider could honestly claim on the
+  real corpus: every deferral is structural (D-024/D-028), so no weight changes
+  WHICH tasks get done - all five instead move WHICH DAY, contrary to the guess
+  that only batching/fragmentation would matter. A real safety issue was found
+  (coverage collapses 36->3 outside a verified range) and closed with validated,
+  refused-not-clamped bounds in both layers. `schedule.policyWeights` finally
+  populated - real values, never faked - after nine tasks of `null`. Verified
+  live end to end in a real browser: drag, regenerate, watch the Gantt change.
+  T20 (what-if simulation) is the only 🟠 differentiator still `todo` -
+  explicitly out of scope for both T19 and T23 per their prompts, not
+  overlooked. Once T20 lands, the 🟠 tier is exhausted and remaining work is
+  T24-28 (🟡 stretch) or TX1-4 (cross-cutting / demo prep).
 
 - **2026-08-24** — T19 complete. The FR6.1 approval workflow, FR6.2 audit trail and
   FR6.3 versioned publishing, built so that **D-043's immutability guarantee gained

@@ -18,6 +18,7 @@ import {
   requestPriorityQueue,
   type BaselineSchedule,
   type OptimizedSchedule,
+  type PolicyWeightsOverride,
   type PriorityQueueEntry,
   type RiskAssessment,
   type RiskResponse,
@@ -30,6 +31,8 @@ import { logger } from '../utils/logger.js';
 export interface GenerateOptions {
   horizonStart?: string;
   horizonDays?: number;
+  /** T23. Omitted terms use the D-023 default (see optimizerClient.ts). */
+  policyWeights?: PolicyWeightsOverride;
 }
 
 /**
@@ -45,9 +48,15 @@ export interface GenerateOptions {
 export async function generateSchedule({
   horizonStart,
   horizonDays = 7,
+  policyWeights,
 }: GenerateOptions = {}): Promise<ISchedule> {
   const gathered = await gatherScenario({ horizonStart, horizonDays });
   const { payload } = gathered;
+  // T23: attached only to the /optimize call. /baseline is a fixed FCFS
+  // algorithm with no objective (D-029) and /prioritize scores tasks, not
+  // windows, so neither reads an objective weight - sending it to either
+  // would be a silently-ignored parameter, which is worse than not sending it.
+  const optimizePayload = { ...payload, ...(policyWeights ? { policyWeights } : {}) };
 
   logger.info('generating schedule', {
     tasks: gathered.taskCount,
@@ -66,7 +75,7 @@ export async function generateSchedule({
   const riskResult = await applyAssetRisk(gathered, generationErrors);
 
   const [optimizeOutcome, baselineOutcome, priorityOutcome] = await Promise.allSettled([
-    requestOptimizedSchedule(payload),
+    requestOptimizedSchedule(optimizePayload),
     requestBaselineSchedule(payload),
     requestPriorityQueue({ tasks: payload.tasks, asOf: payload.horizonStart }),
   ]);
@@ -91,8 +100,10 @@ export async function generateSchedule({
     horizonStart: optimized.horizonStart,
     horizonDays: optimized.horizonDays,
     generatedAt: new Date(),
-    // Exposed as sliders in T23; null rather than a fabricated default set.
-    policyWeights: null,
+    // T23: the weights ACTUALLY applied to this solve - every term present,
+    // real defaults filled in for whatever the request omitted. Never the
+    // request's raw input, and never faked when the request sent nothing.
+    policyWeights: optimized.policyWeights,
     status: optimized.status,
     objectiveValue: optimized.objectiveValue,
     solveSeconds: optimized.solveSeconds,
