@@ -3356,3 +3356,110 @@ script, final pitch-deck numbers) and, per the standing plan noted since
 T20's completion, authentication (the remainder of T10/T11) - now that every
 T-numbered feature task is built and real, role-gating who can see and do
 what is the natural next phase.
+
+---
+
+## D-071 — Audit: every "checked-and-zero vs never-computed" read site, and the one root cause that actually needed fixing
+
+**Date:** 2026-08-24 · **Task:** housekeeping (not T-numbered), triggered by D-046/D-070
+
+**The trigger.** D-046 (T25) and D-070 (T28) each independently found the same
+failure, two and three layers away from its source: `byPlan` (the PRD 9.5
+typed-conflict summary, `optimizer/app/core/conflicts.py::summarise`) only
+ever gets a key for a plan that `summarise` saw at least one conflict for. A
+plan with a real, checked zero - the ordinary case now that T24/T25 made both
+optimized-plan conflict types hard CP-SAT constraints - is silently ABSENT
+from `byPlan`, indistinguishable downstream from a plan nothing ever computed.
+T21's own `checkedAndClear` mechanism exists specifically to keep those two
+claims apart at the source; the bug is that `byPlan` bypassed it. Two fixes
+already existed (`KnownLimitations.tsx`'s `hasTypedReport`, T25; `oversight.ts`'s
+`conflictCountKpi`, T28) but both were per-consumer patches around a source
+that was still wrong - the next consumer would hit the same trap, which is
+exactly what happened.
+
+**The audit, done before any fix.** Every read site of `knownGaps`,
+`conflictReport`, `byPlan`, or a similarly-shaped aggregate was found and
+classified (grep across optimizer/backend/frontend, then read in full):
+
+| Site | Structure read | Correct? |
+|---|---|---|
+| `optimizer/app/core/scheduler.py::detect_known_gaps` | `knownGaps.resourceConflicts`/`.dependencyViolations` | Yes - unconditionally keyed with `count`+list, real zero always present |
+| `optimizer/app/core/scheduler.py` (trainImpactConflicts, weatherRisk blocks) | same fields | Yes - unconditionally assigned regardless of count |
+| `optimizer/app/core/scheduler.py::annotate_conflicts`/`annotate_weather_risk` | per-task decision-log fields | Yes - every entry gets the field (`[]` or `None`), never omitted |
+| `optimizer/app/core/conflicts.py::summarise` (`byPlan`) | plan → `{total, byType}` | **No - the root cause** |
+| `optimizer/app/routers/optimizer.py` (3 call sites) | calls `summarise` | Inherited the bug (never told `summarise` which plan the report was FOR) |
+| `frontend/src/lib/conflicts.ts::groupConflicts` | `report.conflicts` (flat array) | Yes - array emptiness is unambiguous, not subject to this bug shape |
+| `frontend/src/lib/conflicts.ts::planTotal` | `report.byPlan?.[plan]?.total` | **No - had the bug too, and a test PINNED it as correct** |
+| `frontend/src/components/KnownLimitations.tsx` | `conflictReport != null` vs `groups.length` | Yes - already fixed at T25, and does not touch `byPlan` at all |
+| `frontend/src/pages/ComparisonPage.tsx::ConflictEvidence` | raw `doubleBookings`/`overSubscribed` arrays, `groupConflicts` | Yes - never reads `byPlan` |
+| `frontend/src/lib/oversight.ts::conflictCountKpi` | was: inline `byPlan?.optimized?.total ?? 0` | Yes, but duplicated the fix inline instead of using the shared helper |
+| `backend/src/services/scheduleApprovals.ts::revalidateEffectivePlan` | `report.conflicts ?? []` | Yes - flat array, unambiguous |
+| `backend/src/services/approvalEngine.ts::validatePlan` (`knownUnresolved`) | the flat array above, grouped by type | Yes - informational only, empty means "nothing pre-known" either way, never presented as a completeness claim |
+| `optimizer/app/core/grounding.py` | flat `conflicts` arrays (both plans) | Yes - unambiguous |
+| `backend/src/models/Schedule.ts` | Mongoose storage | Yes - `minimize: false` (D-046) already guards the empty-object case at the persistence layer |
+
+**The fix is one function, not three patches** - exactly the shape the audit
+was asked to check for. `summarise()` gained `known_plans: Iterable[str] = ()`:
+every plan named there is seeded into `by_plan` at `{"total": 0, "byType": {}}`
+before folding in the actual conflicts, so a plan the caller knows it
+summarised - which is always exactly one plan per call site (D-045) - is
+never merely absent. `/optimize` and `/emergency-reoptimize` now pass
+`known_plans=("optimized",)`; `/baseline` passes `known_plans=("baseline",)`.
+`checkedAndClear`/`notYetDetectable` were already correct and untouched.
+
+**`planTotal` was not "an existing shared helper just not used everywhere" -
+it was broken, and pinned as broken by its own test.** Its old body,
+`report?.byPlan?.[plan]?.total ?? null`, returns `null` for both "no report"
+and "report exists, this plan had zero conflicts" - collapsing exactly the
+distinction this whole audit is about. A test (`conflicts.test.ts`) asserted
+this as intended behaviour, with a comment claiming "absent means not
+computed" for a hand-built report that was very much computed. Nothing in
+production called `planTotal` before this fix (dead code) - the reason
+`oversight.ts` had to solve the same problem inline at T28 instead of
+reusing it. Fixed to `if (!report) return null; return
+report.byPlan?.[plan]?.total ?? 0` - null means no report, a missing plan key
+inside a real report is a real zero. `oversight.ts::conflictCountKpi` now
+calls it instead of duplicating the logic, so the distinction is made in
+exactly one place on each side of the HTTP boundary (Python's `summarise`,
+TypeScript's `planTotal`) rather than per-consumer.
+
+**Old persisted schedules keep the old sparse shape** (same as D-046's own
+"schedules generated before T21 have `conflictReport: null`" - additive fixes
+do not rewrite history). `planTotal`'s fixed semantics handle both shapes
+identically and correctly: a missing key inside a non-null report reads as
+zero either way, so `oversight.ts` needed no shape-detection logic and no
+migration. Verified against the running dev optimizer + backend + Mongo,
+not just unit tests: restarted the optimizer to pick up the fix, regenerated
+the real 89-task corpus schedule through the full HTTP loop, and confirmed
+`conflictReport.byPlan` now reads `{ optimized: { total: 0, byType: {} } }`
+rather than `{}`.
+
+**The third audit question - other instances of the same bug shape outside
+conflicts/gaps.** None found. The general anti-pattern (`dict.setdefault`
+seeded only by observed occurrences, then read elsewhere as a presence
+signal) was searched for specifically; every other place a dict is built this
+way in this codebase (`windows_by_corridor`, `tasks_by_resource`, `grouped`,
+`occupants`, `by_task` in `scheduler.py`/`baseline.py`) is consumed
+immediately downstream via `.get(key, default)` for internal indexing, never
+read as a "was this checked" signal by another layer. `lib/gantt.ts`'s
+`summariseDays` (T12) already applies the correct opposite pattern - it
+iterates the full horizon and looks up each day, so an empty day is a real,
+visible fact rather than an absent one - which is the model this fix brings
+`summarise()` in line with.
+
+**Tests.** Optimizer: `test_conflicts.py` gained
+`test_a_known_plan_with_zero_conflicts_is_a_real_zero_not_absent` (reverting
+`known_plans` support makes it fail) and
+`test_known_plans_does_not_resurrect_a_plan_nobody_asked_about` (a plan never
+named and never seen stays genuinely absent); the real-corpus assertion in
+`test_real_corpus_types_match_the_counts_t6_and_t8_established` updated from
+`byPlan == {}` to the populated-zero shape; `test_optimizer_api.py`'s two
+"matches calling directly" tests updated to pass the same `known_plans` the
+router does. Frontend: `conflicts.test.ts`'s `planTotal` test corrected from
+pinning the bug to pinning the fix, with the wrong assumption spelled out in
+the replacement's own comment so it cannot quietly regress back. Backend:
+`schedules.test.ts`'s two stale `byPlan == {}` assertions (one hand-built
+fixture, one full real-corpus regression) updated to the populated shape -
+the second one re-verified live against the real optimizer service after a
+restart, not just against the pre-fix cached process. 331 optimizer / 114
+backend / 85 frontend tests, all green.

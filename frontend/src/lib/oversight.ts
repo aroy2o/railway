@@ -22,6 +22,7 @@
  *    "asset availability %" and "downtime" have no honest value to report.
  */
 import type { Asset, ConflictReport, Schedule, Task } from '../api/apiSlice.ts'
+import { planTotal } from './conflicts.ts'
 
 export interface KpiAvailable {
   label: string
@@ -167,22 +168,24 @@ export function planningKpis(
 }
 
 /**
- * `planTotal` alone cannot tell "no report" from "zero conflicts": T25 found
- * that Mongoose (and this report's own shape) drops the 'optimized' key from
- * `byPlan` entirely once dependency precedence and resource no-overlap became
- * hard constraints, rather than keeping it at `{ total: 0 }` (D-046). Reusing
- * `planTotal` naively here would relabel that real, checked zero as
- * "unavailable" - the exact class of mistake T21/T24/T25 built
- * `checkedAndClear` to prevent, reintroduced in a new layer if left alone.
+ * Routed through `planTotal` (`lib/conflicts.ts`) rather than reading
+ * `byPlan.optimized` here directly, so this distinction is made in exactly one
+ * place. T25 found that `byPlan` drops the 'optimized' key entirely once
+ * dependency precedence and resource no-overlap became hard constraints,
+ * rather than keeping it at `{ total: 0 }` (D-046) - a naive read would
+ * relabel that real, checked zero as "unavailable", the exact class of
+ * mistake T21/T24/T25 built `checkedAndClear` to prevent. `planTotal` itself
+ * carried the same bug until D-071 fixed it at the source; this KPI is why it
+ * had to be right, not just here.
  */
 function conflictCountKpi(conflictReport: ConflictReport | null | undefined): Kpi {
-  if (!conflictReport) {
+  const count = planTotal(conflictReport, 'optimized')
+  if (count === null) {
     return unavailable(
       'Conflict count',
       'This plan predates the PRD 9.5 typed conflict taxonomy (T21) or the report failed to generate.',
     )
   }
-  const count = conflictReport.byPlan?.optimized?.total ?? 0
   return available(
     'Conflict count',
     String(count),

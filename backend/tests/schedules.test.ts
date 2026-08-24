@@ -687,11 +687,14 @@ test('the typed conflict taxonomy survives the round trip and keeps the plans ap
   // render an actionable row - before it, the entries had no corridor at all.
   // T24 and T25 both moved from "detected" to "hard CP-SAT constraint", so
   // this small fixture's optimized plan now carries ZERO live conflicts of
-  // any type - `byPlan` has no `optimized` key at all, and every PRD 9.5
-  // type this build can check for shows up in `checkedAndClear` instead.
+  // any type - every PRD 9.5 type this build can check for shows up in
+  // `checkedAndClear` instead. `byPlan.optimized` is still PRESENT, at a real
+  // zero: D-071 fixed `summarise()` to keep the key for the plan a report is
+  // actually FOR, rather than dropping it whenever that plan has no live
+  // conflicts (the exact bug D-046/D-070 found two and three layers away).
   const report = schedule.conflictReport;
   assert.ok(report, 'typed conflict report must be stored');
-  assert.deepEqual(report.byPlan, {});
+  assert.deepEqual(report.byPlan, { optimized: { total: 0, byType: {} } });
   assert.deepEqual(report.conflicts, []);
 
   const checkedTypes = report.checkedAndClear.map((e: any) => e.type).sort();
@@ -938,9 +941,10 @@ test('the real 89-task corpus reproduces CHECKPOINT.md numbers through this path
     // The same figures typed per PRD 9.5, still separated by plan (D-045).
     // Neither DEPENDENCY_ORDER_VIOLATION nor RESOURCE_CONTENTION appears as a
     // live optimized-plan conflict type any more - both live in
-    // checkedAndClear instead (T24, T25), so `byPlan` carries no `optimized`
-    // key at all.
-    assert.deepEqual(schedule.conflictReport.byPlan, {});
+    // checkedAndClear instead (T24, T25). `byPlan.optimized` stays PRESENT at
+    // a real zero rather than dropping out (D-071) - this is the real-corpus
+    // instance of the same bug the small fixture above pins.
+    assert.deepEqual(schedule.conflictReport.byPlan, { optimized: { total: 0, byType: {} } });
     const checkedTypes = schedule.conflictReport.checkedAndClear
       .map((item: { type: string }) => item.type)
       .sort();

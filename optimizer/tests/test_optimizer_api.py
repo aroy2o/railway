@@ -96,7 +96,9 @@ def test_optimize_matches_calling_the_solver_directly(client):
     # else - then the rest must still be byte-for-byte the solver's own output.
     from app.core.conflicts import from_known_gaps, summarise
 
-    assert body.pop("conflictReport") == summarise(from_known_gaps(direct["knownGaps"]))
+    assert body.pop("conflictReport") == summarise(
+        from_known_gaps(direct["knownGaps"]), known_plans=("optimized",)
+    )
     # T23: the endpoint also adds the weights actually used, since the request
     # named none and the D-023 defaults were applied - never an absence a
     # caller could mistake for "no weights applied".
@@ -132,7 +134,9 @@ def test_baseline_matches_calling_the_function_directly(client):
     # T21; everything else is verbatim.
     from app.core.conflicts import from_baseline_conflicts, summarise
 
-    assert body["conflictReport"] == summarise(from_baseline_conflicts(direct["conflicts"]))
+    assert body["conflictReport"] == summarise(
+        from_baseline_conflicts(direct["conflicts"]), known_plans=("baseline",)
+    )
     assert body["blocks"] == direct["blocks"]
     assert body["conflicts"] == direct["conflicts"]
     assert body["metrics"] == direct["metrics"]

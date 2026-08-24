@@ -202,6 +202,31 @@ def test_summarise_never_totals_across_plans():
         assert bucket["total"] == sum(bucket["byType"].values())
 
 
+def test_a_known_plan_with_zero_conflicts_is_a_real_zero_not_absent():
+    """D-071: the exact bug shape D-046/D-070 found two and three layers away
+    from this function - a checked-and-zero plan silently absent from
+    `byPlan`, indistinguishable downstream from a plan nothing ever computed.
+
+    `/optimize` and `/emergency-reoptimize` always know they are summarising
+    the `optimized` plan; `/baseline` always knows `baseline`. Passing that
+    via `known_plans` is what keeps the key present at a real zero. Reverting
+    `summarise` to ignore `known_plans` (as it did before this fix) makes this
+    fail - `byPlan` would come back `{}` instead."""
+    summary = summarise([], known_plans=("optimized",))
+
+    assert summary["byPlan"] == {"optimized": {"total": 0, "byType": {}}}
+    assert "optimized" in summary["byPlan"]  # present, not merely reachable via .get
+
+
+def test_known_plans_does_not_resurrect_a_plan_nobody_asked_about():
+    """The fix must not blur the boundary the other direction: a plan never
+    named in `known_plans` and never seen in the conflicts stays genuinely
+    absent, because nothing claims to have checked it."""
+    summary = summarise([], known_plans=("optimized",))
+
+    assert "baseline" not in summary["byPlan"]
+
+
 def test_every_conflict_carries_its_plan():
     """If a record ever loses `plan`, the UI cannot keep the layers apart."""
     summary = summarise(
@@ -287,10 +312,17 @@ def test_real_corpus_types_match_the_counts_t6_and_t8_established(scenario):
     solved = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
     baseline = run_baseline(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
 
-    optimized_summary = summarise(from_known_gaps(solved.as_dict()["knownGaps"]))
-    baseline_summary = summarise(from_baseline_conflicts(baseline.as_dict()["conflicts"]))
+    optimized_summary = summarise(
+        from_known_gaps(solved.as_dict()["knownGaps"]), known_plans=("optimized",)
+    )
+    baseline_summary = summarise(
+        from_baseline_conflicts(baseline.as_dict()["conflicts"]), known_plans=("baseline",)
+    )
 
-    assert optimized_summary["byPlan"] == {}
+    # D-071: `known_plans` (what /optimize actually passes) keeps `optimized`
+    # present at a real, checked zero rather than absent - the exact ambiguity
+    # D-046/D-070 found two layers downstream of this same call.
+    assert optimized_summary["byPlan"] == {"optimized": {"total": 0, "byType": {}}}
     checked_types = {item["type"] for item in optimized_summary["checkedAndClear"]}
     assert checked_types == {
         ConflictType.TRAIN_IMPACT_CONFLICT,

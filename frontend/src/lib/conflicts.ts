@@ -142,7 +142,19 @@ export function groupConflicts(
 }
 
 /**
- * That plan's conflict total, or null when the report has no such plan.
+ * That plan's conflict total, or null when there is no report to read at all.
+ *
+ * `null` means "never computed" (a pre-T21 schedule, or generation failed).
+ * Once a report exists, its own plan is a real, checked figure - including
+ * zero - even if `byPlan[plan]` itself is missing: the optimizer only ever
+ * populates the key(s) it has conflicts for (D-045's per-plan separation),
+ * so a plan with none is absent from `byPlan`, not present at `{ total: 0 }`
+ * (see `optimizer/app/core/conflicts.py::summarise`'s `known_plans`, D-071).
+ * Reading `report.byPlan?.[plan]?.total ?? null` directly would conflate that
+ * real zero with "no report" - the exact bug D-046/D-070 found two and three
+ * layers downstream of this function. This is the ONE place that
+ * distinction is allowed to collapse a missing key to zero; every other read
+ * site should call this rather than touching `byPlan` itself.
  *
  * There is deliberately no cross-plan equivalent of this function. If a screen
  * ever needs one, that is a design question to settle first, not a helper to
@@ -152,5 +164,6 @@ export function planTotal(
   report: ConflictReport | null | undefined,
   plan: ConflictPlan,
 ): number | null {
-  return report?.byPlan?.[plan]?.total ?? null
+  if (!report) return null
+  return report.byPlan?.[plan]?.total ?? 0
 }

@@ -362,15 +362,28 @@ def from_baseline_conflicts(conflicts_payload: dict[str, Any]) -> list[Conflict]
     return conflicts
 
 
-def summarise(conflicts: Iterable[Conflict]) -> dict[str, Any]:
+def summarise(conflicts: Iterable[Conflict], *, known_plans: Iterable[str] = ()) -> dict[str, Any]:
     """Group typed conflicts for display, keeping the two plans apart.
 
     Counts are nested under their plan on purpose. A flat total across both
     layers would be a meaningless number that reads as an indictment of the
     optimized plan (D-045).
+
+    `known_plans` names the plan(s) this report is FOR - what a caller who
+    already knows which plan it solved should pass, e.g. `("optimized",)` from
+    `/optimize`. Without it, a plan with zero conflicts is silently absent from
+    `byPlan` rather than present at `{"total": 0, "byType": {}}` - which reads
+    identically to "this plan was never checked" to anything downstream keyed
+    off presence, exactly the ambiguity `checkedAndClear` exists elsewhere to
+    avoid. This was a real bug (D-046, D-070): `/optimize` and
+    `/emergency-reoptimize` never passed it, so a real, checked zero (the
+    normal case once T24/T25 made both PRD 9.5 types on the optimized plan
+    hard constraints) surfaced as a dropped key three layers up. See D-071.
     """
     listed = list(conflicts)
-    by_plan: dict[str, dict[str, Any]] = {}
+    by_plan: dict[str, dict[str, Any]] = {
+        plan: {"total": 0, "byType": {}} for plan in known_plans
+    }
     seen_types = {conflict.type for conflict in listed}
 
     for conflict in listed:

@@ -264,9 +264,13 @@ def optimize(request: SolveRequest, settings: Settings = Depends(get_settings)) 
     payload = result.as_dict()
     # PRD 9.5 - the same gaps, named and with a resolution strategy each.
     # Additive: `knownGaps` is untouched, so nothing that already reads it breaks.
+    # `known_plans=("optimized",)` guarantees `byPlan.optimized` is present at
+    # a real zero rather than absent when this plan has no live conflicts -
+    # see D-071. Every call here is single-plan by construction (D-045).
     payload["conflictReport"] = summarise(
         from_known_gaps(payload["knownGaps"])
-        + from_train_impact(payload["knownGaps"]["trainImpactConflicts"]["conflicts"])
+        + from_train_impact(payload["knownGaps"]["trainImpactConflicts"]["conflicts"]),
+        known_plans=("optimized",),
     )
     # The values ACTUALLY used, never the request's raw (possibly-omitted)
     # object. Node persists this verbatim onto schedule.policyWeights (D-061) -
@@ -391,9 +395,11 @@ def emergency_reoptimize(
         outcome.result.status, outcome.result.solve_seconds,
     )
     payload = outcome.as_dict()
+    # See the matching comment in /optimize above - D-071.
     payload["conflictReport"] = summarise(
         from_known_gaps(payload["knownGaps"])
-        + from_train_impact(payload["knownGaps"]["trainImpactConflicts"]["conflicts"])
+        + from_train_impact(payload["knownGaps"]["trainImpactConflicts"]["conflicts"]),
+        known_plans=("optimized",),
     )
     payload["policyWeights"] = {
         "coverage": weights.coverage,
@@ -454,7 +460,10 @@ def baseline(request: SolveRequest, settings: Settings = Depends(get_settings)) 
     payload["contestableTaskIds"] = sorted(structurally_contestable(tasks, corridors))
     # PRD 9.5 typing for the baseline's own conflicts. Kept on the `baseline`
     # layer so it can never be totalled with the optimized plan's (D-045).
-    payload["conflictReport"] = summarise(from_baseline_conflicts(payload["conflicts"]))
+    # `known_plans=("baseline",)` - see D-071.
+    payload["conflictReport"] = summarise(
+        from_baseline_conflicts(payload["conflicts"]), known_plans=("baseline",)
+    )
     logger.info(
         "baseline: %d tasks, %d double-bookings",
         len(request.tasks), payload["metrics"]["doubleBookings"],

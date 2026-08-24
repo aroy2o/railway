@@ -133,9 +133,15 @@ describe('planTotal', () => {
     expect(planTotal(mixed, 'baseline')).toBe(1)
   })
 
-  it('is null rather than zero when the plan is absent', () => {
-    // Zero would read as "checked, none found". Absent means not computed.
-    expect(planTotal(report([]), 'optimized')).toBeNull()
+  it('is null only when there is no report at all - never for a real, checked zero', () => {
+    // D-071: this used to assert the opposite - that a report with no
+    // conflicts for a plan (`report([])`) also returned null, indistinguishable
+    // from `null` itself (no report computed). That was the exact bug shape
+    // D-046/D-070 found in production two and three layers downstream of this
+    // function: `byPlan` only ever gets a key for a plan `summarise()` saw a
+    // conflict for, so a real, checked zero - the normal case since T24/T25 -
+    // is a MISSING key inside a REAL report, not an absent report.
+    expect(planTotal(report([]), 'optimized')).toBe(0)
     expect(planTotal(null, 'baseline')).toBeNull()
   })
 })

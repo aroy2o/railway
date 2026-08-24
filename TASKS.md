@@ -666,6 +666,35 @@ Update this file at the end of every Claude Code session per `LOOP_PROMPT.md`.
 
 _Append a dated one-line entry here each session — what was completed, what's next._
 
+- **2026-08-24** — Audit-and-fix session (not T-numbered): the
+  "checked-and-zero vs never-computed" bug pattern that D-046 (T25) and
+  D-070 (T28) each independently found and patched two/three layers away
+  from its source. Grepped and classified every read site of `knownGaps`,
+  `conflictReport`, `byPlan` across all three layers before touching
+  anything (14 sites total). Found exactly one root cause -
+  `optimizer/app/core/conflicts.py::summarise()`'s `byPlan` dict only ever
+  gets a key for a plan it saw a live conflict for, so a real, checked zero
+  (the normal case since T24/T25) is indistinguishable from "never
+  computed" - and one more instance of the SAME bug hiding in a "shared
+  helper" that was never actually shared: `frontend/src/lib/conflicts.ts`'s
+  `planTotal`, unused in production, whose own unit test pinned the buggy
+  behaviour as intended. Fixed both at the source: `summarise()` gained
+  `known_plans` so the router can say which plan a report is FOR;
+  `planTotal` now correctly returns null only when there is no report at
+  all. `oversight.ts` routed through the fixed helper instead of
+  duplicating the fix inline (T28's version stays correct, now for the
+  right reason). Searched specifically for the same bug shape outside the
+  conflict/gaps system - none found; every other dict built the same way in
+  this codebase is consumed as an internal index, never as a presence
+  signal, and T12's `summariseDays` already applies the correct opposite
+  pattern. Verified against the live optimizer + backend + Mongo, not just
+  unit tests: restarted the optimizer to pick up the fix and regenerated
+  the real 89-task corpus schedule through the full HTTP loop, confirming
+  `conflictReport.byPlan` now reads `{ optimized: { total: 0, byType: {} } }`
+  rather than `{}`. 331 optimizer / 114 backend / 85 frontend tests, all
+  green. See `docs/DECISIONS.md` D-071. Next: TX1-4 or authentication, per
+  the standing plan - unchanged by this session.
+
 - **2026-08-24** — T28 complete. Monthly planning polish + DRM oversight KPI
   hierarchy (PRD Section 14) - **the T-numbered backlog is now closed, T1-T28
   all `done`.** Monthly is built as the SAME real CP-SAT solve run at a
