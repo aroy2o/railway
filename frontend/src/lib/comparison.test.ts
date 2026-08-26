@@ -103,6 +103,42 @@ describe('D-031 rule: utilisation cannot be shown alone', () => {
   })
 })
 
+describe('T29 Phase 1 (D-084): the split-only capability row', () => {
+  it('is absent when splitOnlyTaskCount is missing (a pre-T29 stored schedule)', () => {
+    const keys = buildMetricRows(REAL).map((row) => row.key)
+
+    expect(keys).not.toContain('splitOnly')
+  })
+
+  it('is absent when splitOnlyTaskCount is explicitly zero', () => {
+    const withZero: ComparisonToBaseline = { ...REAL, splitOnlyTaskCount: 0 }
+    const keys = buildMetricRows(withZero).map((row) => row.key)
+
+    expect(keys).not.toContain('splitOnly')
+  })
+
+  it('appears as a headline row, never folded into the contestable count, when real', () => {
+    const withSplitting: ComparisonToBaseline = {
+      ...REAL,
+      splitOnlyTaskCount: 32,
+      optimized: { ...REAL.optimized, splitOnlyScheduled: 29 },
+      baseline: { ...REAL.baseline, splitOnlyScheduled: 0 },
+    }
+    const rows = buildMetricRows(withSplitting)
+    const splitOnly = rows.find((row) => row.key === 'splitOnly')
+
+    expect(splitOnly).toBeDefined()
+    expect(splitOnly?.baseline).toBe('0 / 32')
+    expect(splitOnly?.optimized).toBe('29 / 32')
+    expect(splitOnly?.verdict).toBe('optimizer-better')
+    expect(headlineRows(rows).map((row) => row.key)).toContain('splitOnly')
+    // The contestable denominator must stay exactly 36 - splitting must never
+    // inflate it.
+    const scheduled = rows.find((row) => row.key === 'scheduled')!
+    expect(scheduled.baseline).toBe('36 / 36')
+  })
+})
+
 describe('every row explains itself', () => {
   it('gives all rows a note and a verdict', () => {
     for (const row of buildMetricRows(REAL)) {

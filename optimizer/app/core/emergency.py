@@ -149,19 +149,39 @@ def generate_emergency_reoptimization(
     """
     as_of = min(w.day for w in disrupted_windows)
 
-    placement_by_task = {p.task_id: p for p in current_placements}
+    # T29 Phase 1: a split task occupies 2+ windows, so `current_placements`
+    # may legitimately carry more than one entry for the same task id - one
+    # per segment. Grouped by task, not overwritten by task id, which is the
+    # exact bug a real-corpus re-run of this function's own test caught: the
+    # old one-placement-per-task dict silently kept only the LAST segment
+    # iterated and left every other one of a split task's segments
+    # completely unpinned, free for this commit-shaped re-solve to move or
+    # drop - see the `Pin` docstring in `app/core/scheduler.py` for the full
+    # story of why that is worse here than it would be for T20's what-if.
+    placements_by_task: dict[str, list[CurrentPlacement]] = {}
+    for placement in current_placements:
+        placements_by_task.setdefault(placement.task_id, []).append(placement)
 
     pins: list[Pin] = []
     for task in tasks:
         on_affected = task.corridor_id == corridor_id
-        placement = placement_by_task.get(task.task_id)
-        if placement is not None:
-            already_executed = on_affected and placement.day < as_of
-            if not on_affected or already_executed:
-                key = f"{placement.corridor_id}|{placement.day.isoformat()}|{placement.window_index}"
-                pins.append(Pin(task.task_id, key))
-            # On-affected and NOT already executed: left unpinned, free for
-            # the re-solve to keep, move within the corridor, or defer.
+        placements = placements_by_task.get(task.task_id)
+        if placements:
+            any_already_executed = on_affected and any(p.day < as_of for p in placements)
+            if not on_affected or any_already_executed:
+                # Same-corridor split task straddling `as_of` (some segments
+                # already executed, some not): pinning the WHOLE task rather
+                # than only its executed segments is the conservative choice
+                # - it can only under-use newly-freed capacity, never lose an
+                # already-executed possession, which is the failure mode that
+                # actually matters for a re-solve that commits.
+                keys = tuple(
+                    f"{p.corridor_id}|{p.day.isoformat()}|{p.window_index}" for p in placements
+                )
+                pins.append(Pin(task.task_id, window_keys=keys))
+            # On-affected and NOT already executed (no segment before as_of):
+            # left unpinned, free for the re-solve to keep, move within the
+            # corridor, or defer.
         else:
             # Currently deferred. Off the affected corridor, it must stay
             # deferred - this re-solve is not allowed to touch that corridor

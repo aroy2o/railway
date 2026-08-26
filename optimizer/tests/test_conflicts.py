@@ -362,16 +362,26 @@ def test_the_baselines_own_resource_conflicts_are_all_same_department(scenario):
 
     tasks, corridors = scenario
     baseline = run_baseline(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
+    tasks_by_id = {task.task_id: task for task in tasks}
 
-    placements = {
-        task_id: WindowInstance(
-            f"{b.corridor_id}|{b.day.isoformat()}|{b.window_index}",
-            b.corridor_id, b.day, b.window_index, b.start_minute, b.end_minute,
-        )
+    # The baseline never splits (T29 Phase 1 is a CP-SAT-only extension), so
+    # every task has exactly one segment - its whole duration, in its one
+    # window - matching `detect_known_gaps`'s (task_id -> [(window, minutes)])
+    # contract.
+    task_segments = {
+        task_id: [
+            (
+                WindowInstance(
+                    f"{b.corridor_id}|{b.day.isoformat()}|{b.window_index}",
+                    b.corridor_id, b.day, b.window_index, b.start_minute, b.end_minute,
+                ),
+                tasks_by_id[task_id].duration_minutes,
+            )
+        ]
         for b in baseline.blocks
         for task_id in b.task_ids
     }
-    gaps = detect_known_gaps(tasks, placements)
+    gaps = detect_known_gaps(tasks, task_segments)
     conflicts = [
         c for c in from_known_gaps(gaps) if c.type == ConflictType.RESOURCE_CONTENTION
     ]

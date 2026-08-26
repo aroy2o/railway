@@ -144,6 +144,10 @@ export async function gatherScenario({
       // score is an input to the priority score and must exist before
       // /prioritize and /optimize run (D-055).
       failureRiskScore: null,
+      // T29 Phase 1: decides splittability (`app.core.splitting`). Previously
+      // dropped at this exact mapping step, along with workflowStage, which
+      // stays unused - see docs/DECISIONS.md D-082.
+      defectType: task.defectType,
     };
   });
 

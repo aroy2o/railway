@@ -24,14 +24,46 @@ from app.core.scheduler import CorridorAvailability, DailyWindow, MaintenanceTas
 
 DEFAULT_API = "http://localhost:5000/api"
 
+#: The auth session (2026-08-25, see docs/DECISIONS.md D-073) gated every
+#: read route behind `requireAuth`, which this dev/test helper predates. The
+#: `controller` demo account (DEMO_ACCOUNTS.md) has full read access to
+#: everything this module fetches.
+_DEMO_USERNAME = "controller"
+_DEMO_PASSWORD = "controller123"
+
+_token_cache: str | None = None
+
 
 class BackendUnavailable(RuntimeError):
     """Raised when the API cannot be reached, so callers can skip rather than fail."""
 
 
-def _get(url: str, timeout: float = 15.0) -> Any:
+def _login(api_base: str, timeout: float) -> str:
+    global _token_cache
+    if _token_cache is not None:
+        return _token_cache
+    body = json.dumps({"username": _DEMO_USERNAME, "password": _DEMO_PASSWORD}).encode()
+    request = urllib.request.Request(
+        f"{api_base}/auth/login",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        raise BackendUnavailable(f"could not log in at {api_base}/auth/login: {exc}") from exc
+    _token_cache = payload["data"]["token"]
+    return _token_cache
+
+
+def _get(url: str, timeout: float = 15.0) -> Any:
+    api_base = url.split("/api/", 1)[0] + "/api"
+    token = _login(api_base, timeout)
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
         raise BackendUnavailable(f"could not reach {url}: {exc}") from exc
@@ -105,6 +137,8 @@ def load_scenario(
                 required_resource_ids=tuple(task.get("requiredResourceIds") or []),
                 priority_is_placeholder=is_placeholder,
                 date_raised=date.fromisoformat(task["dateRaised"]),
+                # T29 Phase 1: decides splittability (app.core.splitting).
+                defect_type=task.get("defectType") or "",
             )
         )
 
@@ -178,6 +212,8 @@ def build_payload(
             "dependsOnTaskId": task.get("dependsOnTaskId"),
             "requiredResourceIds": task.get("requiredResourceIds") or [],
             "failureRiskScore": task.get("failureRiskScore"),
+            # T29 Phase 1: decides splittability (app.core.splitting).
+            "defectType": task.get("defectType") or "",
         }
         for task in task_payload
     ]

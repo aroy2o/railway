@@ -108,6 +108,13 @@ class TaskIn(ApiModel):
     sla_due_date: date
     severity: int = Field(ge=1, le=5)
 
+    #: T29 Phase 1. PRD 5.2's real defect-type vocabulary (e.g. "rail
+    #: fracture", "track geometry defect") - decides whether the task may be
+    #: split across 2+ non-contiguous windows (`app.core.splitting`).
+    #: Optional and defaulted to "" (never splittable) so every pre-T29
+    #: caller keeps working unchanged with zero opt-in.
+    defect_type: str = Field(default="", max_length=64)
+
     #: REAL - the asset's FR2.1 criticality score, joined on by Node. Optional
     #: only so /optimize can be driven without it; /prioritize requires it.
     asset_criticality_score: float | None = Field(default=None, ge=0, le=100)

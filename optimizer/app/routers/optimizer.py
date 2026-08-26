@@ -30,7 +30,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.config import Settings, get_settings
-from app.core.baseline import run_baseline, structurally_contestable
+from app.core.baseline import run_baseline, split_only_contestable, structurally_contestable
 from app.core.conflicts import (
     from_baseline_conflicts,
     from_known_gaps,
@@ -153,6 +153,7 @@ def _to_tasks(payload: list[TaskIn], as_of) -> list[MaintenanceTask]:
                 priority_is_placeholder=is_placeholder,
                 date_raised=task.date_raised,
                 priority_breakdown=priority_breakdown,
+                defect_type=task.defect_type,
             )
         )
     return tasks
@@ -422,6 +423,8 @@ def baseline(request: SolveRequest, settings: Settings = Depends(get_settings)) 
 
     `contestableTaskIds` is included because the comparison must be drawn from
     that subset, never the full backlog - see docs/DECISIONS.md D-031.
+    `splitOnlyTaskIds` (T29 Phase 1) names the further subset the baseline can
+    NEVER place but the optimizer can via splitting - see D-084.
     """
     _guard_size(request, settings)
     if request.horizon_days > settings.max_horizon_days:
@@ -458,6 +461,17 @@ def baseline(request: SolveRequest, settings: Settings = Depends(get_settings)) 
         ]
 
     payload["contestableTaskIds"] = sorted(structurally_contestable(tasks, corridors))
+    # T29 Phase 1 (D-084): tasks the baseline can never place (they exceed
+    # every single window) but that ARE within the optimizer's real reach via
+    # splitting - a third category the pre-T29 binary had no room for. Kept
+    # separate from `contestableTaskIds` rather than merged into it, because
+    # merging would imply the baseline could also do this work, which it
+    # structurally cannot.
+    payload["splitOnlyTaskIds"] = sorted(
+        split_only_contestable(
+            tasks, corridors, horizon_start=request.horizon_start, horizon_days=request.horizon_days
+        )
+    )
     # PRD 9.5 typing for the baseline's own conflicts. Kept on the `baseline`
     # layer so it can never be totalled with the optimized plan's (D-045).
     # `known_plans=("baseline",)` - see D-071.

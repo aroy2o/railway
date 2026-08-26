@@ -374,20 +374,36 @@ def real_scenario():
 
 
 def test_real_corpus_displaces_the_real_task_the_disruption_hits(real_scenario):
+    """Re-derived against the T29 Phase 1 baseline (task splitting changed
+    the real plan substantially - see docs/DECISIONS.md D-082) and used to
+    catch a real bug along the way: `current_placements` is now built with
+    ONE entry per (task, block) pair - never deduplicated to "last block
+    per task id" - because a split task genuinely occupies more than one
+    block, and `generate_emergency_reoptimization` must see all of them to
+    hold the whole task fixed (D-082's `Pin.window_keys` fix). The old
+    one-entry-per-task-id dict this test used to build is exactly the shape
+    of bug that fix closes.
+    """
     tasks, corridors = real_scenario
     baseline = solve_schedule(tasks, corridors, horizon_start=HORIZON_START, horizon_days=7)
 
-    placement_by_task = {}
-    for b in baseline.blocks:
-        for tid in b.task_ids:
-            placement_by_task[tid] = b
+    assert baseline.status in ("OPTIMAL", "FEASIBLE")
 
-    assert placement_by_task["TSK-00076"].day.isoformat() == "2026-08-27"
-    assert placement_by_task["TSK-00076"].window_index == 9
+    # T29 Phase 1 changed the plan enough (D-082) that exactly where TSK-00076
+    # lands is no longer worth hardcoding - it can shift with the objective's
+    # exact landscape on a FEASIBLE (not proven OPTIMAL) solve, or with test
+    # execution order against the shared dev backend (a pre-existing class of
+    # sensitivity this suite already knows about - see T23's "shared-DB
+    # test-count assumption" bug). Disrupt wherever it REALLY is, rather than
+    # assuming, and verify the one property that must hold regardless: it
+    # gets genuinely displaced off that exact window.
+    tsk76_block = next(b for b in baseline.blocks if "TSK-00076" in b.task_ids)
+    disrupted_day, disrupted_window = tsk76_block.day, tsk76_block.window_index
 
     placements = [
-        CurrentPlacement(tid, b.corridor_id, b.day, b.window_index)
-        for tid, b in placement_by_task.items()
+        CurrentPlacement(task_id, b.corridor_id, b.day, b.window_index)
+        for b in baseline.blocks
+        for task_id in b.task_ids
     ]
 
     outcome = generate_emergency_reoptimization(
@@ -395,22 +411,41 @@ def test_real_corpus_displaces_the_real_task_the_disruption_hits(real_scenario):
         horizon_start=HORIZON_START, horizon_days=7,
         corridor_id="MQX-RMF",
         current_placements=placements,
-        disrupted_windows=[DisruptedWindow(date(2026, 8, 27), 9)],
+        disrupted_windows=[DisruptedWindow(disrupted_day, disrupted_window)],
         reason="unplanned traffic block on MQX-RMF",
         weights=DEFAULT_WEIGHTS,
         max_seconds=10.0,
     )
     result = outcome.result
 
-    # TSK-00076 is real-corpus-displaced to the day found by the pre-build
-    # audit, and TSK-00077 (which occupied that day) cascades in turn.
-    tsk76_block = next(b for b in result.blocks if "TSK-00076" in b.task_ids)
-    assert (tsk76_block.day.isoformat(), tsk76_block.window_index) == ("2026-08-28", 9)
-    tsk77_block = next(b for b in result.blocks if "TSK-00077" in b.task_ids)
-    assert (tsk77_block.day.isoformat(), tsk77_block.window_index) == ("2026-08-29", 9)
+    # A re-solve narrowed to one corridor with almost everything pinned is
+    # small enough to close, even while the full-corpus solve (elsewhere in
+    # this suite) does not - T27's own design point (PRD 9.10's "re-solve
+    # only the affected corridor").
+    assert result.status == "OPTIMAL"
+
+    # TSK-00076 is genuinely displaced off its disrupted window, never
+    # deferred outright (the whole rest of the corridor's own free capacity
+    # remains available to receive it).
+    reopt_tsk76_block = next(b for b in result.blocks if "TSK-00076" in b.task_ids)
+    assert (reopt_tsk76_block.day.isoformat(), reopt_tsk76_block.window_index) != (
+        disrupted_day.isoformat(), disrupted_window,
+    )
+
+    # Wherever it lands, MQX-RMF stays a real, non-double-booked plan - if it
+    # landed on a day another task already held, that task must genuinely
+    # have moved or deferred, not been silently overwritten.
+    mqx_blocks = [b for b in result.blocks if b.corridor_id == "MQX-RMF"]
+    seen: dict[tuple, int] = {}
+    for block in mqx_blocks:
+        key = (block.day, block.window_index)
+        assert key not in seen, f"MQX-RMF double-booked at {key}"
+        seen[key] = 1
 
     # Every other corridor's blocks and every other corridor's deferred set
-    # are byte-identical to the baseline - the whole point of D-069's design.
+    # are byte-identical to the baseline - the whole point of D-069's design,
+    # and exactly the guarantee D-082's Pin fix restores for a corpus that
+    # now contains real split tasks off the affected corridor.
     task_by_id = {t.task_id: t for t in tasks}
     base_other = {
         (b.corridor_id, b.day, b.window_index, tuple(sorted(b.task_ids)))

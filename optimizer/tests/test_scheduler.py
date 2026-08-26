@@ -351,12 +351,12 @@ def test_detect_known_gaps_still_recognises_a_resource_conflict_in_isolation():
                         required_resource_ids=("RES-tamper",)),
     ]
     shared_day = HORIZON_START
-    placements = {
-        "A": WindowInstance("XX-YY|d|0", "XX-YY", shared_day, 0, 0, 100),
-        "B": WindowInstance("XX-YY|d|1", "XX-YY", shared_day, 1, 50, 150),
+    task_segments = {
+        "A": [(WindowInstance("XX-YY|d|0", "XX-YY", shared_day, 0, 0, 100), 100)],
+        "B": [(WindowInstance("XX-YY|d|1", "XX-YY", shared_day, 1, 50, 150), 100)],
     }
 
-    gaps = detect_known_gaps(tasks, placements)["resourceConflicts"]
+    gaps = detect_known_gaps(tasks, task_segments)["resourceConflicts"]
     assert gaps["count"] == 1
     assert gaps["conflicts"][0]["sharedResourceIds"] == ["RES-tamper"]
 
@@ -481,12 +481,12 @@ def test_detect_known_gaps_still_recognises_a_violation_in_isolation():
     ]
     # STEP2 placed on the SAME day, starting before STEP1 even finishes.
     shared_day = HORIZON_START
-    placements = {
-        "STEP1": WindowInstance("XX-YY|d|0", "XX-YY", shared_day, 0, 100, 200),
-        "STEP2": WindowInstance("XX-YY|d|1", "XX-YY", shared_day, 1, 0, 100),
+    task_segments = {
+        "STEP1": [(WindowInstance("XX-YY|d|0", "XX-YY", shared_day, 0, 100, 200), 100)],
+        "STEP2": [(WindowInstance("XX-YY|d|1", "XX-YY", shared_day, 1, 0, 100), 100)],
     }
 
-    gaps = detect_known_gaps(tasks, placements)["dependencyViolations"]
+    gaps = detect_known_gaps(tasks, task_segments)["dependencyViolations"]
     assert gaps["count"] == 1
     assert gaps["violations"][0]["taskId"] == "STEP2"
     assert gaps["violations"][0]["issue"] == "scheduled before its prerequisite completes"
@@ -716,3 +716,236 @@ def test_the_tightest_fitting_window_is_preferred():
     assert len(result.blocks) == 1
     assert result.blocks[0].capacity_minutes == 150
     assert result.blocks[0].unused_minutes == 50
+
+
+# --------------------------------------------------------------------------- #
+# T29 Phase 1 - task splitting across non-contiguous windows                  #
+# --------------------------------------------------------------------------- #
+
+def test_a_splittable_task_too_long_for_any_window_is_covered_by_two_segments():
+    """The headline case: a task longer than any single free window on its
+    corridor, but whose defect type is splittable (`app.core.splitting`),
+    gets covered by 2+ segments summing to its exact duration instead of
+    being deferred EXCEEDS_LONGEST_WINDOW.
+
+    XX-YY offers two 100-minute windows on day 1 (200 min total). A
+    250-minute "track geometry defect" (splittable) cannot fit in one, but
+    CAN be covered across two days: 100 + 100 + 50 on a third window, or any
+    other floor-respecting combination summing to exactly 250.
+    """
+    corridors = {
+        "XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 100), DailyWindow(200, 300)))
+    }
+    task = MaintenanceTask(
+        "A", "XX-YY", "Engineering", 250, FUTURE, priority=5,
+        defect_type="track geometry defect",
+    )
+
+    result = solve_schedule([task], corridors, horizon_start=HORIZON_START, horizon_days=2)
+
+    assert result.status == "OPTIMAL"
+    assert "A" in result.scheduled_task_ids
+    assert "A" not in {d.task_id for d in result.deferred}
+
+    segments = result.split_tasks["A"]["segments"]
+    assert len(segments) >= 2
+    assert sum(s["minutes"] for s in segments) == 250
+    assert all(s["minutes"] >= 30 for s in segments), "every segment must clear the floor"
+
+    # The blocks themselves carry the SAME per-task minutes, not the full
+    # 250 in each - a reader of `blocks` alone (never touching `splitTasks`)
+    # must not be able to mistake a segment for a complete placement.
+    task_blocks = [b for b in result.blocks if "A" in b.task_ids]
+    assert len(task_blocks) == len(segments)
+    assert sum(b.segment_minutes["A"] for b in task_blocks) == 250
+    assert all(b.segment_minutes["A"] < 250 for b in task_blocks)
+
+
+def test_the_same_task_shape_stays_deferred_when_not_splittable():
+    """The exact scenario above, with a NON-splittable defect type (e.g. a
+    rail fracture) - regression guard proving splitting is opt-in per defect
+    type, not a blanket relaxation of EXCEEDS_LONGEST_WINDOW."""
+    corridors = {
+        "XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 100), DailyWindow(200, 300)))
+    }
+    task = MaintenanceTask(
+        "A", "XX-YY", "Engineering", 250, FUTURE, priority=5, defect_type="rail fracture",
+    )
+
+    result = solve_schedule([task], corridors, horizon_start=HORIZON_START, horizon_days=2)
+
+    assert result.scheduled_task_ids == set()
+    assert result.deferred[0].reason == DeferralReason.EXCEEDS_LONGEST_WINDOW
+    assert result.split_tasks == {}
+
+
+def test_an_unset_defect_type_defaults_to_not_splittable():
+    """`defect_type=""` (every pre-T29 caller, including every OTHER test in
+    this file) must behave exactly as it did before T29 existed - zero
+    opt-in required."""
+    corridors = {
+        "XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 100), DailyWindow(200, 300)))
+    }
+    task = MaintenanceTask("A", "XX-YY", "Engineering", 250, FUTURE, priority=5)
+
+    assert task.is_splittable is False
+    result = solve_schedule([task], corridors, horizon_start=HORIZON_START, horizon_days=2)
+    assert result.deferred[0].reason == DeferralReason.EXCEEDS_LONGEST_WINDOW
+
+
+def test_the_minimum_segment_floor_is_genuinely_enforced_not_decorative():
+    """Three windows of EXACTLY 30 minutes each (so a used segment in any of
+    them can only ever be exactly 30, never a fraction of it - the window's
+    own capacity equals the floor). Reachable sums are therefore only
+    {0, 30, 60, 90}. A 61-minute splittable task has enough TOTAL capacity
+    (90 >= 61) to pass the structural pre-check, but no combination of
+    floor-respecting segments can sum to exactly 61 - so the task must
+    defer, proving the floor is a real constraint the solver cannot route
+    around, not merely advisory.
+    """
+    corridors = {
+        "XX-YY": CorridorAvailability(
+            "XX-YY", (DailyWindow(0, 30), DailyWindow(100, 130), DailyWindow(200, 230))
+        )
+    }
+    task = MaintenanceTask(
+        "A", "XX-YY", "Engineering", 61, FUTURE, priority=5,
+        defect_type="ballast deficiency",
+    )
+
+    result = solve_schedule([task], corridors, horizon_start=HORIZON_START, horizon_days=1)
+
+    assert result.scheduled_task_ids == set()
+    assert result.deferred[0].task_id == "A"
+    assert result.deferred[0].reason == DeferralReason.NO_CAPACITY
+
+
+def test_a_task_needing_more_than_the_whole_horizon_is_deferred_before_the_solver_runs():
+    """Structural impossibility, T29's own version of D-024: even summing
+    EVERY free window across the whole horizon can't reach the duration, so
+    this is caught by the pre-solve check (EXCEEDS_TOTAL_CAPACITY_EVEN_SPLIT)
+    rather than costing a wasted contest inside the solver."""
+    corridors = {"XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 100),))}
+    task = MaintenanceTask(
+        "A", "XX-YY", "Engineering", 250, FUTURE, priority=5,
+        defect_type="track geometry defect",
+    )
+
+    result = solve_schedule([task], corridors, horizon_start=HORIZON_START, horizon_days=2)
+
+    assert result.scheduled_task_ids == set()
+    assert result.deferred[0].reason == DeferralReason.EXCEEDS_TOTAL_CAPACITY_EVEN_SPLIT
+    assert "200 min" in result.deferred[0].detail  # 2 days x one 100-min window
+
+
+def test_a_split_tasks_segment_can_still_batch_with_another_department():
+    """One of a split task's segments sharing a window with a different
+    department's task is still a real cross-department batch - splitting
+    does not exempt a task from PRD 13's batching reward."""
+    corridors = {"XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 100), DailyWindow(200, 400)))}
+    big = MaintenanceTask(
+        "BIG", "XX-YY", "Engineering", 250, FUTURE, priority=5,
+        defect_type="track geometry defect",
+    )
+    small = MaintenanceTask("SMALL", "XX-YY", "S&T", 50, FUTURE, priority=3)
+
+    result = solve_schedule([big, small], corridors, horizon_start=HORIZON_START, horizon_days=2)
+
+    assert {"BIG", "SMALL"} <= result.scheduled_task_ids
+    batches = [b for b in result.blocks if b.is_cross_department_batch]
+    assert batches, "expected BIG's second-day window to share with SMALL"
+
+
+def test_dependency_precedence_waits_for_every_segment_of_a_split_prerequisite():
+    """A dependent task must not start until ALL of a split prerequisite's
+    segments finish - not just its first one. STEP1 (splittable, 250 min)
+    needs both of XX-YY's day-1 and day-2 windows; STEP2 depends on it and
+    must land on day 3, never able to start on day 1 or 2 even though
+    STEP1's FIRST segment finishes early on day 1.
+    """
+    corridors = {
+        "XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 150), DailyWindow(200, 350)))
+    }
+    step1 = MaintenanceTask(
+        "STEP1", "XX-YY", "Engineering", 250, FUTURE, priority=5,
+        defect_type="track geometry defect",
+    )
+    step2 = MaintenanceTask(
+        "STEP2", "XX-YY", "Engineering", 100, FUTURE, priority=5,
+        depends_on_task_id="STEP1",
+    )
+
+    result = solve_schedule([step1, step2], corridors, horizon_start=HORIZON_START, horizon_days=3)
+
+    assert {"STEP1", "STEP2"} <= result.scheduled_task_ids
+    assert result.known_gaps["dependencyViolations"]["count"] == 0
+
+    step1_segments = result.split_tasks.get("STEP1", {}).get("segments")
+    assert step1_segments, "expected STEP1 to genuinely need splitting in this scenario"
+    last_step1_day = max(s["date"] for s in step1_segments)
+
+    step2_block = next(b for b in result.blocks if "STEP2" in b.task_ids)
+    assert step2_block.day.isoformat() > last_step1_day
+
+
+def test_resource_no_overlap_applies_to_every_segment_of_a_split_task():
+    """Two tasks sharing a resource, one of them split, must never overlap on
+    ANY pairing of their segments - not just their first ones."""
+    corridors = {
+        "XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 150), DailyWindow(200, 350)))
+    }
+    splittable = MaintenanceTask(
+        "SPLIT", "XX-YY", "Engineering", 250, FUTURE, priority=5,
+        defect_type="track geometry defect", required_resource_ids=("RES-tamper",),
+    )
+    other = MaintenanceTask(
+        "OTHER", "XX-YY", "Engineering", 100, FUTURE, priority=1,
+        required_resource_ids=("RES-tamper",),
+    )
+
+    result = solve_schedule(
+        [splittable, other], corridors, horizon_start=HORIZON_START, horizon_days=2
+    )
+
+    assert result.known_gaps["resourceConflicts"]["count"] == 0
+    # SPLIT is high priority and needs both windows to fit at all; OTHER
+    # sharing the same tamper genuinely cannot fit anywhere alongside it.
+    if "OTHER" in result.scheduled_task_ids:
+        split_windows = {
+            (s["date"], s["windowIndex"]) for s in result.split_tasks["SPLIT"]["segments"]
+        }
+        other_block = next(b for b in result.blocks if "OTHER" in b.task_ids)
+        assert (other_block.day.isoformat(), other_block.window_index) not in split_windows
+
+
+def test_decision_log_marks_a_split_task_explicitly_and_a_normal_one_stays_unmarked():
+    """FR3.3/D-046's discipline applied to T29: `isSplit` must be `True` only
+    for a genuinely multi-segment task, `False` for everything else - never
+    silently defaulting or inferred, and a normal placement must still carry
+    the exact legacy `date`/`window`/`windowIndex` shape every pre-T29
+    consumer already reads.
+    """
+    corridors = {
+        "XX-YY": CorridorAvailability("XX-YY", (DailyWindow(0, 100), DailyWindow(200, 300)))
+    }
+    split_task = MaintenanceTask(
+        "SPLIT", "XX-YY", "Engineering", 250, FUTURE, priority=5,
+        defect_type="track geometry defect",
+    )
+    normal_task = MaintenanceTask("NORMAL", "XX-YY", "S&T", 50, FUTURE, priority=1)
+
+    result = solve_schedule(
+        [split_task, normal_task], corridors, horizon_start=HORIZON_START, horizon_days=2
+    )
+
+    log_by_id = {entry["taskId"]: entry for entry in result.decision_log}
+
+    split_entry = log_by_id["SPLIT"]
+    assert split_entry["isSplit"] is True
+    assert len(split_entry["segments"]) >= 2
+    assert split_entry["date"] == split_entry["segments"][0]["date"]
+
+    normal_entry = log_by_id["NORMAL"]
+    assert normal_entry["isSplit"] is False
+    assert len(normal_entry["segments"]) == 1
+    assert normal_entry["segments"][0]["minutes"] == 50

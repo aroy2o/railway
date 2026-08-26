@@ -218,6 +218,12 @@ export async function persistPriorityScores(queue: PriorityQueueEntry[]): Promis
 
 export interface ComparisonSide {
   contestableScheduled: number;
+  /**
+   * T29 Phase 1 (D-084). How many of `splitOnlyTaskCount` this engine
+   * actually placed. Structurally 0 for the baseline, always - it has no
+   * splitting concept at all, not merely a lower success rate.
+   */
+  splitOnlyScheduled: number;
   crossDepartmentBatches: number;
   doubleBookings: number;
   doubleBookedMinutes: number;
@@ -228,6 +234,15 @@ export interface ComparisonSide {
 
 export interface BaselineComparison {
   contestableTaskCount: number;
+  /**
+   * T29 Phase 1 (docs/DECISIONS.md D-084). Tasks that fit no single window
+   * (so are NOT in `contestableTaskCount`) but that the optimizer can place
+   * by splitting work across non-contiguous sessions - a capability the
+   * baseline structurally does not have. Reported separately, never folded
+   * into `contestableTaskCount`: doing so would imply the baseline could
+   * also do this work, which it cannot, at any horizon length.
+   */
+  splitOnlyTaskCount: number;
   structurallyImpossibleCount: number;
   optimized: ComparisonSide;
   baseline: ComparisonSide;
@@ -241,23 +256,39 @@ export interface BaselineComparison {
  * traps that a naive comparison screen would fall into, and both are structural
  * rather than advisory:
  *
- *   1. 53 of the 89 tasks fit no window on their corridor and are impossible
- *      for either algorithm, so the comparison is drawn from the contestable
+ *   1. Some tasks fit no window on their corridor and are impossible for
+ *      either algorithm, so the comparison is drawn from the contestable
  *      subset. Using the full backlog would credit the optimizer for work
  *      nothing could have placed.
  *   2. The baseline's utilisation is HIGHER, because it over-subscribes
  *      windows. Rendered alone it reads as the baseline winning.
+ *
+ * T29 Phase 1 added a THIRD structural category (D-084), because splitting
+ * genuinely split D-024's old binary in two: a task that fits no single
+ * window is no longer automatically impossible for the OPTIMIZER, even
+ * though it stays impossible for the baseline (which never splits, by
+ * design - D-082). Reporting that gap silently as still "impossible for
+ * both" would understate the optimizer's real, demonstrated capability -
+ * exactly the opposite failure mode from crediting it with work neither
+ * could do, and just as dishonest. `splitOnlyTaskCount` names it explicitly
+ * rather than letting it hide inside `structurallyImpossibleCount`.
  */
 function buildComparison(
   optimized: OptimizedSchedule,
   baseline: BaselineSchedule,
 ): BaselineComparison {
   const contestable = new Set(baseline.contestableTaskIds ?? []);
-  const scheduledIn = (result: { blocks: Array<{ taskIds: string[] }> }): Set<string> =>
-    new Set(result.blocks.flatMap((block) => block.taskIds).filter((id) => contestable.has(id)));
+  const splitOnly = new Set(baseline.splitOnlyTaskIds ?? []);
+  const scheduledMatching = (
+    result: { blocks: Array<{ taskIds: string[] }> },
+    ids: Set<string>,
+  ): Set<string> =>
+    new Set(result.blocks.flatMap((block) => block.taskIds).filter((id) => ids.has(id)));
 
-  const optimizedScheduled = scheduledIn(optimized);
-  const baselineScheduled = scheduledIn(baseline);
+  const optimizedScheduled = scheduledMatching(optimized, contestable);
+  const baselineScheduled = scheduledMatching(baseline, contestable);
+  const optimizedSplitOnly = scheduledMatching(optimized, splitOnly);
+  const baselineSplitOnly = scheduledMatching(baseline, splitOnly);
 
   // T24 changed this from a constant to a real either/or: on this corpus the
   // optimizer now schedules one FEWER contestable task than the baseline
@@ -278,14 +309,33 @@ function buildComparison(
         `dependency awareness, silently ignores. The baseline also still double-books ` +
         `corridors and cannot batch across departments.`;
 
+  // T29 Phase 1 (D-084): a real, load-bearing distinction, not a footnote -
+  // only added when the set is non-empty, since an older/pre-T29 schedule's
+  // baseline response has no `splitOnlyTaskIds` at all and should not carry
+  // a caveat about a capability that generation never considered.
+  const splitOnlyCaveat =
+    splitOnly.size > 0
+      ? `${splitOnly.size} further task(s) fit no single window but ARE placeable by the ` +
+        `optimizer via splitting work across non-contiguous sessions (T29 Phase 1) - a ` +
+        `capability this baseline process structurally does not have, at any horizon length. ` +
+        `The optimizer places ${optimizedSplitOnly.size} of them here. Never counted inside ` +
+        `the ${contestable.size}-task contestable comparison above: crediting the baseline ` +
+        `with a capability it does not have would be its own kind of misleading comparison.`
+      : null;
+
+  const totalTasks = (optimized.metrics.tasksScheduled ?? 0) + (optimized.metrics.tasksDeferred ?? 0);
+
   return {
     contestableTaskCount: contestable.size,
-    structurallyImpossibleCount:
-      (optimized.metrics.tasksScheduled ?? 0) +
-      (optimized.metrics.tasksDeferred ?? 0) -
-      contestable.size,
+    splitOnlyTaskCount: splitOnly.size,
+    // Genuinely impossible for EITHER engine, even considering splitting -
+    // corrected from the pre-T29 arithmetic that only ever subtracted the
+    // contestable set, silently miscounting every split-only task as
+    // "impossible for both" (D-084).
+    structurallyImpossibleCount: totalTasks - contestable.size - splitOnly.size,
     optimized: {
       contestableScheduled: optimizedScheduled.size,
+      splitOnlyScheduled: optimizedSplitOnly.size,
       crossDepartmentBatches: optimized.metrics.crossDepartmentBatches ?? 0,
       doubleBookings: 0,
       doubleBookedMinutes: 0,
@@ -295,6 +345,7 @@ function buildComparison(
     },
     baseline: {
       contestableScheduled: baselineScheduled.size,
+      splitOnlyScheduled: baselineSplitOnly.size,
       crossDepartmentBatches: baseline.metrics.crossDepartmentBatches ?? 0,
       doubleBookings: baseline.metrics.doubleBookings ?? 0,
       doubleBookedMinutes: baseline.metrics.doubleBookedMinutes ?? 0,
@@ -305,8 +356,11 @@ function buildComparison(
     // Not decoration. A screen that renders the numbers without these is
     // making a claim the data does not support (D-031).
     caveats: [
-      'Counts are drawn from the structurally contestable subset. Tasks longer than ' +
-        'any window on their corridor are impossible for both algorithms and are excluded.',
+      'Counts are drawn from the structurally contestable subset - tasks that fit a single ' +
+        'window and so are placeable by either algorithm. Tasks that fit no combination of ' +
+        'windows at all, even considering splitting, are genuinely impossible for both ' +
+        'algorithms and are excluded here.',
+      ...(splitOnlyCaveat ? [splitOnlyCaveat] : []),
       throughputCaveat,
       "Baseline block utilisation is HIGHER than the optimizer's because it over-subscribes " +
         'windows. Never render utilisation without the double-booking count beside it.',

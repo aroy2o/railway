@@ -183,6 +183,13 @@ export interface OptimizerTask {
   dependsOnTaskId: string | null;
   requiredResourceIds: string[];
   failureRiskScore: number | null;
+  /**
+   * T29 Phase 1. PRD 5.2's real defect-type vocabulary - decides whether the
+   * task may be split across 2+ non-contiguous windows
+   * (`optimizer/app/core/splitting.py`). Optional; the optimizer treats a
+   * missing value as never-splittable.
+   */
+  defectType?: string;
 }
 
 /**
@@ -252,6 +259,13 @@ export interface BaselineSchedule {
   deferredTasks: OptimizerDeferredTask[];
   conflicts: unknown;
   contestableTaskIds: string[];
+  /**
+   * T29 Phase 1 (docs/DECISIONS.md D-084). Tasks the baseline can NEVER
+   * place (too long for any single window) but that the optimizer can via
+   * splitting - structurally unreachable for this algorithm, not merely
+   * unscheduled by it.
+   */
+  splitOnlyTaskIds: string[];
   /** PRD 9.5 typed conflicts for the baseline layer. */
   conflictReport: unknown;
 }

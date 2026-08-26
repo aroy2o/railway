@@ -225,6 +225,82 @@ def test_structurally_contestable_identifies_the_fair_comparison_set():
     assert structurally_contestable(tasks, corridors) == {"FITS"}
 
 
+# --------------------------------------------------------------------------- #
+# T29 Phase 1 follow-up (D-084): a task splitting rescues is not "impossible   #
+# for both engines" any more, and structurally_contestable() must NOT change  #
+# to reflect that - it stays the baseline's real, permanent ceiling.          #
+# --------------------------------------------------------------------------- #
+
+def test_structurally_contestable_is_unchanged_by_a_splittable_task():
+    """A splittable task too long for any single window still does NOT belong
+    in `structurally_contestable` - that set means "fits one window", which
+    remains the baseline's real ceiling regardless of what the optimizer can
+    additionally do. Folding it in would falsely imply the baseline could
+    also place it."""
+    corridors = {
+        "A-B": CorridorAvailability("A-B", (DailyWindow(0, 100), DailyWindow(200, 300)))
+    }
+    splittable = MaintenanceTask(
+        "SPLITONLY", "A-B", "Engineering", 250, FAR, priority=50,
+        defect_type="track geometry defect",
+    )
+
+    assert structurally_contestable([splittable], corridors) == set()
+
+
+def test_split_only_contestable_finds_exactly_the_optimizer_only_rescue_set():
+    """The new T29 Phase 1 category: not contestable (too long for one
+    window) but placeable via splitting given the real horizon's total
+    capacity - and explicitly NOT the same set as a genuinely impossible
+    task (whose total capacity still falls short) or a non-splittable one."""
+    from app.core.baseline import split_only_contestable
+
+    corridors = {
+        "A-B": CorridorAvailability("A-B", (DailyWindow(0, 100), DailyWindow(200, 300))),
+    }
+    split_only = MaintenanceTask(
+        "SPLITONLY", "A-B", "Engineering", 250, FAR, priority=50,
+        defect_type="track geometry defect",
+    )
+    still_impossible_even_split = MaintenanceTask(
+        "STILLIMPOSSIBLE", "A-B", "Engineering", 1000, FAR, priority=50,
+        defect_type="track geometry defect",
+    )
+    non_splittable_too_big = MaintenanceTask(
+        "NONSPLIT", "A-B", "Engineering", 250, FAR, priority=50,
+        defect_type="rail fracture",
+    )
+    fits_one_window = MaintenanceTask("FITS", "A-B", "Engineering", 90, FAR, priority=50)
+
+    tasks = [split_only, still_impossible_even_split, non_splittable_too_big, fits_one_window]
+    # 2 windows x 100 min x 2 days = 400 min total - enough for SPLITONLY's
+    # 250 but nowhere near STILLIMPOSSIBLE's 1000.
+    result = split_only_contestable(tasks, corridors, horizon_start=H, horizon_days=2)
+
+    assert result == {"SPLITONLY"}
+
+
+def test_baseline_names_a_split_only_task_as_its_own_limitation_not_a_fact():
+    """The message a splittable, split-only-feasible task gets from the
+    baseline must say "this process cannot", never "impossible for any
+    algorithm" - the optimizer genuinely can place this exact task."""
+    corridors = {
+        "A-B": CorridorAvailability("A-B", (DailyWindow(0, 100), DailyWindow(200, 300)))
+    }
+    splittable = MaintenanceTask(
+        "SPLITONLY", "A-B", "Engineering", 250, FAR, priority=50,
+        defect_type="track geometry defect",
+    )
+
+    result = run_baseline([splittable], corridors, horizon_start=H, horizon_days=2)
+
+    assert result.scheduled_task_ids == set()
+    entry = result.deferred[0]
+    assert entry.reason == DeferralReason.EXCEEDS_LONGEST_WINDOW
+    assert "any algorithm" not in entry.detail
+    assert "this non-splitting process cannot place it" in entry.detail
+
+
 def test_every_task_is_accounted_for():
     """Same FR3.3 invariant the optimizer holds itself to."""
     corridors = {"A-B": CorridorAvailability("A-B", (DailyWindow(0, 150),))}

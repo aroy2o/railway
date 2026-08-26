@@ -421,6 +421,9 @@ def _comparison_fact(schedule: dict) -> Fact | None:
             "optimized": comparison.get("optimized"),
             "baseline": comparison.get("baseline"),
             "contestableTaskCount": comparison.get("contestableTaskCount"),
+            # T29 Phase 1 (D-084): tasks placeable only via splitting - the
+            # baseline structurally cannot do this work, at any horizon.
+            "splitOnlyTaskCount": comparison.get("splitOnlyTaskCount"),
             "structurallyImpossibleCount": comparison.get("structurallyImpossibleCount"),
             "caveats": comparison.get("caveats"),
         },

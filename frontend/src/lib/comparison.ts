@@ -17,6 +17,13 @@
 
 export interface ComparisonSide {
   contestableScheduled: number;
+  /**
+   * T29 Phase 1 (D-084). Always 0 for the baseline - it has no splitting
+   * concept at all. Optional because a schedule generated before this field
+   * existed genuinely lacks it in storage - never assume 0 means "checked
+   * and found none" for such a schedule; it means "not computed".
+   */
+  splitOnlyScheduled?: number;
   crossDepartmentBatches: number;
   doubleBookings: number;
   doubleBookedMinutes: number;
@@ -27,6 +34,15 @@ export interface ComparisonSide {
 
 export interface ComparisonToBaseline {
   contestableTaskCount: number;
+  /**
+   * T29 Phase 1 (D-084). Tasks that fit no single window but that the
+   * optimizer can place by splitting work across non-contiguous sessions -
+   * a capability the baseline structurally does not have. Never folded into
+   * `contestableTaskCount`: that would imply the baseline could also do
+   * this work, which it cannot, at any horizon length. Optional for the
+   * same storage-compatibility reason as `ComparisonSide.splitOnlyScheduled`.
+   */
+  splitOnlyTaskCount?: number;
   structurallyImpossibleCount: number;
   optimized: ComparisonSide;
   baseline: ComparisonSide;
@@ -83,8 +99,40 @@ const fmt = (value: number): string => value.toLocaleString();
  */
 export function buildMetricRows(comparison: ComparisonToBaseline): MetricRow[] {
   const { baseline, optimized, contestableTaskCount } = comparison;
+  const splitOnlyTaskCount = comparison.splitOnlyTaskCount ?? 0;
+  const baselineSplitOnly = baseline.splitOnlyScheduled ?? 0;
+  const optimizedSplitOnly = optimized.splitOnlyScheduled ?? 0;
+
+  // T29 Phase 1 (D-084): a real, load-bearing capability difference, not a
+  // footnote - the baseline cannot place ANY of these tasks, at any horizon
+  // length, because it has no concept of splitting work across
+  // non-contiguous sessions. Omitted (not shown as a hollow "0 / 0") on a
+  // schedule generated before this field existed, or on a corpus that
+  // happens to have no split-only-eligible tasks at all.
+  const splitOnlyRow: MetricRow[] =
+    splitOnlyTaskCount > 0
+      ? [
+          {
+            key: 'splitOnly',
+            label: 'Tasks placeable only by splitting',
+            baseline: `${fmt(baselineSplitOnly)} / ${fmt(splitOnlyTaskCount)}`,
+            optimized: `${fmt(optimizedSplitOnly)} / ${fmt(splitOnlyTaskCount)}`,
+            verdict: 'optimizer-better',
+            note:
+              `${fmt(splitOnlyTaskCount)} task(s) fit no single window on their corridor, so ` +
+              `this baseline process can never place them - not a lower success rate, a ` +
+              `capability it structurally does not have, at any horizon length. The optimizer ` +
+              `places ${fmt(optimizedSplitOnly)} of them by splitting the work across ` +
+              `non-contiguous sessions (T29 Phase 1). Counted separately from the contestable ` +
+              `comparison below - never folded in, since that would credit the baseline with a ` +
+              `capability it does not have.`,
+            emphasis: 'headline',
+          },
+        ]
+      : [];
 
   return [
+    ...splitOnlyRow,
     {
       key: 'doubleBookings',
       label: 'Double-booked corridors',

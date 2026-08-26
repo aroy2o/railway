@@ -10,8 +10,10 @@ WHAT IS IMPLEMENTED FROM PRD SECTION 13
 ---------------------------------------
 * Decision variables: `assign[i][j]` per task i and candidate free window j on
   its corridor.
-* Each task assigned to at most one window; unassigned means deferred, and every
-  deferral carries a machine-readable reason (FR3.3 - never silently dropped).
+* Each task assigned to at most one window - EXCEPT a splittable task (T29
+  Phase 1, see below), which may use several; unassigned means deferred
+  either way, and every deferral carries a machine-readable reason (FR3.3 -
+  never silently dropped).
 * Sum of assigned durations in a window <= window length.
 * Windows on one corridor never overlap - guaranteed structurally by T3, which
   emits the merged complement of occupancy, and asserted here rather than
@@ -25,8 +27,8 @@ WHAT IS IMPLEMENTED FROM PRD SECTION 13
   term. A dependent task's window may only start at or after its prerequisite's
   window ends, and a dependent may only be scheduled at all if its prerequisite
   is too - transitively, so a 3-stage chain with a structurally unschedulable
-  first stage takes the whole chain out. See `_add_dependency_constraints` and
-  `DeferralReason.PREREQUISITE_UNSCHEDULABLE`.
+  first stage takes the whole chain out. See `solve_schedule`'s "constraint:
+  dependency precedence" section and `DeferralReason.PREREQUISITE_UNSCHEDULABLE`.
 * Resource no-overlap (T25, PRD 9.8): also a hard constraint. Two tasks
   sharing any `required_resource_ids` entry (crew, machine or permission)
   cannot occupy overlapping windows, on any corridor - resources are
@@ -35,15 +37,52 @@ WHAT IS IMPLEMENTED FROM PRD SECTION 13
 * Objective: a simplified form of PRD 13.1 - priority-weighted coverage, SLA
   compliance and batching rewarded; unused block time and fragmentation
   penalised.
+* Task splitting (T29 Phase 1, new scope beyond the original PRD 13 model): a
+  task whose defect type is deemed splittable (`app.core.splitting` - a
+  documented judgement call, not a PRD fact) may be covered by 2+
+  non-contiguous windows instead of exactly one, each segment >=
+  `MIN_SPLIT_SEGMENT_MINUTES`, summing exactly to the task's full duration.
+  Mechanically: `assign[i][j]` keeps meaning "task i has some presence in
+  window j" for every constraint that only needs that (dependency
+  precedence, resource no-overlap, batching, pins); a new
+  `segment_minutes[i][j]` carries how much of the duration that presence
+  represents, and a new per-task `covered[i]` replaces "at most one window"
+  for a splittable task, tied to `sum(segment_minutes) == duration *
+  covered` - so a task is always either fully scheduled or fully deferred,
+  never partially done. **Known limitation, flagged rather than silently
+  left:** T20's `Pin`/T27's `pins` still name at most ONE window per task.
+  Pinning a splittable task therefore pins only one of its segments, not
+  its full multi-segment placement - a real gap for what-if/emergency
+  re-optimization over an already-split plan, out of this phase's scope
+  (extending Pin to a per-task window SET) and not yet built.
+----------------------------------------------------------------
+This list was originally "deferred to a later task"; every task named below
+is now done (audit session, 2026-08-25 - the module docstring had not been
+updated to say so, which is its own small honesty gap: a reader checking
+"is this built yet" against source would have been told no for features
+that have been done for days). Each ended up implemented by a mechanism
+*other* than a weighted objective term, by deliberate choice, not oversight:
 
-WHAT IS DEFERRED, AND TO WHERE
-------------------------------
-* Real priority scores            -> T7  (FR2.3). `MaintenanceTask.priority` is
-                                    a PLACEHOLDER carrying severity 1-5.
-* Asset risk reduction term (beta) -> T16 (FR2.2), needs failureRiskScore.
-* Train-delay-impact term (lambda) -> T22 (PRD 9.6).
-* Policy-slider weights            -> T23 (PRD 13.1). Weights are constants here.
-* Weather/seasonal risk term (xi)  -> T26 (PRD 9.9).
+* Real priority scores (FR2.3, T7) - done. `MaintenanceTask.priority` is the
+  real weighted score (severity + asset criticality + SLA urgency/breach),
+  not a severity placeholder. Feeds `weights.coverage * task.priority` above.
+* Asset risk reduction (beta, FR2.2, T16) - `failureRiskScore` is computed
+  and surfaced (Controller Dashboard, `/explain`), but is reporting-only:
+  it does not reduce or reward anything in this objective.
+* Train-delay-impact (lambda, PRD 9.6, T22) - traffic-block cost and train
+  impact are computed and shown per block, same reporting-only treatment.
+* Weather/seasonal risk (xi, PRD 9.9, T26) - `seasonalRiskFlag` is real data
+  (Ministry of Jal Shakti), advisory only: the solver neither avoids nor
+  prioritises flagged corridors. See T26's decision log entry for why this
+  one is real but narrow (state-level, not section-specific).
+* Resource conflicts (rho, PRD 9.8, T25) - the opposite direction: promoted
+  to a hard constraint (`solve_schedule`'s "constraint: resource no-overlap"
+  section) rather than a soft objective penalty, same treatment as
+  dependency precedence (T24) above.
+* Policy-slider weights (PRD 13.1, T23) - NOT deferred and not a constant:
+  `weights.coverage`/`sla_compliance`/`batching`/`unused_minute`/
+  `fragmentation` above are caller-supplied (Controller Dashboard sliders),
+  validated against the widest range verified safe on the real corpus.
 """
 
 from __future__ import annotations
@@ -54,6 +93,7 @@ from datetime import date, timedelta
 
 from ortools.sat.python import cp_model
 
+from app.core.splitting import MIN_SPLIT_SEGMENT_MINUTES, is_splittable_defect
 from app.core.trains import cheapest_displacement
 from app.core.weather import detect_weather_risk
 
@@ -165,6 +205,20 @@ class MaintenanceTask:
     #: where it does, not merely that it ranks there (T17). `/optimize` already
     #: computed this and discarded all but `solver_priority`; see D-048.
     priority_breakdown: dict | None = None
+    #: T29 Phase 1. PRD 5.2's real defect-type vocabulary (e.g. "rail
+    #: fracture", "track geometry defect"). Empty string when unset -
+    #: `is_splittable` is then always False, which keeps every pre-T29
+    #: caller (hand-built tests included) on exactly the old single-window
+    #: behaviour with zero opt-in required.
+    defect_type: str = ""
+
+    @property
+    def is_splittable(self) -> bool:
+        """Whether this task's real-world work may be split across 2+
+        non-contiguous windows (T29 Phase 1). See `app.core.splitting` for
+        the rule and its reasoning - a documented judgement call, not a fact.
+        """
+        return is_splittable_defect(self.defect_type)
 
 
 @dataclass(frozen=True)
@@ -209,10 +263,33 @@ class Pin:
     `window_key=None` means "exclude this task from the model entirely" - the
     what-if question "what if we deferred this instead, to free the
     capacity?"
+
+    T29 PHASE 1 BUG, FOUND AND FIXED IN THE SAME SESSION SPLITTING SHIPPED IN
+    ---------------------------------------------------------------------------
+    A split task's real placement is 2+ windows, not one - `window_key`
+    alone cannot express "hold this task's placement exactly as it stands"
+    once splitting exists. T27's emergency re-optimization builds one `Pin`
+    per currently-placed task from `current_placements`; before this field
+    existed, a split task collapsed to whichever ONE of its segments
+    happened to be last in that list, silently leaving its OTHER segments
+    completely unpinned - free for the very re-solve that is supposed to
+    hold "everything off the affected corridor exactly fixed" (PRD 9.10) to
+    move or drop them instead. Caught by re-running T27's own real-corpus
+    test after enabling splitting: dozens of off-corridor blocks that should
+    have been byte-identical were not. This is not a T20/what-if-shaped risk
+    (that sandbox never commits); T27 commits, so a silent gap here could
+    have let a real emergency re-solve discard part of an already-executed
+    possession. `window_keys` closes it: every window named here is forced
+    to stay assigned, so a caller pinning a split task's full segment list
+    genuinely holds all of it, not just one arbitrarily-chosen piece.
     """
 
     task_id: str
-    window_key: str | None
+    window_key: str | None = None
+    #: T29 Phase 1. All of a split task's windows, when more than one must be
+    #: held simultaneously - mutually exclusive with `window_key` (set
+    #: exactly one of the two, never both, never neither unless excluding).
+    window_keys: tuple[str, ...] | None = None
 
 
 class DeferralReason:
@@ -239,6 +316,13 @@ class DeferralReason:
     #: point, so a 3-stage chain whose first stage is structural takes the whole
     #: chain out rather than leaving stages 2-3 to lose an unwinnable contest.
     PREREQUISITE_UNSCHEDULABLE = "PREREQUISITE_UNSCHEDULABLE"
+    #: T29 Phase 1: this task's defect type is splittable, but even summing
+    #: EVERY free window on its corridor across the whole horizon (each
+    #: segment floored at MIN_SPLIT_SEGMENT_MINUTES) is not enough to reach
+    #: its full duration. Distinct from EXCEEDS_LONGEST_WINDOW, which this
+    #: replaces for a splittable task - splitting was tried and still did
+    #: not fit, not skipped.
+    EXCEEDS_TOTAL_CAPACITY_EVEN_SPLIT = "EXCEEDS_TOTAL_CAPACITY_EVEN_SPLIT"
 
 
 @dataclass
@@ -254,6 +338,12 @@ class ScheduledBlock:
     used_minutes: int
     task_ids: list[str]
     departments: list[str]
+    #: T29 Phase 1: task_id -> minutes THIS block contributes to that task.
+    #: Equals the task's full duration for a normal (non-split) placement;
+    #: less than it for one segment of a split task - which is exactly what
+    #: distinguishes the two cases for a reader of this block alone, without
+    #: cross-referencing `ScheduleResult.split_tasks`.
+    segment_minutes: dict[str, int] = field(default_factory=dict)
 
     @property
     def unused_minutes(self) -> int:
@@ -278,6 +368,7 @@ class ScheduledBlock:
             "taskIds": sorted(self.task_ids),
             "departments": sorted(set(self.departments)),
             "isCrossDepartmentBatch": self.is_cross_department_batch,
+            "taskSegmentMinutes": dict(sorted(self.segment_minutes.items())),
         }
 
 
@@ -319,6 +410,13 @@ class ScheduleResult:
     deferred: list[DeferredTask] = field(default_factory=list)
     decision_log: list[dict] = field(default_factory=list)
     known_gaps: dict = field(default_factory=dict)
+    #: T29 Phase 1: task_id -> split summary, present ONLY for a task placed
+    #: across 2+ segments (a task that happened to fit in one window is not
+    #: "split" even if its defect type is splittable). The authoritative
+    #: source for "is this task split" - the decision log's `isSplit`/
+    #: `segments` are derived from this same data, never a second
+    #: computation, so the two can never disagree.
+    split_tasks: dict[str, dict] = field(default_factory=dict)
 
     @property
     def scheduled_task_ids(self) -> set[str]:
@@ -336,6 +434,7 @@ class ScheduleResult:
             "blockMinutesCapacity": capacity,
             "blockUtilisationPct": round(100 * used / capacity, 2) if capacity else 0.0,
             "unusedBlockMinutes": capacity - used,
+            "tasksSplit": len(self.split_tasks),
         }
 
     def as_dict(self) -> dict:
@@ -351,6 +450,7 @@ class ScheduleResult:
             "deferredTasks": [d.as_dict() for d in self.deferred],
             "decisionLog": self.decision_log,
             "knownGaps": self.known_gaps,
+            "splitTasks": self.split_tasks,
         }
 
 
@@ -413,6 +513,61 @@ def expand_windows(
                 )
 
     return instances
+
+
+class StructuralCategory:
+    """Where a task sits before the solver ever weighs one against another
+    (T29 Phase 1 follow-up, docs/DECISIONS.md D-084).
+
+    Three-way, not two-way, because splitting genuinely split D-024's old
+    binary in two: a task the BASELINE (which never splits, deliberately -
+    D-082) can never place is no longer automatically a task the OPTIMIZER
+    can never place either.
+    """
+
+    #: Fits a single window outright - placeable by ANY engine, splitting or
+    #: not. This is the fair, apples-to-apples comparison set (D-031) and is
+    #: UNCHANGED by T29 Phase 1 - it must stay exactly what `structurally_
+    #: contestable()` already computes, since that is the baseline's real
+    #: ceiling regardless of what the optimizer can additionally do.
+    CONTESTABLE = "contestable"
+    #: T29 Phase 1: does NOT fit a single window, but the defect type is
+    #: splittable and the corridor's total capacity across this horizon
+    #: (respecting MIN_SPLIT_SEGMENT_MINUTES) reaches the full duration.
+    #: Structurally unreachable for the baseline - not a close call, a
+    #: capability the baseline categorically does not have - and only
+    #: reachable for the optimizer if it also wins the resulting real
+    #: capacity contest (see `DeferralReason.NO_CAPACITY`).
+    SPLIT_ONLY = "splitOnly"
+    #: Genuinely impossible for either engine even considering splitting -
+    #: `DeferralReason.EXCEEDS_LONGEST_WINDOW` (not splittable) or
+    #: `EXCEEDS_TOTAL_CAPACITY_EVEN_SPLIT` (splittable but still not enough
+    #: total capacity across the whole horizon).
+    IMPOSSIBLE = "impossible"
+
+
+def classify_structural_feasibility(
+    task: MaintenanceTask, candidates: list[WindowInstance]
+) -> str:
+    """One task's `StructuralCategory`, given its corridor's real candidate
+    windows across the horizon being solved.
+
+    The SINGLE source of truth for "could this task ever be placed" - used
+    by `solve_schedule`'s own pre-solve check (so the actual solve and this
+    classification can never disagree) and by `app.core.baseline`'s
+    reporting (so the Comparison view's denominators match what the solver
+    itself decided, not a second, potentially-drifting computation).
+    """
+    if not candidates:
+        return StructuralCategory.IMPOSSIBLE
+    longest = max(window.duration_minutes for window in candidates)
+    if task.duration_minutes <= longest:
+        return StructuralCategory.CONTESTABLE
+    if task.is_splittable:
+        total_capacity = sum(window.duration_minutes for window in candidates)
+        if total_capacity >= task.duration_minutes:
+            return StructuralCategory.SPLIT_ONLY
+    return StructuralCategory.IMPOSSIBLE
 
 
 # --------------------------------------------------------------------------- #
@@ -488,59 +643,92 @@ def solve_schedule(
             )
             continue
 
+        # D-084: the single shared classification also `app.core.baseline`
+        # reports from, so this decision and the Comparison view's
+        # denominators can never drift apart.
+        category = classify_structural_feasibility(task, candidates)
+        if category in (StructuralCategory.CONTESTABLE, StructuralCategory.SPLIT_ONLY):
+            schedulable.append(task)
+            continue
+
         longest = max(window.duration_minutes for window in candidates)
-        if task.duration_minutes > longest:
-            # T22 Phase A: the deferral message has always said this needs a
-            # traffic block. Now it says what that block would COST, so the
-            # sentence stops being an explanation and becomes a decision a
-            # Controller can actually take.
-            corridor = corridors[task.corridor_id]
-            option = cheapest_displacement(
-                task.corridor_id,
-                [
-                    {"startMin": w.start_minute, "endMin": w.end_minute}
-                    for w in corridor.daily_windows
-                ],
-                [
-                    {"startMin": w.start_minute, "endMin": w.end_minute}
-                    for w in corridor.occupied_windows
-                ],
-                corridor.train_class_mix,
-                task.duration_minutes,
-            )
-            # "0 trains" and "we were not given the occupancy data" are very
-            # different statements, and the first one would be a false claim
-            # dressed as a reassuring one. Only assert a cost when the corridor
-            # actually carried occupancy data.
-            impact = option.impact
-            if not corridor.occupied_windows:
-                cost = (
-                    " The cost of that block is not computed here: no train-occupancy "
-                    "data was supplied for this corridor."
-                )
-            elif impact is not None:
-                cost = (
-                    f" A traffic block would displace {impact.trains_affected} train(s) "
-                    f"for {impact.displaced_minutes} min."
-                )
-            else:
-                cost = f" No traffic block is possible: {option.reason}."
+
+        if task.is_splittable:
+            # T29 Phase 1: this defect type may be covered by 2+ non-contiguous
+            # segments, each >= MIN_SPLIT_SEGMENT_MINUTES, summing to the full
+            # duration - but `category` above is IMPOSSIBLE, so even that did
+            # not reach the required total. Structural impossibility here means
+            # the same thing D-024 means for a non-split task: even the best
+            # possible packing cannot reach the required total - checked before
+            # the solver runs so this stays separated from losing a real
+            # capacity contest. Every window T3 emits already clears
+            # MIN_SPLIT_SEGMENT_MINUTES (D-010's own 30-minute floor), so
+            # summing full window capacity is the right upper bound to compare
+            # against.
+            total_capacity = sum(window.duration_minutes for window in candidates)
             deferred.append(
                 DeferredTask(
                     task.task_id,
-                    DeferralReason.EXCEEDS_LONGEST_WINDOW,
-                    f"needs {task.duration_minutes} min but the longest free window on "
-                    f"{task.corridor_id} is {longest} min - this corridor's traffic leaves "
-                    f"no gap long enough, so the work requires a traffic block that displaces "
-                    f"trains (train-impact-aware planning, T22)." + cost,
-                    displacement=(
-                        option.as_dict() if corridor.occupied_windows else None
-                    ),
+                    DeferralReason.EXCEEDS_TOTAL_CAPACITY_EVEN_SPLIT,
+                    f"needs {task.duration_minutes} min total and defect type "
+                    f"'{task.defect_type}' is treated as splittable (T29 Phase 1), but "
+                    f"even summing every free window on {task.corridor_id} across the "
+                    f"{horizon} horizon gives only {total_capacity} min across "
+                    f"{len(candidates)} window(s) - no combination of segments (each "
+                    f">= {MIN_SPLIT_SEGMENT_MINUTES} min) can cover it",
                 )
             )
             continue
 
-        schedulable.append(task)
+        # T22 Phase A: the deferral message has always said this needs a
+        # traffic block. Now it says what that block would COST, so the
+        # sentence stops being an explanation and becomes a decision a
+        # Controller can actually take. Reached only for a non-splittable
+        # task (T29 Phase 1 handled splittable ones above).
+        corridor = corridors[task.corridor_id]
+        option = cheapest_displacement(
+            task.corridor_id,
+            [
+                {"startMin": w.start_minute, "endMin": w.end_minute}
+                for w in corridor.daily_windows
+            ],
+            [
+                {"startMin": w.start_minute, "endMin": w.end_minute}
+                for w in corridor.occupied_windows
+            ],
+            corridor.train_class_mix,
+            task.duration_minutes,
+        )
+        # "0 trains" and "we were not given the occupancy data" are very
+        # different statements, and the first one would be a false claim
+        # dressed as a reassuring one. Only assert a cost when the corridor
+        # actually carried occupancy data.
+        impact = option.impact
+        if not corridor.occupied_windows:
+            cost = (
+                " The cost of that block is not computed here: no train-occupancy "
+                "data was supplied for this corridor."
+            )
+        elif impact is not None:
+            cost = (
+                f" A traffic block would displace {impact.trains_affected} train(s) "
+                f"for {impact.displaced_minutes} min."
+            )
+        else:
+            cost = f" No traffic block is possible: {option.reason}."
+        deferred.append(
+            DeferredTask(
+                task.task_id,
+                DeferralReason.EXCEEDS_LONGEST_WINDOW,
+                f"needs {task.duration_minutes} min but the longest free window on "
+                f"{task.corridor_id} is {longest} min - this corridor's traffic leaves "
+                f"no gap long enough, so the work requires a traffic block that displaces "
+                f"trains (train-impact-aware planning, T22)." + cost,
+                displacement=(
+                    option.as_dict() if corridor.occupied_windows else None
+                ),
+            )
+        )
 
     # --- T24: prerequisite chains, walked to a fixed point ------------------
     # A task whose prerequisite already failed the physical-fit check above
@@ -577,10 +765,25 @@ def solve_schedule(
 
     model = cp_model.CpModel()
 
-    # --- decision variables: assign[i][j] (PRD Section 13) ------------------
-    # Only created where the task physically fits the window, which keeps the
-    # model small and makes infeasibility explicit rather than implicit.
+    # --- decision variables: assign[i][j] (PRD Section 13), plus T29 Phase 1's
+    # per-window segment minutes and per-task coverage flag -------------------
+    # `assign[(task_id, window_key)]` keeps its original meaning throughout the
+    # rest of this function: "task i has SOME presence in window j" - true for
+    # a non-split task's one placement, and equally true for one of a split
+    # task's several segments. Every constraint below that only needs to know
+    # "is this task here" (dependency precedence, resource no-overlap,
+    # batching, pins) is therefore untouched by splitting. What changes is how
+    # much of the task's DURATION that presence represents -
+    # `segment_minutes[(task_id, window_key)]`, 0 for an unused pair - and
+    # whether the task is scheduled at all, in full - `covered[task_id]` -
+    # which replaces the old blanket "at most one window" for a splittable
+    # task while keeping it, unchanged, for every other one.
     assign: dict[tuple[str, str], cp_model.IntVar] = {}
+    # A real IntVar for a splittable task's segment; a plain linear expression
+    # (`duration * assign`) for a non-split one - see the creation loop below
+    # for why. `solver.value()` reads either one the same way.
+    segment_minutes: dict[tuple[str, str], object] = {}
+    covered: dict[str, cp_model.IntVar] = {}
     candidates_for_task: dict[str, list[WindowInstance]] = {}
 
     # A blocked window is unusable for a NEW placement - but a pin naming that
@@ -591,20 +794,83 @@ def solve_schedule(
     all_pins = list(pins or [])
     if pin is not None:
         all_pins.append(pin)
-    pinned_window_keys = {p.window_key for p in all_pins if p.window_key is not None}
+    pinned_window_keys = {p.window_key for p in all_pins if p.window_key is not None} | {
+        key for p in all_pins if p.window_keys is not None for key in p.window_keys
+    }
     blocked = (blocked_window_keys or frozenset()) - pinned_window_keys
 
     for task in schedulable:
-        fitting = [
-            window
-            for window in windows_by_corridor[task.corridor_id]
-            if task.duration_minutes <= window.duration_minutes
-            and window.key not in blocked
-        ]
+        corridor_windows = windows_by_corridor[task.corridor_id]
+        longest_on_corridor = max(w.duration_minutes for w in corridor_windows)
+        # A splittable task that already fits in ONE window needs no widening
+        # at all - nothing in the objective rewards gratuitous splitting
+        # (coverage/SLA are per-TASK now, and fragmentation actively penalises
+        # opening extra windows), so giving it every window on the corridor as
+        # a candidate would only add combinatorial size with zero possible
+        # benefit. Measured on the real corpus: widening indiscriminately
+        # (every splittable task, not just the ones that need it) pushed the
+        # solve from OPTIMAL in under a second to not proving optimal within
+        # 90s and losing run-to-run determinism (D-022's guarantee) - this
+        # check is what keeps splitting's cost proportional to how many tasks
+        # actually need it (32 of 89 on this corpus), not to how many are
+        # merely eligible (50 of 89).
+        needs_split = task.is_splittable and task.duration_minutes > longest_on_corridor
+        if needs_split:
+            # Every window T3 emits already clears MIN_SPLIT_SEGMENT_MINUTES
+            # (D-010's 30-minute floor), so nothing needs filtering out here on
+            # segment-size grounds - the floor is enforced per-segment below.
+            # Not filtered by "duration <= window duration" either: a segment
+            # may be shorter than the task's full duration.
+            fitting = [window for window in corridor_windows if window.key not in blocked]
+        else:
+            fitting = [
+                window
+                for window in windows_by_corridor[task.corridor_id]
+                if task.duration_minutes <= window.duration_minutes
+                and window.key not in blocked
+            ]
         candidates_for_task[task.task_id] = fitting
+        covered[task.task_id] = model.new_bool_var(f"covered[{task.task_id}]")
+
         for window in fitting:
-            assign[(task.task_id, window.key)] = model.new_bool_var(
-                f"assign[{task.task_id}][{window.key}]"
+            key = (task.task_id, window.key)
+            assign[key] = model.new_bool_var(f"assign[{task.task_id}][{window.key}]")
+
+        if needs_split:
+            # A real IntVar only for a splittable task - non-split tasks are
+            # the majority even on this corpus, and giving every one of them
+            # a needless extra integer variable plus a linking equality
+            # measurably slowed the solve for no informational gain (an
+            # equality-defined variable IS the expression it's tied to).
+            for window in fitting:
+                key = (task.task_id, window.key)
+                cap = min(task.duration_minutes, window.duration_minutes)
+                segment_minutes[key] = model.new_int_var(
+                    0, cap, f"segmin[{task.task_id}][{window.key}]"
+                )
+                model.add(segment_minutes[key] <= cap * assign[key])
+                model.add(segment_minutes[key] >= MIN_SPLIT_SEGMENT_MINUTES * assign[key])
+            # Sum of segments == the full duration when covered, 0 when not -
+            # never a partial task (FR3.3 stays scheduled/deferred, never
+            # "half done"). Each USED segment is floored at
+            # MIN_SPLIT_SEGMENT_MINUTES; the number of segments self-limits
+            # from that floor, so no separate cap on segment count is needed.
+            model.add(
+                sum(segment_minutes[(task.task_id, w.key)] for w in fitting)
+                == task.duration_minutes * covered[task.task_id]
+            )
+        else:
+            # Unchanged from before splitting existed: exactly one window (or
+            # none), and that one window carries the whole duration. No new
+            # variable needed - `duration * assign` already IS the segment
+            # size, definitionally, so it is stored as that expression
+            # directly rather than a variable CP-SAT would have to solve for.
+            for window in fitting:
+                key = (task.task_id, window.key)
+                segment_minutes[key] = task.duration_minutes * assign[key]
+            model.add_at_most_one(assign[(task.task_id, w.key)] for w in fitting)
+            model.add(
+                covered[task.task_id] == sum(assign[(task.task_id, w.key)] for w in fitting)
             )
 
     # --- constraint: dependency precedence (T24, PRD 9.7) -------------------
@@ -629,10 +895,11 @@ def solve_schedule(
             continue
         dep_windows = candidates_for_task[task.task_id]
         pre_windows = candidates_for_task[prereq_id]
-        model.add(
-            sum(assign[(task.task_id, w.key)] for w in dep_windows)
-            <= sum(assign[(prereq_id, w.key)] for w in pre_windows)
-        )
+        # T29 Phase 1: `covered` replaces the old `sum(assign dep) <=
+        # sum(assign prereq)` - both express "scheduled at all implies the
+        # prerequisite is too", but only `covered` stays correct once a task
+        # may have more than one `assign` var set to 1.
+        model.add(covered[task.task_id] <= covered[prereq_id])
         for w_dep in dep_windows:
             for w_pre in pre_windows:
                 if (w_pre.day, w_pre.end_minute) > (w_dep.day, w_dep.start_minute):
@@ -658,11 +925,29 @@ def solve_schedule(
             for second in group[i + 1 :]:
                 resource_pairs.add(tuple(sorted((first.task_id, second.task_id))))
 
+    # T29 Phase 1 widened some tasks' candidate sets from "the few windows
+    # long enough" to "every window on the corridor" (see the variable-
+    # creation loop above), which made the naive cross product here measurably
+    # expensive on the real corpus - two windows on different days can never
+    # overlap, so grouping each side by day first and only cross-producting
+    # WITHIN a day (rather than filtering after the fact) skips that dead
+    # weight up front instead of paying for it and discarding it.
+    def _by_day(instances: list[WindowInstance]) -> dict[date, list[WindowInstance]]:
+        grouped: dict[date, list[WindowInstance]] = {}
+        for instance in instances:
+            grouped.setdefault(instance.day, []).append(instance)
+        return grouped
+
     for task_a_id, task_b_id in sorted(resource_pairs):
-        for w_a in candidates_for_task[task_a_id]:
-            for w_b in candidates_for_task[task_b_id]:
-                if w_a.day == w_b.day and _overlaps(w_a, w_b):
-                    model.add(assign[(task_a_id, w_a.key)] + assign[(task_b_id, w_b.key)] <= 1)
+        windows_a_by_day = _by_day(candidates_for_task[task_a_id])
+        windows_b_by_day = _by_day(candidates_for_task[task_b_id])
+        for day, windows_a in windows_a_by_day.items():
+            for w_a in windows_a:
+                for w_b in windows_b_by_day.get(day, ()):
+                    if _overlaps(w_a, w_b):
+                        model.add(
+                            assign[(task_a_id, w_a.key)] + assign[(task_b_id, w_b.key)] <= 1
+                        )
 
     # --- T20/T27: pins, if any were given -------------------------------------
     #
@@ -672,13 +957,28 @@ def solve_schedule(
     # of D-025's "a rewarded indicator must be free to be zero". `all_pins`
     # (merging `pin` and `pins`) was already computed above, ahead of
     # `candidates_for_task`, so a pin naming a blocked window could stay exempt.
+    splittable_schedulable_ids = {task.task_id for task in schedulable if task.is_splittable}
     seen_pin_tasks: set[str] = set()
     for one_pin in all_pins:
         if one_pin.task_id in seen_pin_tasks:
             raise ValueError(f"task {one_pin.task_id} is pinned more than once")
         seen_pin_tasks.add(one_pin.task_id)
 
-        if one_pin.window_key is None:
+        if one_pin.window_key is not None and one_pin.window_keys is not None:
+            raise ValueError(
+                f"pin for {one_pin.task_id} sets both window_key and window_keys - set exactly one"
+            )
+
+        # T29 Phase 1: a split task's real placement is 2+ windows, so
+        # holding it fixed means holding ALL of them, not just one - see
+        # the `Pin` docstring for the real bug this closes.
+        keys: tuple[str, ...] = (
+            one_pin.window_keys
+            if one_pin.window_keys is not None
+            else ((one_pin.window_key,) if one_pin.window_key is not None else ())
+        )
+
+        if not keys:
             if one_pin.task_id in candidates_for_task:
                 model.add(
                     sum(
@@ -689,27 +989,41 @@ def solve_schedule(
                 )
             # A task already outside `schedulable` (structurally deferred) is
             # already excluded - pinning it out again is a no-op, not an error.
-        else:
-            if one_pin.task_id not in candidates_for_task:
+            continue
+
+        if one_pin.task_id not in candidates_for_task:
+            raise ValueError(
+                f"cannot pin {one_pin.task_id} to {keys}: this task fits "
+                f"no window in the {horizon} horizon at all (structurally deferred), so "
+                f"there is no placement to force it into"
+            )
+        if len(keys) > 1 and one_pin.task_id not in splittable_schedulable_ids:
+            raise ValueError(
+                f"cannot pin {one_pin.task_id} to {len(keys)} windows: this task's defect "
+                f"type is not splittable, so it can never legitimately occupy more than one"
+            )
+        for window_key in keys:
+            if (one_pin.task_id, window_key) not in assign:
                 raise ValueError(
-                    f"cannot pin {one_pin.task_id} to {one_pin.window_key}: this task fits "
-                    f"no window in the {horizon} horizon at all (structurally deferred), so "
-                    f"there is no placement to force it into"
-                )
-            if (one_pin.task_id, one_pin.window_key) not in assign:
-                raise ValueError(
-                    f"cannot pin {one_pin.task_id} to {one_pin.window_key}: that window is "
+                    f"cannot pin {one_pin.task_id} to {window_key}: that window is "
                     f"not a real, fitting, same-corridor candidate for this task"
                 )
-            model.add(assign[(one_pin.task_id, one_pin.window_key)] == 1)
+            model.add(assign[(one_pin.task_id, window_key)] == 1)
+        if len(keys) > 1:
+            # Multiple windows forced assigned is only a genuine "this task's
+            # full placement is held" when the task is actually covered -
+            # otherwise a contradiction elsewhere could let the solver try to
+            # satisfy `== 1` on some windows while `covered` stays free. Since
+            # each `assign[key] == 1` already forces `covered == 1` through
+            # the splittable-task linking constraint, this is redundant but
+            # documents the intent explicitly rather than relying on a reader
+            # tracing it back through an unrelated section of the model.
+            model.add(covered[one_pin.task_id] == 1)
 
-    # --- constraint: each task in at most one window ------------------------
-    # "At most", not "exactly": zero means deferred, which FR3.3 requires to be
-    # a representable outcome rather than an infeasible model.
-    for task in schedulable:
-        model.add_at_most_one(
-            assign[(task.task_id, window.key)] for window in candidates_for_task[task.task_id]
-        )
+    # "Each task in at most one window" (FR3.3: zero means deferred, a
+    # representable outcome, not an infeasible model) is now enforced above,
+    # per task, at variable-creation time - unconditionally for a non-split
+    # task, and via `covered` for a splittable one that may use several.
 
     # --- constraint: window capacity, and the open/used bookkeeping ---------
     window_open: dict[str, cp_model.IntVar] = {}
@@ -729,9 +1043,9 @@ def solve_schedule(
         is_open = model.new_bool_var(f"open[{window.key}]")
         window_open[window.key] = is_open
 
-        used = sum(
-            task.duration_minutes * assign[(task.task_id, window.key)] for task in occupants
-        )
+        # T29 Phase 1: real occupied minutes, whether a task's presence here
+        # is its whole duration (non-split) or one segment of several.
+        used = sum(segment_minutes[(task.task_id, window.key)] for task in occupants)
         used_expr[window.key] = used
 
         # PRD Section 13: sum of assigned durations <= window length. Multiplying
@@ -745,12 +1059,15 @@ def solve_schedule(
     # --- objective: simplified PRD 13.1 -------------------------------------
     objective_terms = []
 
-    # alpha - priority-weighted coverage.
+    # alpha - priority-weighted coverage. One term per TASK, not per window:
+    # `covered` is exactly 0/1 for both split and non-split tasks (T29 Phase
+    # 1), so this rewards a task once, in full, when scheduled - never
+    # proportional to how many segments a split task happens to use. Summing
+    # per-window `assign` here instead (the pre-T29 form) would over-reward a
+    # split task in proportion to its segment count, which is exactly the
+    # kind of reward-scale bug D-025 warns about in a new shape.
     for task in schedulable:
-        for window in candidates_for_task[task.task_id]:
-            objective_terms.append(
-                weights.coverage * task.priority * assign[(task.task_id, window.key)]
-            )
+        objective_terms.append(weights.coverage * task.priority * covered[task.task_id])
 
     # epsilon - SLA compliance, as a REWARD rather than a hard deadline.
     # 17 of the 89 real tasks are already past their slaDueDate at the horizon
@@ -758,12 +1075,26 @@ def solve_schedule(
     # is precisely backwards - overdue maintenance is more urgent, not less.
     # PRD 13.1 lists SLA compliance as an objective term, and Section 13's
     # "where feasible" wording says the same. See docs/DECISIONS.md D-020.
+    #
+    # T29 Phase 1: also one term per task now, via `within_sla` - the natural
+    # generalisation of "the window it landed in is on time" to "every
+    # segment of the work completed on time" (a split task is not genuinely
+    # SLA-compliant if its LAST segment lands after the deadline, even if its
+    # first one did not). `within_sla <= covered` keeps it free to be zero for
+    # an uncovered task, and unconstrained-but-rewarded otherwise - the same
+    # "reward variable must be free to be zero" discipline D-025 established,
+    # checked in the direction that matters here: without that link, an
+    # UNCOVERED task could claim the reward for free, since nothing else
+    # would stop the solver setting the flag true.
+    within_sla: dict[str, cp_model.IntVar] = {}
     for task in schedulable:
+        flag = model.new_bool_var(f"within_sla[{task.task_id}]")
+        model.add(flag <= covered[task.task_id])
         for window in candidates_for_task[task.task_id]:
-            if window.day <= task.sla_due_date:
-                objective_terms.append(
-                    weights.sla_compliance * assign[(task.task_id, window.key)]
-                )
+            if window.day > task.sla_due_date:
+                model.add(flag + assign[(task.task_id, window.key)] <= 1)
+        within_sla[task.task_id] = flag
+        objective_terms.append(weights.sla_compliance * flag)
 
     # delta - cross-department batching, the headline capability.
     for variable in batched.values():
@@ -796,6 +1127,7 @@ def solve_schedule(
         all_tasks=tasks,
         windows=windows,
         assign=assign,
+        segment_minutes=segment_minutes,
         candidates_for_task=candidates_for_task,
         deferred=deferred,
         corridors=corridors,
@@ -864,6 +1196,7 @@ def _build_result(
     all_tasks,
     windows,
     assign,
+    segment_minutes,
     candidates_for_task,
     deferred,
     corridors,
@@ -887,20 +1220,29 @@ def _build_result(
     )
 
     tasks_by_id = {task.task_id: task for task in all_tasks}
-    placements: dict[str, WindowInstance] = {}
+    # T29 Phase 1: one task may now have 2+ segments, so the per-task solution
+    # is a LIST of (window, minutes) rather than a single window. Sorted
+    # chronologically so "segment 1" always means "the earliest one" for
+    # every consumer below.
+    task_segments: dict[str, list[tuple[WindowInstance, int]]] = {}
 
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         windows_by_key = {window.key: window for window in windows}
-        grouped: dict[str, list[MaintenanceTask]] = {}
+        grouped: dict[str, list[tuple[MaintenanceTask, int]]] = {}
 
         for (task_id, window_key), variable in assign.items():
             if solver.value(variable):
-                grouped.setdefault(window_key, []).append(tasks_by_id[task_id])
-                placements[task_id] = windows_by_key[window_key]
+                window = windows_by_key[window_key]
+                minutes = solver.value(segment_minutes[(task_id, window_key)])
+                grouped.setdefault(window_key, []).append((tasks_by_id[task_id], minutes))
+                task_segments.setdefault(task_id, []).append((window, minutes))
+
+        for segments in task_segments.values():
+            segments.sort(key=lambda pair: (pair[0].day, pair[0].start_minute))
 
         for window_key in sorted(grouped):
             window = windows_by_key[window_key]
-            occupants = sorted(grouped[window_key], key=lambda t: t.task_id)
+            occupants = sorted(grouped[window_key], key=lambda pair: pair[0].task_id)
             result.blocks.append(
                 ScheduledBlock(
                     corridor_id=window.corridor_id,
@@ -909,17 +1251,42 @@ def _build_result(
                     start_minute=window.start_minute,
                     end_minute=window.end_minute,
                     capacity_minutes=window.duration_minutes,
-                    used_minutes=sum(task.duration_minutes for task in occupants),
-                    task_ids=[task.task_id for task in occupants],
-                    departments=[task.department for task in occupants],
+                    used_minutes=sum(minutes for _task, minutes in occupants),
+                    task_ids=[task.task_id for task, _minutes in occupants],
+                    departments=[task.department for task, _minutes in occupants],
+                    segment_minutes={task.task_id: minutes for task, minutes in occupants},
                 )
             )
 
     result.blocks.sort(key=lambda b: (b.day, b.corridor_id, b.start_minute))
 
+    # T29 Phase 1: a task with more than one segment is genuinely split -
+    # recorded once here, from the same `task_segments` the decision log
+    # reads, so the two can never disagree about which tasks are split.
+    for task_id, segments in task_segments.items():
+        if len(segments) <= 1:
+            continue
+        task = tasks_by_id[task_id]
+        result.split_tasks[task_id] = {
+            "taskId": task_id,
+            "corridorId": task.corridor_id,
+            "defectType": task.defect_type,
+            "totalDurationMinutes": task.duration_minutes,
+            "segmentCount": len(segments),
+            "segments": [
+                {
+                    "date": window.day.isoformat(),
+                    "windowIndex": window.window_index,
+                    "window": f"{_clock(window.start_minute)}-{_clock(window.end_minute)}",
+                    "minutes": minutes,
+                }
+                for window, minutes in segments
+            ],
+        }
+
     # Anything the solver considered but did not place is deferred for capacity
     # reasons - stated separately from structural impossibility.
-    scheduled = set(placements)
+    scheduled = set(task_segments)
     for task in model_tasks:
         if task.task_id not in scheduled:
             candidate_count = len(candidates_for_task[task.task_id])
@@ -949,9 +1316,9 @@ def _build_result(
 
     result.deferred.sort(key=lambda d: d.task_id)
     result.decision_log = _build_decision_log(
-        all_tasks, placements, result.deferred, candidates_for_task
+        all_tasks, task_segments, result.deferred, candidates_for_task
     )
-    result.known_gaps = detect_known_gaps(all_tasks, placements)
+    result.known_gaps = detect_known_gaps(all_tasks, task_segments)
     # T22: checked, not assumed. Lands in knownGaps so it travels the same route
     # to the UI as every other honesty field.
     train_impacts = detect_train_impact(result.blocks, corridors)
@@ -1045,7 +1412,7 @@ def _priority_factors(task: MaintenanceTask) -> dict:
     return factors
 
 
-def _build_decision_log(all_tasks, placements, deferred, candidates=None) -> list[dict]:
+def _build_decision_log(all_tasks, task_segments, deferred, candidates=None) -> list[dict]:
     """Per-task record of what happened and the factors behind it.
 
     Deliberately structured rather than prose: T18 turns these factors into
@@ -1058,6 +1425,17 @@ def _build_decision_log(all_tasks, placements, deferred, candidates=None) -> lis
     claim, which is the honest version: the model's choice among N eligible
     windows is an objective outcome, not a rule that can be quoted.
 
+    T29 PHASE 1 - SPLIT TASKS MARKED EXPLICITLY, NEVER IMPLIED
+    ------------------------------------------------------------
+    `task_segments` maps task id -> a chronological list of (window, minutes)
+    pairs - one entry for a normal placement, 2+ for a split one. A scheduled
+    entry ALWAYS keeps the legacy singular `date`/`window`/`windowIndex` keys
+    (the EARLIEST segment, so every pre-T29 reader - the frontend, /explain's
+    grounding - keeps working unchanged) and ALWAYS adds `isSplit` plus the
+    full `segments` list, so a split placement can never be mistaken for or
+    silently collapsed into a normal one by a reader that only checks the
+    legacy fields.
+
     WHAT THIS LOG IS NOT
     --------------------
     It records what the **solver** decided. It does not reflect manual overrides
@@ -1068,36 +1446,68 @@ def _build_decision_log(all_tasks, placements, deferred, candidates=None) -> lis
     """
     reasons = {item.task_id: item for item in deferred}
     candidates = candidates or {}
+    tasks_by_id = {task.task_id: task for task in all_tasks}
     log = []
 
-    # Who else landed in the same window instance - the basis of the batching
-    # claim, and computed here from `placements` rather than asserted.
+    # Who else landed in ANY of this task's window instances - the basis of
+    # the batching claim, computed from `task_segments` rather than asserted.
+    # A split task can batch independently in each of its segments, so this
+    # naturally covers all of them, not just the first.
     occupants: dict[object, list[MaintenanceTask]] = {}
-    for task in all_tasks:
-        window = placements.get(task.task_id)
-        if window is not None:
+    for task_id, segments in task_segments.items():
+        task = tasks_by_id[task_id]
+        for window, _minutes in segments:
             occupants.setdefault(window.key, []).append(task)
 
+    # Real minutes used in each window, across every task present (whether a
+    # normal placement or one segment of a split task) - what
+    # `windowUsedMinutes` below reports the fullness of.
+    window_used_minutes: dict[object, int] = {}
+    for segments in task_segments.values():
+        for window, minutes in segments:
+            window_used_minutes[window.key] = window_used_minutes.get(window.key, 0) + minutes
+
     for task in sorted(all_tasks, key=lambda t: t.task_id):
-        window = placements.get(task.task_id)
+        segments = task_segments.get(task.task_id)
         eligible = len(candidates.get(task.task_id, ()))
 
-        if window is not None:
-            share = sorted(
-                (other for other in occupants[window.key] if other.task_id != task.task_id),
-                key=lambda t: t.task_id,
-            )
+        if segments is not None:
+            is_split = len(segments) > 1
+            primary_window, _primary_minutes = segments[0]
+            last_window, _last_minutes = segments[-1]
+
+            share_ids: set[str] = set()
+            share_departments: set[str] = set()
+            for window, _minutes in segments:
+                for other in occupants[window.key]:
+                    if other.task_id != task.task_id:
+                        share_ids.add(other.task_id)
+                        share_departments.add(other.department)
+            share = sorted(share_ids)
+
             factors = _priority_factors(task)
             factors.update(
                 {
-                    "windowCapacityMinutes": window.duration_minutes,
-                    "windowUsedMinutes": sum(t.duration_minutes for t in occupants[window.key]),
-                    "withinSla": window.day <= task.sla_due_date,
+                    # T29 Phase 1: for a split task these describe only the
+                    # EARLIEST segment's window - a documented simplification
+                    # (the full per-segment detail is in `segments` below),
+                    # kept rather than dropped so the existing
+                    # windowUsedMinutes/windowCapacityMinutes-driven "how full
+                    # is this possession" reading (BlockDetailPanel) keeps
+                    # working unchanged for every non-split task.
+                    "windowCapacityMinutes": primary_window.duration_minutes,
+                    "windowUsedMinutes": window_used_minutes[primary_window.key],
+                    # "On time" now means the task's LAST segment - the whole
+                    # job, not just its first session - lands on or before
+                    # the deadline. Matches the `within_sla` CP-SAT variable
+                    # exactly, so this can never disagree with what the
+                    # objective actually rewarded.
+                    "withinSla": last_window.day <= task.sla_due_date,
                     "eligibleWindowsConsidered": eligible,
-                    "sharedWith": [t.task_id for t in share],
-                    "sharedWithDepartments": sorted({t.department for t in share}),
+                    "sharedWith": share,
+                    "sharedWithDepartments": sorted(share_departments),
                     "isCrossDepartmentBatch": any(
-                        t.department != task.department for t in share
+                        tasks_by_id[t].department != task.department for t in share
                     ),
                 }
             )
@@ -1107,9 +1517,21 @@ def _build_decision_log(all_tasks, placements, deferred, candidates=None) -> lis
                     "decision": "scheduled",
                     "department": task.department,
                     "corridorId": task.corridor_id,
-                    "date": window.day.isoformat(),
-                    "window": f"{_clock(window.start_minute)}-{_clock(window.end_minute)}",
-                    "windowIndex": window.window_index,
+                    "date": primary_window.day.isoformat(),
+                    "window": (
+                        f"{_clock(primary_window.start_minute)}-{_clock(primary_window.end_minute)}"
+                    ),
+                    "windowIndex": primary_window.window_index,
+                    "isSplit": is_split,
+                    "segments": [
+                        {
+                            "date": window.day.isoformat(),
+                            "windowIndex": window.window_index,
+                            "window": f"{_clock(window.start_minute)}-{_clock(window.end_minute)}",
+                            "minutes": minutes,
+                        }
+                        for window, minutes in segments
+                    ],
                     "contributingFactors": factors,
                 }
             )
@@ -1208,7 +1630,9 @@ def annotate_weather_risk(decision_log: list[dict], weather_risk: list[dict]) ->
         )
 
 
-def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:
+def detect_known_gaps(
+    all_tasks, task_segments: dict[str, list[tuple[WindowInstance, int]]]
+) -> dict:
     """Check the two PRD Section 13 constraints (9.7, 9.8) this module also
     enforces as hard CP-SAT constraints (T24, T25).
 
@@ -1217,71 +1641,91 @@ def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:
     constraints, this doubles as the invariant `_build_result` asserts on
     every OPTIMAL/FEASIBLE solve - a non-empty result here on a real solve
     means one of those constraints has a bug, not that a real gap exists.
+
+    T29 Phase 1: `task_segments` may carry 2+ windows per task now, so both
+    checks below are generalised to compare every relevant SEGMENT pair
+    rather than a single placement each - matching exactly what the
+    corresponding hard constraint in `solve_schedule` actually enforces (see
+    its own comments), so the two can never disagree about what counts as a
+    violation. For a non-split task (the overwhelming majority) this
+    collapses back to exactly the original single-window comparison.
     """
     tasks_by_id = {task.task_id: task for task in all_tasks}
 
     # --- resource conflicts (T25, PRD 9.8) ---------------------------------
-    # Two tasks sharing a resource are in conflict when their windows overlap in
-    # real time. Same window is the obvious case; different corridors' windows
-    # can also overlap, because resources are depot-scoped across corridors.
+    # Two tasks sharing a resource are in conflict when ANY of their segments
+    # overlap in real time. Same window is the obvious case; different
+    # corridors' windows can also overlap, because resources are
+    # depot-scoped across corridors.
     resource_conflicts = []
-    scheduled = sorted(placements)
+    scheduled = sorted(task_segments)
     for index, first_id in enumerate(scheduled):
-        first_window = placements[first_id]
         first_task = tasks_by_id[first_id]
         for second_id in scheduled[index + 1 :]:
-            second_window = placements[second_id]
             second_task = tasks_by_id[second_id]
-            if first_window.day != second_window.day:
-                continue
-            if not _overlaps(first_window, second_window):
-                continue
             shared = set(first_task.required_resource_ids) & set(
                 second_task.required_resource_ids
             )
-            if shared:
-                # Every field below was already in scope; only the count and a
-                # three-field stub used to be returned, which was too thin to
-                # build a conflict view from at parity with the baseline's
-                # report (T21). This is additive - no new computation.
-                overlap_start = max(first_window.start_minute, second_window.start_minute)
-                overlap_end = min(first_window.end_minute, second_window.end_minute)
-                corridors = [first_window.corridor_id, second_window.corridor_id]
-                resource_conflicts.append(
-                    {
-                        "taskIds": [first_id, second_id],
-                        "sharedResourceIds": sorted(shared),
-                        "date": first_window.day.isoformat(),
-                        # Resources are depot-scoped, so the two tasks may sit
-                        # on different corridors. `corridorId` is only set when
-                        # they agree; `corridorIds` always carries both.
-                        "corridorIds": corridors,
-                        "corridorId": corridors[0] if corridors[0] == corridors[1] else None,
-                        "departments": [first_task.department, second_task.department],
-                        "overlapStart": _clock(overlap_start),
-                        "overlapEnd": _clock(overlap_end),
-                        "overlapMinutes": overlap_end - overlap_start,
-                    }
-                )
+            if not shared:
+                continue
+            for first_window, _fm in task_segments[first_id]:
+                for second_window, _sm in task_segments[second_id]:
+                    if first_window.day != second_window.day:
+                        continue
+                    if not _overlaps(first_window, second_window):
+                        continue
+                    # Every field below was already in scope; only the count and
+                    # a three-field stub used to be returned, which was too thin
+                    # to build a conflict view from at parity with the
+                    # baseline's report (T21). This is additive.
+                    overlap_start = max(first_window.start_minute, second_window.start_minute)
+                    overlap_end = min(first_window.end_minute, second_window.end_minute)
+                    corridors = [first_window.corridor_id, second_window.corridor_id]
+                    resource_conflicts.append(
+                        {
+                            "taskIds": [first_id, second_id],
+                            "sharedResourceIds": sorted(shared),
+                            "date": first_window.day.isoformat(),
+                            # Resources are depot-scoped, so the two tasks may sit
+                            # on different corridors. `corridorId` is only set when
+                            # they agree; `corridorIds` always carries both.
+                            "corridorIds": corridors,
+                            "corridorId": corridors[0] if corridors[0] == corridors[1] else None,
+                            "departments": [first_task.department, second_task.department],
+                            "overlapStart": _clock(overlap_start),
+                            "overlapEnd": _clock(overlap_end),
+                            "overlapMinutes": overlap_end - overlap_start,
+                        }
+                    )
 
     # --- dependency ordering (T24, PRD 9.7) --------------------------------
+    # "Before its prerequisite completes" now means before EVERY segment of
+    # the prerequisite has finished - the dependent's EARLIEST segment start
+    # is compared against the prerequisite's LATEST segment end, matching
+    # exactly what `solve_schedule`'s pairwise-forbid loop enforces (every
+    # (dependent segment, prerequisite segment) pair where the prerequisite
+    # segment could still be unfinished is forbidden, which in aggregate means
+    # the whole prerequisite must finish before the whole dependent starts).
     dependency_violations = []
-    for task_id, window in placements.items():
+    for task_id, segments in task_segments.items():
         task = tasks_by_id[task_id]
         if not task.depends_on_task_id:
             continue
-        prerequisite = placements.get(task.depends_on_task_id)
+        prereq_segments = task_segments.get(task.depends_on_task_id)
+        earliest_dep_window = min(segments, key=lambda pair: (pair[0].day, pair[0].start_minute))[0]
         # As above: corridor, date and department were already available here
         # and simply were not returned (T21).
         common = {
             "taskId": task_id,
             "dependsOn": task.depends_on_task_id,
             "corridorId": task.corridor_id,
-            "date": window.day.isoformat(),
+            "date": earliest_dep_window.day.isoformat(),
             "departments": [task.department],
-            "scheduledAt": f"{_clock(window.start_minute)}-{_clock(window.end_minute)}",
+            "scheduledAt": (
+                f"{_clock(earliest_dep_window.start_minute)}-{_clock(earliest_dep_window.end_minute)}"
+            ),
         }
-        if prerequisite is None:
+        if prereq_segments is None:
             dependency_violations.append(
                 {
                     **common,
@@ -1289,14 +1733,22 @@ def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:
                     "prerequisiteDate": None,
                 }
             )
-        elif (prerequisite.day, prerequisite.end_minute) > (window.day, window.start_minute):
+            continue
+        latest_prereq_window = max(
+            prereq_segments, key=lambda pair: (pair[0].day, pair[0].end_minute)
+        )[0]
+        if (latest_prereq_window.day, latest_prereq_window.end_minute) > (
+            earliest_dep_window.day,
+            earliest_dep_window.start_minute,
+        ):
             dependency_violations.append(
                 {
                     **common,
                     "issue": "scheduled before its prerequisite completes",
-                    "prerequisiteDate": prerequisite.day.isoformat(),
+                    "prerequisiteDate": latest_prereq_window.day.isoformat(),
                     "prerequisiteAt": (
-                        f"{_clock(prerequisite.start_minute)}-{_clock(prerequisite.end_minute)}"
+                        f"{_clock(latest_prereq_window.start_minute)}-"
+                        f"{_clock(latest_prereq_window.end_minute)}"
                     ),
                 }
             )
@@ -1307,7 +1759,8 @@ def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:
             "note": (
                 "Resource no-overlap (PRD 9.8) is enforced as a hard CP-SAT constraint "
                 "(T25): two tasks sharing a required resource (crew, machine or "
-                "permission) cannot occupy overlapping windows. Checked, not assumed - "
+                "permission) cannot occupy overlapping windows - including across a "
+                "split task's individual segments (T29 Phase 1). Checked, not assumed - "
                 "the count should always be zero for an OPTIMAL or FEASIBLE solve, and "
                 "`solve_schedule` asserts exactly that."
             ),
@@ -1317,8 +1770,9 @@ def detect_known_gaps(all_tasks, placements: dict[str, WindowInstance]) -> dict:
             "count": len(dependency_violations),
             "note": (
                 "Dependency precedence (PRD 9.7) is enforced as a hard CP-SAT constraint "
-                "(T24): a dependent task's window can only start at or after its "
-                "prerequisite's window ends, and only if the prerequisite is itself "
+                "(T24): a dependent task's EARLIEST segment can only start at or after "
+                "its prerequisite's LATEST segment ends (T29 Phase 1 generalises this "
+                "from a single window each), and only if the prerequisite is itself "
                 "scheduled. This is therefore checked, not assumed - the count should "
                 "always be zero for an OPTIMAL or FEASIBLE solve, and `solve_schedule` "
                 "asserts exactly that rather than trusting the constraint silently."

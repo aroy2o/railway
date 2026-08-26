@@ -86,6 +86,7 @@ export function ComparisonPage() {
           {/* Caveat 1, made structural: the denominator before any number. */}
           <ScopeBand
             contestable={comparison.contestableTaskCount}
+            splitOnly={comparison.splitOnlyTaskCount ?? 0}
             impossible={comparison.structurallyImpossibleCount}
           />
 
@@ -140,20 +141,48 @@ export function ComparisonPage() {
 }
 
 /**
- * Caveat 1 as layout: 53 of 89 tasks fit no window on their corridor and are
- * impossible for either engine. Every number below excludes them, and saying so
- * first is what stops the comparison being read as covering the whole backlog.
+ * Caveat 1 as layout: some tasks fit no window on their corridor at all and
+ * are impossible for either engine. Every "contestable" figure below excludes
+ * them, and saying so first is what stops the comparison being read as
+ * covering the whole backlog.
+ *
+ * T29 Phase 1 (D-084) split what used to be a two-way band into three: a task
+ * that fits no single window is no longer automatically impossible for the
+ * OPTIMIZER, even though it stays impossible for the baseline (which never
+ * splits, by design). `splitOnly` names that middle category explicitly
+ * rather than letting it hide inside "impossible" - `splitOnly={0}` (a
+ * pre-T29 stored schedule, or a corpus with no split-only-eligible tasks)
+ * collapses back to exactly the old two-way band.
  */
-function ScopeBand({ contestable, impossible }: { contestable: number; impossible: number }) {
-  const total = contestable + impossible
+function ScopeBand({
+  contestable,
+  splitOnly,
+  impossible,
+}: {
+  contestable: number
+  splitOnly: number
+  impossible: number
+}) {
+  const total = contestable + splitOnly + impossible
   return (
     <div data-tour="comparison-scope-band" className="rounded-xl border border-slate-300 bg-slate-100 px-5 py-4">
       <h2 className="text-sm font-semibold text-slate-900">What this comparison covers</h2>
       <p className="mt-1 max-w-4xl text-sm text-slate-700">
-        Of {total} pending tasks, <strong>{impossible} fit no window on their corridor</strong> and
-        are impossible for <em>both</em> engines — traffic leaves no gap long enough, so that work
-        needs a traffic block that displaces trains. Every figure below is drawn from the{' '}
-        <strong>{contestable} contestable tasks</strong> that either engine could actually place.
+        Of {total} pending tasks, <strong>{impossible} fit no combination of windows at all</strong>{' '}
+        (even considering splitting) and are impossible for <em>both</em> engines — traffic leaves
+        no gap long enough, so that work needs a traffic block that displaces trains.
+        {splitOnly > 0 && (
+          <>
+            {' '}
+            A further <strong>{splitOnly} fit no single window</strong> but{' '}
+            <em>are</em> placeable by the optimizer via splitting work across non-contiguous
+            sessions — a capability this baseline process structurally does not have, at any
+            horizon length.
+          </>
+        )}{' '}
+        Every figure in the cards below is drawn from the{' '}
+        <strong>{contestable} contestable tasks</strong> that either engine could actually place —
+        the split-only tasks are reported on their own, separately, never folded into that count.
       </p>
       <div className="mt-3 flex overflow-hidden rounded-md text-[11px] font-medium">
         <div
@@ -162,6 +191,14 @@ function ScopeBand({ contestable, impossible }: { contestable: number; impossibl
         >
           {contestable} contestable
         </div>
+        {splitOnly > 0 && (
+          <div
+            className="bg-sky-700 px-2 py-1 text-center text-white"
+            style={{ width: `${(splitOnly / total) * 100}%` }}
+          >
+            {splitOnly} split-only
+          </div>
+        )}
         <div
           className="bg-slate-300 px-2 py-1 text-center text-slate-700"
           style={{ width: `${(impossible / total) * 100}%` }}

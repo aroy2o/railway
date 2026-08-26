@@ -42,7 +42,9 @@ from app.core.scheduler import (
     DeferredTask,
     MaintenanceTask,
     ScheduledBlock,
+    StructuralCategory,
     WindowInstance,
+    classify_structural_feasibility,
     expand_windows,
     _clock,
 )
@@ -185,13 +187,21 @@ class BaselineResult:
 def structurally_contestable(
     tasks: list[MaintenanceTask], corridors: dict[str, CorridorAvailability]
 ) -> set[str]:
-    """Task ids that ANY algorithm could schedule, given the corridor's windows.
+    """Task ids that fit a single window outright - schedulable by EITHER
+    engine, splitting or not.
 
     A task longer than every window its corridor offers is impossible for the
-    optimizer and the baseline alike - that is a fact about the timetable, not
-    about scheduling cleverness (D-024). Comparing the two engines over the full
-    backlog would credit the optimizer for work neither could ever have placed,
-    so T14 must draw its headline from this subset. See D-031.
+    baseline (which never splits, deliberately - D-082) and was, before T29
+    Phase 1, equally impossible for the optimizer. Comparing the two engines
+    over the full backlog would still credit the optimizer for work the
+    BASELINE could never have placed, so T14's headline is still drawn from
+    this subset. See D-031.
+
+    **This is deliberately UNCHANGED by T29 Phase 1 splitting** - it remains
+    exactly "fits one window", which is the baseline's real, permanent
+    ceiling regardless of what the optimizer can additionally do. See
+    `split_only_contestable` for the tasks splitting alone rescues, and
+    D-084 for why the two must stay separate rather than being merged.
     """
     contestable: set[str] = set()
     for task in tasks:
@@ -201,6 +211,50 @@ def structurally_contestable(
         if task.duration_minutes <= max(w.duration_minutes for w in corridor.daily_windows):
             contestable.add(task.task_id)
     return contestable
+
+
+def split_only_contestable(
+    tasks: list[MaintenanceTask],
+    corridors: dict[str, CorridorAvailability],
+    *,
+    horizon_start: date,
+    horizon_days: int,
+) -> set[str]:
+    """T29 Phase 1 (D-084): task ids that do NOT fit a single window (so are
+    absent from `structurally_contestable`) but whose defect type is
+    splittable and whose corridor's total capacity across this horizon
+    reaches the full duration.
+
+    Structurally unreachable for the baseline - not a close call, a
+    capability the FR9.1 process categorically does not have - and only
+    reachable for the optimizer if it also wins the resulting real capacity
+    contest (`DeferralReason.NO_CAPACITY` names the ones that lose it). This
+    is what makes "impossible for both engines" (`structurally_contestable`'s
+    complement) an overstatement post-T29: some of that complement is now
+    possible for one of the two engines, and reporting it silently as still
+    "impossible for both" would understate the optimizer's real, demonstrated
+    capability. See docs/DECISIONS.md D-084 for the full reasoning and the
+    real corpus numbers this produces (36 contestable / 32 split-only / 21
+    genuinely impossible, of 89).
+
+    Takes `horizon_start`/`horizon_days` because - unlike
+    `structurally_contestable`'s single-window check, which is a fact about
+    the daily pattern alone - total capacity across a horizon genuinely
+    depends on how many days that horizon spans (D-021's daily pattern,
+    replayed). Evaluated at the SAME horizon the comparison itself is drawn
+    from, so the classification matches what that specific solve actually
+    considered.
+    """
+    windows_by_corridor: dict[str, list[WindowInstance]] = {}
+    for window in expand_windows(corridors, horizon_start, horizon_days):
+        windows_by_corridor.setdefault(window.corridor_id, []).append(window)
+
+    split_only: set[str] = set()
+    for task in tasks:
+        candidates = windows_by_corridor.get(task.corridor_id, [])
+        if classify_structural_feasibility(task, candidates) == StructuralCategory.SPLIT_ONLY:
+            split_only.add(task.task_id)
+    return split_only
 
 
 def run_baseline(
@@ -275,16 +329,30 @@ def run_baseline(
 
             longest = max(window.duration_minutes for window in candidates)
             if task.duration_minutes > longest:
-                # Identical to the optimizer's verdict, and for the same reason:
-                # the corridor's traffic leaves no gap this long (D-024).
-                result.deferred.append(
-                    DeferredTask(
-                        task.task_id,
-                        DeferralReason.EXCEEDS_LONGEST_WINDOW,
+                # D-084: this used to be "impossible for any algorithm" always -
+                # true before T29 Phase 1, but no longer true for a task this
+                # baseline still cannot place (it never splits, by design -
+                # D-082) that the OPTIMIZER genuinely can via splitting. The
+                # claim actually made must match which of those two this is.
+                category = classify_structural_feasibility(task, candidates)
+                if category == StructuralCategory.SPLIT_ONLY:
+                    detail = (
+                        f"needs {task.duration_minutes} min but the longest free window on "
+                        f"{task.corridor_id} is {longest} min - this non-splitting process "
+                        f"cannot place it, but a splitting-aware engine could (T29 Phase 1); "
+                        f"a baseline limitation, not a fact about the timetable"
+                    )
+                else:
+                    # Identical to the optimizer's verdict, and for the same
+                    # reason: the corridor's traffic leaves no gap this long,
+                    # even considering splitting (D-024, D-084).
+                    detail = (
                         f"needs {task.duration_minutes} min but the longest free window on "
                         f"{task.corridor_id} is {longest} min - impossible for any algorithm, "
-                        f"not a baseline shortcoming",
+                        f"not a baseline shortcoming"
                     )
+                result.deferred.append(
+                    DeferredTask(task.task_id, DeferralReason.EXCEEDS_LONGEST_WINDOW, detail)
                 )
                 continue
 
