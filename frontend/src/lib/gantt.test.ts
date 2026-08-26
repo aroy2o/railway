@@ -12,6 +12,7 @@ import {
   blockKey,
   blockPosition,
   corridorRowsForDay,
+  defaultSelectedDay,
   monthlyReservationRows,
   summariseDays,
 } from './gantt.ts'
@@ -60,6 +61,46 @@ describe('summariseDays', () => {
     expect(days[0].batchCount).toBe(1)
     expect(days[0].taskCount).toBe(2)
     expect(days[1].batchCount).toBe(0)
+  })
+})
+
+describe('defaultSelectedDay', () => {
+  it('picks today when it falls inside the horizon, even over a batch day', () => {
+    // D-075: today (day 2) has no batch; day 1 (horizonStart) does. Today
+    // must still win - it is the operationally relevant day for a
+    // Controller opening the dashboard live, not the most demo-dense one.
+    const days = summariseDays(
+      [
+        block({ date: '2026-08-24', isCrossDepartmentBatch: true }),
+        block({ date: '2026-08-25' }),
+      ],
+      '2026-08-24',
+      7,
+    )
+
+    expect(defaultSelectedDay(days, '2026-08-25')).toBe('2026-08-25')
+  })
+
+  it('falls back to the first batch day when today is outside the horizon', () => {
+    const days = summariseDays(
+      [block({ date: '2026-08-24', isCrossDepartmentBatch: true }), block({ date: '2026-08-26' })],
+      '2026-08-24',
+      7,
+    )
+
+    // "today" here is before the horizon even starts - a schedule generated
+    // for a future week, viewed ahead of time.
+    expect(defaultSelectedDay(days, '2026-08-20')).toBe('2026-08-24')
+  })
+
+  it('falls back to the busiest day when neither today nor a batch is in range', () => {
+    const days = summariseDays(
+      [block({ date: '2026-08-24' }), block({ date: '2026-08-25' }), block({ date: '2026-08-25' })],
+      '2026-08-24',
+      7,
+    )
+
+    expect(defaultSelectedDay(days, '2026-09-15')).toBe('2026-08-25')
   })
 })
 

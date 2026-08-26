@@ -53,6 +53,33 @@ export function summariseDays(blocks: ScheduleBlock[], horizonStart: string, hor
 }
 
 /**
+ * Which day the timeline should open on.
+ *
+ * D-040 (T12) chose "first day with a cross-department batch, else the
+ * busiest day" over the actual busiest day alone, because the busiest day
+ * on the real corpus showed no coordination at all. That heuristic never
+ * considered the real clock, so a Controller opening the dashboard mid-week
+ * against an already-published plan would land on Monday even when today is
+ * Wednesday - showing a day that has already passed instead of the
+ * operationally relevant one (D-075).
+ *
+ * `today` takes priority whenever it falls inside the horizon; D-040's
+ * heuristic is the fallback for everything else - a historical schedule
+ * viewed after its horizon has fully elapsed, or one generated for a future
+ * week that has not started yet.
+ */
+export function defaultSelectedDay(days: DaySummary[], todayIso: string): string {
+  const today = days.find((day) => day.date === todayIso)
+  if (today) return today.date
+
+  const firstBatchDay = days.find((day) => day.batchCount > 0)
+  if (firstBatchDay) return firstBatchDay.date
+
+  const busiestDay = days.reduce((best, day) => (day.blockCount > best.blockCount ? day : best), days[0])
+  return busiestDay?.date ?? todayIso
+}
+
+/**
  * Group one day's blocks into corridor rows.
  *
  * Rows are ordered by how much of the day each corridor is under possession,

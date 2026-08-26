@@ -6,6 +6,7 @@
  * document (D-034), so the history of plans IS the version history.
  */
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import {
   useGetAuditTrailQuery,
@@ -18,8 +19,16 @@ import { AUDIT_TOUR_ID, AUDIT_TOUR_STEPS } from '../tours/auditTour.ts'
 import AuditTrail from '../components/AuditTrail.tsx'
 import WorkflowPanel from '../components/WorkflowPanel.tsx'
 import QueryState from '../components/QueryState.tsx'
+import { useAppSelector } from '../store/hooks.ts'
 
 export function AuditPage() {
+  // DRM has read-only access to this screen (auth session decision, recorded
+  // in docs/DECISIONS.md) - the backend already refuses a DRM's
+  // POST /workflow with a 403, but hiding the panel here means a DRM never
+  // sees controls that would just be refused.
+  const role = useAppSelector((state) => state.auth.user?.role)
+  const canAct = role === 'controller' || role === 'super_admin'
+
   const latest = useGetLatestScheduleQuery()
   const versions = useGetSchedulesQuery({ limit: 20 })
   const [picked, setPicked] = useState<string | null>(null)
@@ -28,15 +37,57 @@ export function AuditPage() {
   const trail = useGetAuditTrailQuery(scheduleId ?? '', { skip: !scheduleId })
   useAutoTour(AUDIT_TOUR_ID, AUDIT_TOUR_STEPS, !versions.isLoading && !latest.isLoading && !trail.isLoading)
 
+  const header = (
+    <header>
+      <h1 className="text-lg font-semibold text-slate-900">Approval &amp; audit trail</h1>
+      <p className="mt-1 text-sm text-slate-500">
+        Every plan the system has produced, what was changed on it, and who signed it off. PRD
+        FR6.1–FR6.3.
+      </p>
+    </header>
+  )
+
+  // D-077: a fresh database has no schedule yet, and `useGetLatestScheduleQuery`
+  // surfaces that as a 404 - a real RTK Query "error", but not a genuine
+  // failure. `QueryState`'s generic `error` branch doesn't know the
+  // difference and was rendering the raw backend error text plus a
+  // developer-facing debugging hint ("has npm run seed been run?") to
+  // whoever opened this page first. Distinguishing "no plan yet" from an
+  // actual failure here, the same way ComparisonPage already does, is what
+  // lets a real failure (backend down, network error) still show as an
+  // error while this ordinary first-boot case shows the friendly empty
+  // state that was already written below but never reachable.
+  const noScheduleYet =
+    !versions.isLoading &&
+    !latest.isLoading &&
+    (versions.data?.data.length ?? 0) === 0 &&
+    latest.error &&
+    (latest.error as { status?: number }).status === 404
+
+  if (noScheduleYet) {
+    return (
+      <div className="space-y-6">
+        {header}
+        <div className="rounded-xl border border-slate-200 bg-white px-6 py-12 text-center">
+          <h2 className="text-sm font-semibold text-slate-900">No plan has been generated yet</h2>
+          <p className="mx-auto mt-1 max-w-md text-sm text-slate-500">
+            The audit trail records what happens to a generated plan. Generate one on the
+            dashboard and its history will start here.
+          </p>
+          <Link
+            to="/dashboard"
+            className="mt-4 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          >
+            Go to the dashboard
+          </Link>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-lg font-semibold text-slate-900">Approval &amp; audit trail</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Every plan the system has produced, what was changed on it, and who signed it off. PRD
-          FR6.1–FR6.3.
-        </p>
-      </header>
+      {header}
 
       <QueryState
         isLoading={versions.isLoading || latest.isLoading}
@@ -88,12 +139,19 @@ export function AuditPage() {
               {trail.data && scheduleId && (
                 <>
                   <div data-tour="audit-workflow">
-                    <WorkflowPanel
-                      scheduleId={scheduleId}
-                      state={trail.data.data.state}
-                      allowedActions={trail.data.data.allowedActions}
-                      version={trail.data.data.version}
-                    />
+                    {canAct ? (
+                      <WorkflowPanel
+                        scheduleId={scheduleId}
+                        state={trail.data.data.state}
+                        allowedActions={trail.data.data.allowedActions}
+                        version={trail.data.data.version}
+                      />
+                    ) : (
+                      <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                        Read-only — DRM oversight view. Only a Controller can review, approve,
+                        reject or publish a plan.
+                      </p>
+                    )}
                   </div>
                   <AuditTrail trail={trail.data.data} />
                 </>

@@ -71,6 +71,19 @@ export const OVERRIDABLE_STATES: ReadonlySet<WorkflowState> = new Set([
   'approved',
 ]);
 
+/**
+ * Past tense for a refusal message. Not `${action}d`: three of the four
+ * actions don't inflect that way ("submitd", "rejectd", "publishd" all read
+ * as typos) - only "approve" happens to work by accident, which is what let
+ * this go unnoticed until an audit actually triggered the other three.
+ */
+const PAST_TENSE: Record<WorkflowAction, string> = {
+  submit: 'submitted',
+  approve: 'approved',
+  reject: 'rejected',
+  publish: 'published',
+};
+
 /** Fold the append-only rows into the state they leave the plan in. */
 export function currentState(approvals: Pick<IScheduleApproval, 'toState'>[]): WorkflowState {
   return approvals.length === 0 ? INITIAL_STATE : approvals[approvals.length - 1]!.toState;
@@ -105,7 +118,7 @@ export function checkTransition(state: WorkflowState, action: WorkflowAction): T
       legal: false,
       refusal: {
         reason:
-          `This plan is ${state}, which is a terminal state - it cannot be ${action}d. ` +
+          `This plan is ${state}, which is a terminal state - it cannot be ${PAST_TENSE[action]}. ` +
           `Generate a new plan instead; prior versions stay viewable (FR6.3).`,
       },
     };
