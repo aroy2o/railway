@@ -10,6 +10,7 @@ on:
     paths:
       - "optimizer/**"
       - ".github/workflows/optimizer.yml"
+  workflow_dispatch: {}
 
 jobs:
   test:

@@ -10,6 +10,7 @@ on:
     paths:
       - "data/**"
       - ".github/workflows/data.yml"
+  workflow_dispatch: {}
 
 jobs:
   test:
