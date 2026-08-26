@@ -179,48 +179,44 @@ sitting in an old session log.
 
 ## 7. CI status
 
-**Pushed to `origin/main` and confirmed registered — but every real
-execution attempt has failed with `startup_failure`, not a test
-failure.** All 7 feature commits plus 2 follow-ups (9 total) pushed on
-2026-08-26. GitHub Actions is enabled on the repo and all four workflows
-registered as `state: "active"`; their content, re-fetched directly from
-GitHub, is byte-identical to the locally `actionlint`-validated files —
-this is not a YAML/schema defect in the workflow files.
+**All four workflows are green on `origin/main`.** The earlier
+`startup_failure` pattern (six execution attempts blocked before a
+runner was even assigned - documented in the commit history for anyone
+checking) was an account-level Actions gate, resolved outside this
+project's code. Once execution actually started, one real bug surfaced
+and was fixed the same session:
 
-**What actually happened, across six real attempts spanning both trigger
-types:** `optimizer` (push, then `workflow_dispatch`), `backend`
-(`workflow_dispatch`), and `data` (push) each completed with
-`startup_failure` and **zero jobs ever created** - no logs, no
-annotations, nothing ran. `repos/.../actions/cache/usage` shows 0 bytes
-cached and 0 caches, confirming this repository has never had a single
-Actions job actually execute, on any workflow, ever. That consistency
-across three different workflow files and two different trigger
-mechanisms (`push` and manual `workflow_dispatch`) rules out a per-file
-bug or a one-off fluke - it points to an **account- or repository-level
-gate that blocks job execution before a runner is even assigned**, most
-consistent with a GitHub Actions billing/spending-limit setting on this
-private repository (the classic real-world cause of exactly this
-signature). One more run got stuck indefinitely in a pre-queued limbo
-state; attempting to cancel it returned "Cannot cancel a workflow run
-that has not been queued yet" (HTTP 409) - the run record exists but
-GitHub's scheduler never actually admitted it to the real queue, which is
-consistent with a gate rejecting it before scheduling rather than any
-runner-availability or code issue. This cannot be diagnosed or changed
-via the API access
-available in this session (`gh auth status` lacks the `user` scope
-billing needs) - **check
-[github.com/settings/billing](https://github.com/settings/billing) and
-this repo's Settings → Actions → General page directly.** If a spending
-limit is set to $0 or free private-repo minutes are exhausted for this
-billing cycle, that is almost certainly it.
+**Real bug found and fixed by CI, not by local testing.** Two backend
+tests - "T27: an empty disruptedWindows array is refused at the
+boundary" and "T27: a short reason is refused at the boundary" - called
+`needs(t)` instead of `needs(t, { optimizer: true })`, unlike every
+sibling T27 test. Both still `POST /api/schedules/generate` as setup to
+get a real schedule id, which genuinely needs the optimizer; locally
+that's always available, so the gap only showed up in `backend.yml`'s
+CI job, which deliberately provisions only a Mongo service container -
+not the Python optimizer - to keep this hackathon CI's infrastructure
+footprint small (`docs/DECISIONS.md` D-087).
+Result: a 502 instead of the intended clean skip, failing the run on an
+environment gap, not a real assertion. Fixed by adding the missing flag;
+verified both ways before pushing - passes for real with the optimizer
+up, skips cleanly ("optimizer service not reachable") when pointed at
+an unreachable `OPTIMIZER_URL`, matching CI's actual environment. CI run
+[`32993745109`](https://github.com/aroy2o/railway/actions/runs/32993745109)
+confirms it: `# pass 108, # fail 0, # skipped 27`.
 
-**Do not claim "CI is green" in front of judges.** The accurate claim is:
-"CI is written, `actionlint`-clean, and registered on GitHub; execution
-is currently blocked by an account-level setting, not a code or test
-failure - the actual test suites all pass locally (§6)." If asked to
-demonstrate, show the local test runs (§6, real and fresh) rather than
-the Actions tab, and be upfront that CI itself hasn't executed yet if
-asked directly - do not claim a passing run that didn't happen.
+**Current green state, one workflow run per suite:**
+
+| Workflow | Result | What it proves |
+|---|---|---|
+| `backend` | ✅ success | 108 real assertions pass against a live `mongo:8` service container; 27 skip cleanly (optimizer-dependent, by design) |
+| `optimizer` | ✅ success | The fast/isolated suite (`pytest -m "not live"`) passes with no backend/Mongo provisioned |
+| `frontend` | ✅ success | `npm run build` (real `tsc -b` type-check), `npm run lint`, `npx vitest run` all clean |
+| `data` | ✅ success | The 105 hand-built-fixture tests pass with no external dataset download |
+
+**Say this in front of judges, and it's true:** "CI runs on every push,
+scoped per folder, and is currently green across all four suites." If
+asked to demonstrate, either the Actions tab or a fresh local run (§6)
+shows the same picture - they're the same test suites.
 
 ## 8. Known, deliberately unfixed risk
 
