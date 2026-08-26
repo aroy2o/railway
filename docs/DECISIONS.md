@@ -3606,3 +3606,1287 @@ not fixed here - out of this session's scope). Step CONTENT and the actual
 render are verified live rather than snapshot-tested, matching this
 project's standing frontend-coverage practice for anything at this level
 (`gantt.ts`, `conflicts.ts`, `whatif.ts`).
+
+---
+
+## D-073 — Authentication (T10/T11's remainder): four fixed accounts, one
+explicit `super_admin` bypass, and role gating audited route by route
+
+**Date:** 2026-08-25 · **Task:** Authentication session (FR10, PRD Section 8)
+
+**Scope.** FR10.1's three named roles (Dept Engineer / Controller / DRM) plus
+`super_admin` - a demo/dev-convenience role, **explicitly not part of FR10.1
+or any PRD section**, added so a judge or demo operator can never get stuck
+behind a role gate mid-pitch. It must never be presented in the pitch deck as
+a PRD-specified feature. It satisfies every role gate through one explicit
+bypass check (`role === 'super_admin'`) in both `backend/src/middleware/
+auth.ts::requireRole` and `frontend/src/components/RequireRole.tsx` - never
+by listing it in each call site's role list, which would be one added route
+away from a hole.
+
+**Backend.** `User` model (new - PRD Section 15 predates FR10 and never named
+a `users` shape), JWT via `jsonwebtoken`, bcrypt via `bcryptjs` (pure JS, no
+native compile step - one fewer thing for TX1's still-unverified Docker build,
+D-005, to trip over). The JWT payload carries `id/username/role/department`
+directly, so `requireAuth` never round-trips to Mongo per request - defensible
+because there are exactly four fixed, seed-owned accounts with no
+self-registration or profile editing, so a token can never go stale against a
+user record that changed underneath it.
+
+**Route gating was audited, not guessed, file by file.** `requireAuth` is
+mounted per resource sub-router in `routes/index.ts` (not once for the whole
+`/api` prefix) - the difference matters: a blanket mount would shadow a
+genuinely nonexistent path's 404 behind a 401 for anyone unauthenticated,
+which broke an existing, explicit test (`health.test.ts`'s "unknown routes
+return the standard error envelope") before being caught and fixed this way.
+
+Every write route got an explicit `requireRole`:
+
+| Route | Gate |
+|---|---|
+| `POST /tasks` (FR1.1 submission) | `dept_engineer` |
+| `POST /tasks/reprioritize` | `controller` |
+| `POST /schedules/generate`, `/whatif`, `/emergency`, `/override`, `/workflow`, `/explain` (both) | `controller` |
+| `GET /schedules`, `/latest`, `/:id`, `/:id/overrides`, `/:id/approvals`, `/:id/audit` | `controller`, `drm` |
+| `GET /schedules/published` | any authenticated role (Dept Engineer's own read-only view, PRD Section 8) |
+| `GET /corridors`, `/assets`, `/resources`, `/provenance`, `/tasks` (list+detail) | any authenticated role |
+
+**A route the PRD never role-scoped, flagged rather than guessed.** PRD
+Section 8 names seven screens; the five read-only reference pages this
+project also has (Corridors, Assets, Backlog, Resources, Status) predate the
+role model entirely and are not one of the seven. Kept open to every
+authenticated role at the API layer (a Dept Engineer's submission form needs
+the corridor/asset/resource pickers these same endpoints serve) but excluded
+from the Dept Engineer's frontend nav and route guards, whose PRD-defined
+scope is the narrower "own requests + published schedule only." A judge
+asking "why can't the engineer see the Corridors page" should get an honest
+"the PRD didn't put it there" answer, not a fabricated one.
+
+**DRM's access to Approval & Audit was not PRD-specified - the owner was
+asked, not guessed.** PRD Section 8 assigns DRM the Oversight view alone; it
+never says whether DRM can also see the Approval & Audit Trail (screen 5).
+Resolved by asking: DRM gets **read-only** access - `GET .../audit` and
+`.../approvals` are gated `controller, drm`, but `POST .../workflow` (submit/
+approve/reject/publish) stays `controller`-only, and `AuditPage.tsx` itself
+swaps `WorkflowPanel` for a plain read-only notice when the signed-in role
+cannot act, so a DRM never sees controls that would just be refused by the
+server.
+
+**A real integrity gap closed, not just wrapped.** `overrideSchema` and
+`workflowSchema` both predate real auth and carry a client-supplied
+`actorRole` field (`enum(['controller','drm'])`, defaulting to `'controller'`)
+that was never actually checked against anything - there was no identity to
+check it against. Now that one exists, both route handlers overwrite the
+body's `actorRole` with `req.user.role` before calling the underlying
+service, so the audit trail records who a request was ACTUALLY authenticated
+as (including `'super_admin'` when the bypass role used the route) rather
+than whatever the client claimed. `actorRole`'s stored type stayed a plain
+`string` at every layer (model, service) - no schema change needed to widen
+it honestly to a fourth value.
+
+**Frontend.** `authSlice.ts` gained a real `UserRole` union
+(`dept_engineer | controller | drm | super_admin`, replacing the placeholder
+`'engineer'`), `RequireRole.tsx` (unauthenticated -> `/login`; wrong role ->
+that role's own landing route, never a bare 403 - both required explicitly by
+the session brief), and role-scoped nav in `AppHeader.tsx` mirroring the
+backend's own role table exactly, so what a role can click matches what it
+can call.
+
+**A deliberate deviation from the pre-existing "token in Redux only" note,
+made explicitly because that comment named it as `T11`'s call to make.**
+`authSlice.ts` originally shipped (T1/T11 partial) with a comment reasoning
+that persisting to `localStorage` was rejected so "a stale token cannot
+outlive the tab" - and left the actual persistence decision open. Redux-only
+means a browser refresh mid-demo silently logs the presenter out, which is a
+real risk for a live pitch that the original note didn't weigh (auth did not
+exist yet to weigh it against). Persisted to **`sessionStorage`** instead:
+it satisfies the original constraint just as well - cleared the moment the
+tab closes, never outliving it - while also surviving an accidental refresh
+within the same tab, which is the actual failure mode that matters live.
+
+**A real bug this decision surfaced, found only by driving a real browser
+through all four accounts in sequence, not by unit tests.** `LoginPage.tsx`'s
+first version read `location.state.from` to return a user to whichever page
+`RequireRole` had redirected them away from. React Router's history `state`
+is associated with the history ENTRY, not the component instance - so
+re-visiting `/login` via a fresh `page.goto()` (a full reload, not a
+client-side navigation) after a logout can land on the SAME entry a
+PREVIOUS session's redirect had already attached `state.from` to, and a
+freshly-logged-in user gets silently sent to whatever page the LAST session
+was trying to reach. Reproduced deterministically: log in as `drm`, visit
+`/audit` (which sets no state itself, but an earlier redirect in the same
+tab had), log out, log in as `admin` - admin lands on `/audit`, not
+`/dashboard`. The `from`-based "return to where you were" feature was never
+requested by the session brief (session Section 3 only asks for "wrong-role
+-> their own landing route"); it was added as unrequested polish and
+introduced a real bug, so it was removed rather than patched - every login
+now always lands on `roleLandingRoute(role)`, with no stale-state class of
+bug possible.
+
+**`raisedByUserId` (new field on `Task`).** Additive, nullable, defaults to
+`null` for every seed-generated task (the synthetic 89-task backlog was never
+"raised by" an account). Backs the Dept Engineer Portal's "my submitted
+requests" list and the `POST /tasks` (FR1.1) submission endpoint, which
+derives `department` and `raisedByUserId` from the JWT rather than trusting
+the request body - an engineer can only ever file into their own department,
+as themselves.
+
+**Login screen has no manual role selector**, despite PRD Section 8 literally
+naming the first dashboard screen "Login / Role selector." Read as
+pre-dating FR10.2's real JWT auth (written when role-based access was still
+a mockup concept): with real accounts, the role comes from which account
+logs in, not a client-side dropdown beside it - the same "the honest real
+thing beats matching a mockup's label" call this codebase has made
+repeatedly (D-039, D-070). Demo credentials live in `DEMO_ACCOUNTS.md` at the
+repo root and the seed script's own log output, never in the login UI
+itself.
+
+**Tests.** Backend 154 (+20 in `auth.test.ts`: bcrypt/JWT round trips,
+`requireAuth`/`requireRole` in isolation including the `super_admin` bypass
+against a role list that does not even name it, and one full HTTP loop per
+real role hitting a route actually gated to it, plus refusal checks). The
+four pre-existing suites (`api`, `overrides`, `schedules`, `approvals`) all
+needed their `request(app)` calls updated to carry a bearer token - not a
+business-logic change, but a necessary consequence of gating routes those
+tests already exercised; a shared `authed()` helper
+(`tests/authTestHelpers.ts`) makes this a one-line change per call site,
+using a `controller` token by default since that role can reach everything
+those four files touch. Frontend 111 (+6 in `authSlice.test.ts` - `window`
+guarded with `typeof window === 'undefined'` at module scope, the same
+D-072 trap `lib/tour.ts` hit once already, this time caught before it ever
+shipped rather than after). No React component test files added, consistent
+with this project's established practice (D-072 and earlier) of live-browser
+verification for UI at this level - and the session brief explicitly asked
+for exactly that for route guards.
+
+**Verified live end to end**, driving a real headless Chromium (Playwright,
+installed for this verification only - `chromium-cli` was not available on
+this machine): unauthenticated `/` redirects to `/login` with no prefilled
+credentials; each of the four roles logs in and lands on its own route with
+nav scoped to exactly what its `RequireRole` guards allow; a role attempting
+a URL outside its scope is redirected to its own landing route, not an
+error page (`dept_engineer` -> `/corridors` bounces to `/engineer`;
+`controller` -> `/oversight` bounces to `/dashboard`; `drm` -> `/dashboard`
+bounces to `/oversight`); the Dept Engineer Portal's corridor -> asset
+cascading dropdowns populate from real data and a real submission appears
+immediately in "my submitted requests"; logout clears the session; and
+`super_admin` reaches every route, including a `dept_engineer`-only one,
+without being redirected. Zero console errors across the full run. 20/20
+scripted checks passed, including the stale-`location.state` bug found and
+fixed above - which only a real multi-account browser sequence, not a unit
+test, could have surfaced.
+
+---
+
+## D-074 — `npm run demo:reset` is additive to `seed.ts`, not folded into it
+
+**Date:** 2026-08-25 · **Task:** TX3
+
+**Decision.** A new script, `backend/src/scripts/demoReset.ts`
+(`npm run demo:reset`), runs `seed()` and `seedUsers()` unchanged and then
+explicitly empties three collections the pipeline seed intentionally never
+touches: `schedules`, `schedule_overrides`, `schedule_approvals`. It does not
+change what plain `npm run seed` does, and it is not merged into `seed.ts`.
+
+**Why the split, not a flag on the existing script.** D-019 already commits
+`npm run seed` to being pipeline-only and fast, because dev sessions run it
+constantly and rely on it never touching runtime state. A `--wipe-schedules`
+flag on the same script would make that guarantee conditional and easy to
+get wrong under demo-day pressure (wrong flag, right script, judge sees 130
+stale schedules). A separate script makes the two operations impossible to
+conflate: `seed` never wipes runtime state, `demo:reset` always does both.
+
+**Why these three collections, confirmed rather than assumed.** The session
+brief that opened this task supplied a list of three from memory. It was
+verified, not trusted: cross-checked against the model registry
+(`backend/src/models/index.ts` - ten models, ten declared collection names)
+and against a live `db.getCollectionNames()` on the dev database, which
+returned exactly those ten names and no others. There is no separate
+decision-log or cached-comparison collection accumulating state outside the
+Mongoose model layer - the two audit-log collections named in D-057 are the
+whole of it. A grep for raw `db.collection(...)` access outside `models/`
+turned up nothing, so nothing writes to Mongo off the model layer.
+
+**Idempotent by construction.** `seed()`/`seedUsers()` already replace
+rather than upsert (D-019); `deleteMany({})` on an empty collection is a
+no-op. `syncIndexes()` runs before each wipe for the same reason D-018
+requires it in `seed.ts` - this script may be the first thing to touch a
+brand-new database before the app has ever started, so an index cannot be
+assumed to already exist.
+
+**Verified live**, not just by reading the code: run against the real dev
+database (129 accumulated `schedules`, 5 `schedule_overrides`, 15
+`schedule_approvals` from prior sessions' testing - one more schedule landed
+between the count and the run, so 130 were actually removed). First run
+reseeded 10,149 corridors / 10,149 calendar entries / 55 assets / 89 tasks /
+102 resources / 6 provenance records / 4 demo accounts and reported
+`130 -> 0`, `5 -> 0`, `15 -> 0`. A second consecutive run reported `0 -> 0`
+across all three, confirming idempotency. With the API server up, all four
+demo accounts (`engineer`, `controller`, `drm`, `admin`) returned HTTP 200 on
+login, and `GET /api/schedules` with a real controller token returned
+`{"data":[],"pagination":{"total":0,...}}` - the exact pre-first-generation
+state the task exists to produce.
+
+**Alternative considered.** A shell one-liner (`mongosh --eval
+'db.schedules.deleteMany({})...'`) run by hand before the pitch. Rejected:
+it is not idempotent-by-inspection, prints no confirmation a non-technical
+operator can read, and depends on someone remembering the exact three
+collection names under pitch-day pressure - precisely the failure mode this
+script exists to remove.
+
+---
+
+## D-075 — The Gantt opens on today, not the day that demos best
+
+**Date:** 2026-08-25 · **Task:** audit session (bug fix)
+
+**Decision.** `GanttTimeline`'s default day-tab selection now checks the
+real clock first: if today falls inside the loaded plan's horizon, the
+timeline opens there. D-040's original heuristic (first day with a
+cross-department batch, else the busiest day) is now the fallback for when
+today is outside the horizon - a schedule generated for a future week not
+yet started, or one whose horizon has already fully elapsed. Implemented as
+a pure function, `defaultSelectedDay(days, todayIso)` in `lib/gantt.ts`, so
+it is unit-tested the same way `summariseDays` and the other layout
+functions already are.
+
+**Why this regresses nothing from D-040.** D-040 was optimized for a
+one-shot walkthrough: open on the day that shows the plan's strongest
+feature. That is the right default when there is no "today" to anchor to -
+a recorded demo, a historical audit review, a schedule for next month. It is
+the wrong default for a Controller opening the dashboard *live*, where the
+operationally relevant day is whichever one is actually happening right now.
+Neither case was being served correctly before this fix serves both.
+
+**Confirmed live before writing the fix, not assumed from the code.** The
+component's own logic doesn't literally read `horizonStart` - it computes
+"first batch day, else busiest day" - but on the real corpus that heuristic
+resolves to day 1 anyway (Monday, 13 blocks, the first batch), which is
+functionally identical to the reported symptom. Driven with Playwright
+against a real published schedule (`horizonStart: '2026-08-24'`, real clock
+at `2026-08-25`, a Tuesday inside the horizon): before the fix, the Gantt
+opened on **Monday 24th** (13 blocks, batch) with **Tuesday 25th** (today, 7
+blocks, no batch) unselected. After the fix, Tuesday 25th is selected.
+Zero console errors. Frontend suite: 114 passing (was 111; +3 for
+`defaultSelectedDay`), `tsc --noEmit` clean.
+
+**Scope note.** `GanttTimeline` has no `key` prop tied to the plan id, so
+its `selected` state (computed once via a lazy `useState` initializer) does
+not re-resolve if a new plan loads into an already-mounted component without
+a full remount. That limitation predates this fix and is unchanged by it -
+flagged here as a known risk, not fixed, since remount behavior is a larger,
+separate change than the reported bug.
+
+---
+
+## D-076 — "Generate schedule" stops overriding the backend's own correct default
+
+**Date:** 2026-08-25 · **Task:** audit session (bug fix)
+
+**Decision.** `ControllerDashboard.tsx` no longer sends a hardcoded
+`horizonStart: '2026-08-24'` on every generate/regenerate click. The field is
+omitted from the request entirely, so the backend's own
+`defaultHorizonStart()` (`scheduleGathering.ts` - already `new
+Date().toISOString().slice(0, 10)`, the real clock) supplies it, exactly as
+it already does for any other caller that omits the field.
+
+**Why this was a real bug, found while auditing the Gantt fix (D-075) for
+the same root cause elsewhere.** `DEFAULT_HORIZON_START` was commented "the
+dataset's reference week, so a demo run is reproducible" - reasonable when
+written, days after the synthetic data's own `referenceDate` (2026-08-22).
+But it is a literal, not a computation: every day this project is worked on
+without someone remembering to bump it, "Generate schedule" produces a plan
+further behind the real calendar. It was already one day stale at audit
+time (real clock 2026-08-25, literal still 2026-08-24) - not a future
+hypothetical. Uncaught, by actual pitch day the dashboard's own subtitle
+("Generated block plan for the coming week") would be describing a week
+already partly in the past, and D-075's new "open on today" Gantt logic
+would silently fall back to D-040's heuristic every time, because today
+would no longer be inside the horizon at all - the exact symptom D-075
+fixed, recreated one level up.
+
+**Why this doesn't cost the reproducibility the original comment wanted.**
+`new Date().toISOString().slice(0, 10)` only changes at UTC midnight. Every
+rerun on the same working day - the actual rehearsal-then-perform pattern
+this project uses - still produces the same `horizonStart` and therefore a
+reproducible plan. What changes is only the thing that *should* change: a
+task's `sla_urgency`/`sla_breach` (D-027) is computed `asOf: horizonStart`
+against each task's fixed `slaDueDate`, so as real days pass, a task
+correctly reads as more overdue than it did last week. That is a real block
+plan responding to time passing, not numbers drifting for no reason.
+
+**Verified live.** Clicked "Generate schedule" for real (no curl shortcut):
+the new schedule document shows `horizonStart: '2026-08-25'` in MongoDB,
+matching the real clock exactly, and the Gantt opens on "25 Tue" - today,
+which is also day one of the new horizon. Zero console errors.
+`tsc --noEmit` clean, frontend suite 114/114 (unchanged - no test asserted
+the old literal).
+
+**Consequence for TX4.** This does not by itself produce reproducible
+pitch-deck numbers across *different* days - by design, per the paragraph
+above. TX4 ("final pitch-deck numbers pulled from a real run") should
+capture its numbers from a run on or immediately before the actual pitch
+day, not from a run recorded during this development window. That
+requirement existed already (CLAUDE.md: never fabricate final demo
+numbers); this fix is what makes "run it again close to demo day" produce
+the dashboard's own claimed framing ("the coming week") instead of a stale
+one.
+
+---
+
+## D-077 — The Audit Trail's empty state was unreachable dead code
+
+**Date:** 2026-08-25 · **Task:** audit session (bug fix)
+
+**Decision.** `AuditPage` now checks for the "no schedule generated yet" 404
+explicitly and short-circuits to a friendly empty state, the same pattern
+`ComparisonPage` already established. `QueryState`'s generic `error` branch
+is only reached for a genuine failure now.
+
+**What was actually happening.** `AuditPage` wrote its own
+`emptyMessage="No plan has been generated yet."` and passed it to
+`QueryState` alongside `error={latest.error && !latest.data ? latest.error
+: null}`. On a fresh database both conditions are true at once - no
+schedule exists, so `versions.data.length === 0` AND
+`useGetLatestScheduleQuery` returns a 404 - and `QueryState` checks `error`
+before `isEmpty` (`QueryState.tsx:29`). So the `emptyMessage` was dead code:
+unreachable on the one path it was written for. What actually rendered was
+`QueryState`'s generic error branch - the raw 404 message plus a
+**developer-facing debugging line**, "Is the backend running, and has `npm
+run seed` been run?" - to a judge opening Approval & Audit before the first
+"Generate schedule" click of the demo.
+
+**Why the fix follows an existing pattern instead of inventing one.**
+`ComparisonPage` solves the identical problem (same
+`useGetLatestScheduleQuery`, same 404-on-empty shape) with a `noScheduleYet`
+check that short-circuits before `QueryState` is ever reached. Reusing that
+shape rather than teaching `QueryState` itself to special-case 404s keeps
+the fix local and consistent with what a reader of `ComparisonPage` already
+recognises, rather than changing a shared component's behaviour for every
+caller.
+
+**Confirmed live, both states.** Reset the dev database to zero schedules
+(`npm run demo:reset`) and drove the real app: before the fix, `/audit`
+showed the raw error + debug hint in rose-red text; after, it shows "No
+plan has been generated yet" with a "Go to the dashboard" link, matching
+the Dashboard/Comparison/Oversight/Engineer-portal empty states already
+verified correct in the same pass. Zero console errors either state.
+`tsc --noEmit` clean, frontend suite still 114/114 (no test covered this
+page's empty state, so none broke - and none caught this either, which is
+the gap: see the test-suite honesty note in this session's summary).
+
+---
+
+## D-078 — `scheduler.py`'s own module docstring was auditing as "unbuilt" work that has been done for days
+
+**Date:** 2026-08-25 · **Task:** audit session (documentation fix)
+
+**Finding.** `optimizer/app/core/scheduler.py`'s module docstring carried a
+"WHAT IS DEFERRED, AND TO WHERE" section still reading `MaintenanceTask.priority
+is a PLACEHOLDER carrying severity 1-5` and pointing four PRD 13.1 terms (beta
+asset risk, lambda train-delay, xi weather risk, plus policy-slider weights)
+at tasks (T7, T16, T22, T23, T26) as future work. All five are `done`
+per `TASKS.md`, and have been for several sessions. A judge or teammate
+reading this file's own header - exactly the CLAUDE.md-mandated
+PRD-traceability comment this project relies on for demo Q&A - would be told
+the opposite of the truth.
+
+**Not a behaviour bug - verified the code, not just the comment.** The
+`objective_terms` actually built (`weights.coverage * task.priority`, SLA
+compliance, batching, waste, fragmentation) already matched D-023's original
+design; `task.priority` is the real FR2.3 score, not severity. The four
+PRD-named terms this docstring called "deferred" were never silently
+dropped - each was implemented by a different, deliberately-chosen mechanism
+that a plain "add it to the objective" framing would have mis-described even
+if the task pointers had been current:
+
+- beta (asset risk) and lambda (train-delay) and xi (weather) are all
+  **reporting/advisory-only** by explicit design (T16, T22, T26 - the same
+  "checked and computed, but does not change the plan" pattern D-068
+  documents for T26 specifically) - not objective terms waiting to be added.
+- rho (resource conflicts) went the *other* direction: a **hard constraint**
+  (T25), stronger than the soft penalty PRD 13.1 originally implied.
+- Policy-slider weights (T23) are the one item that actually *did* become
+  what the old docstring predicted - the five constants already in the
+  objective are now caller-supplied, not fixed.
+
+**Fix.** Rewrote the section to state current reality and cite the
+mechanism each term actually uses, rather than deleting it - the "here's
+what PRD 13.1 asks for and where each piece actually lives" framing is
+exactly what a judge's technical question would probe, so it is worth
+keeping accurate rather than removing. Also corrected two pre-existing
+dangling references (`_add_dependency_constraints` and an invented
+`_add_resource_constraints`) to the functions that don't exist - both
+constraints are inline sections inside `solve_schedule`, not separate
+functions - to the section-comment markers that actually exist.
+
+**Verified.** `python -c "from app.core import scheduler"` imports clean;
+full optimizer suite still green (skips are pre-existing marked-slow/live
+tests, unrelated to this change). Docstring-only - zero behaviour change.
+
+---
+
+## D-079 — Terminal-state refusal grammar: `${action}d` only worked for one of four verbs
+
+**Date:** 2026-08-25 · **Task:** audit session (bug fix)
+
+**Found while adversarially testing the approval workflow state machine**
+(audit area 3 - out-of-order transitions, overriding a published plan).
+`checkTransition`'s terminal-state refusal built its past tense as
+`` `${action}d` ``. Of the four `WorkflowAction`s this produces: `submit` ->
+**"submitd"**, `reject` -> **"rejectd"**, `publish` -> **"publishd"** - all
+three read as typos. Only `approve` -> "approved" happened to be correct,
+because it already ends in "e". Every attempt to act on a `published` or
+`rejected` plan (the two `TERMINAL_STATES`) hit this for three of the four
+possible actions - a double-click on Publish, or a stale tab retrying
+Submit, are exactly the kind of thing that happens live in front of judges.
+
+**Fix.** A `PAST_TENSE: Record<WorkflowAction, string>` map replaces the
+string concatenation, in `approvalEngine.ts` next to the `WorkflowAction`
+type it covers.
+
+**Why this survived until an adversarial pass found it.** Every workflow
+test that reaches a terminal-state refusal uses `reject` or `publish` as
+the *terminal* action reached, then asserts against `approve` or `submit`
+attempted *from* it - and `approve`'s output happened to be the one
+grammatically-correct case. No test ever exercised the reverse (acting on
+an already-`rejected` or already-`published` plan with `submit`, `reject`,
+or `publish` itself), which is precisely the scenario this audit's
+"try to break the state machine" instruction was aimed at. A test now
+exists for this - see the test-suite-honesty note in this session's
+summary.
+
+**Verified live**, not just re-run against the fixed test: walked a real
+schedule through `submit` -> `approve` -> `publish` over real HTTP, then
+issued `submit`, `publish`, and `reject` (with a valid reason) against the
+now-published plan. All three now read "cannot be submitted" / "cannot be
+published" / "cannot be rejected". Backend suite 134/134, `tsc --noEmit`
+clean.
+
+---
+
+## D-080 — Inspecting a block is a separate action from overriding it, and both now exist
+
+**Date:** 2026-08-25 · **Task:** TX5 (PRD Section 8 screen 7, follow-up to the audit session that first found this gap)
+
+**Decision.** Clicking a block on the Gantt now always opens a read-only
+Task/Block Detail Drill-down (`BlockDetailPanel.tsx`) - department mix, each
+task's plain-English scheduling reason, asset criticality, predicted risk
+(with PRD 9.1's framing intact), resource assignment, and its full
+dependency chain. Overriding is reached FROM the drill-down (a button shown
+only when the plan's workflow state actually allows it), not from the
+Gantt click directly.
+
+**Why this was two bugs wearing one gap.** Before this, `ControllerDashboard.tsx`
+wired the Gantt's only click handler as `onSelectBlock={overridable ?
+setSelected : undefined}`. That conflated two different questions -
+"can I see what this block is" and "can I change it" - into one, and
+answered both with the second one's answer. The practical effect: a
+**published plan's blocks were entirely unclickable**, and so were every
+block a **DRM** (permanently read-only, PRD FR10.1) ever looked at, on
+any plan, in any state. There was no way to inspect a possession's
+reasoning outside the narrow moment a Controller had a draft plan open.
+Making inspection its own action, decoupled from `overridable`, fixes both
+at once rather than needing two separate patches.
+
+**Data source: assembly, not new backend logic**, per the session brief's
+own instruction to confirm this before writing a route. Every field already
+existed: the block (`ScheduleBlock`), the schedule's own decision log
+(FR2.4/FR8.1, gained a proper `DecisionLogEntry` export in `apiSlice.ts`
+rather than staying an anonymous inline type), the task documents already
+fetched for the priority queue, and `assets`/`resources`, fetched inside
+the new panel the same self-contained way `OverridePanel` already fetches
+its own override targets. No new endpoint.
+
+**The "plain-English reasoning" is templated from `contributingFactors`,
+not a fresh LLM call.** Ask the Planner (T18, FR8.2) already owns grounded
+free-text explanation, but invoking it once per block click would mean a
+real Claude API round-trip (latency, cost) just to open a read-only panel -
+the wrong shape for something that should render instantly on every click
+during a live demo. `lib/blockDetail.ts`'s `describeReasoning` is template
+text over numbers the solver already computed and already stores
+(`priorityScore`, `dominantPriorityFactor`, `isCrossDepartmentBatch`,
+`withinSla`, window usage), reusing the exact `FACTOR_LABEL` map
+`PriorityQueue.tsx` already used - pulled into a shared
+`lib/priorityFraming.ts` alongside `RISK_FRAMING` so the two components
+cannot describe the same factor two different ways (D-046/D-057's
+anti-drift rule, applied to a label map rather than solver logic). There is
+nothing here an LLM could invent, so there is nothing to verify-ground
+either.
+
+**Inline panel, not a modal - matched to what this codebase already does
+three times over.** The session brief pointed at `TourOverlay.tsx`'s modal
+pattern to check before inventing a new one. Checked, and it turned out to
+be the wrong precedent: a repo-wide grep for a true floating/backdrop
+dialog (`fixed inset-0` + `role="dialog"`) found exactly one match - the
+guided tour, a one-off spotlight mechanism for onboarding. Every actual
+content panel this project already has (`OverridePanel`, `WhatIfPanel`,
+`EmergencyPanel`) is an inline, conditionally-rendered section in the page
+body, not an overlay. `BlockDetailPanel` follows that three-times-repeated
+convention instead, which is both the lower-risk choice and the one a
+reader of this codebase would already expect.
+
+**A real bug the live-verification pass caught before it shipped, not
+after.** The first version showed each dependency-chain link's raw
+`Task.status`. Driven live against a real 3-stage chain
+(TSK-00003 → TSK-00002 → TSK-00001, all three genuinely scheduled in the
+plan under test), every link rendered `status: 'pending'` sitting right
+next to "has its own block in this plan" - true statements that read as a
+contradiction. Checked against the database directly: **every task in this
+corpus reads `'pending'` regardless of whether a real plan schedules it**,
+because `Task.status` is written once at seed time and never updated after
+generation - exactly the limitation `lib/oversight.ts`'s own header comment
+already documents for a different KPI. Fixed by dropping the field
+entirely and reporting only `scheduledInThisPlan`, the one signal this
+data model can answer honestly. A regression test pins it: dependency links
+must never carry a `status` key.
+
+**Verified live end to end**, not from a code read: driven with Playwright
+against the real running stack. A shared block (TSK-00004 + TSK-00008,
+BBPR-SYU) opened to show both tasks' full breakdown, correct department
+mix, and non-zero risk/criticality figures with the framing text attached.
+"Override this block →" correctly handed off to the real `OverridePanel`
+for the same block. The 3-stage dependency chain rendered correctly after
+the status-field fix above. Walked a schedule through
+submit → approve → publish over real HTTP, then confirmed on a **published**
+plan as controller: the legend read "Click a block for details" (no
+override suffix), the block was still clickable, the drill-down opened
+with the full breakdown, and no "Override this block" button rendered.
+Zero console errors on every check. Frontend suite: 128/128 (+14: 13 for
+`lib/blockDetail.ts`, +1 for the status-field regression guard).
+`tsc --noEmit` clean.
+
+---
+
+## D-081 — "Monthly" trends are plotted honestly as "however much real history exists", never padded to look like a cadence this prototype cannot have
+
+**Date:** 2026-08-25 · **Task:** TX6 (PRD Section 8 screen 6, follow-up to the audit session that first found this gap)
+
+**Decision.** DRM oversight gained two PRD-named pieces it was missing (the
+KPI hierarchy rollups themselves were already built by T28 - confirmed
+against `DrmOversightPage.tsx`/`lib/oversight.ts` before treating this as
+new work, per the session brief's own instruction): a trend section
+plotting four real `ScheduleMetrics` fields across every real plan
+generation on the CURRENT horizon type, and a "Download report (CSV)"
+button.
+
+**The honesty tradeoff, flagged rather than silently resolved.** PRD 8.6
+says "Monthly trend charts". This prototype's real operating history runs
+from hours to a few days - it will never hold a month of real generations
+before the actual demo, and a chart implying otherwise would be exactly the
+kind of dishonest smoothing CLAUDE.md forbids. Resolution: plot real KPI
+values from every real generation that exists, oldest first, labelled with
+what it actually is ("Trend history... not literally monthly", stated in
+the section's own subtitle) rather than dressed as a monthly cadence it
+cannot back up. `MIN_POINTS_FOR_TREND = 3` (the minimum that can show a
+DIRECTION rather than a bare before/after delta) gates whether a chart
+draws at all - below it, the section states the exact count and what is
+needed, never renders two dots as if they were a line. This is a judgement
+call, not a discovered fact, so it is being surfaced here explicitly as the
+brief asked, not just implemented and left for the owner to notice later.
+
+**Filtered to the current plan's own horizon type** (`sameHorizonHistory`),
+reusing the exact principle `oversight.ts`'s `scheduleStability` KPI
+already established (D-070's note): a 7-day plan's `tasksScheduled` and a
+30-day plan's are not the same measurement, so mixing them into one line
+would read as a quality swing that is really a horizon-length artefact.
+
+**No new charting dependency.** A repo-wide check found no charting
+library in either `package.json` before this - `TrendChart.tsx` is a plain
+`<svg>` with one `<polyline>` and a few `<circle>`s, the first real SVG
+element in this codebase (everything else, including the Gantt, is
+div/CSS-positioned). Justified by scope, not by house style alone:
+`MIN_POINTS_FOR_TREND` bounds this at a handful of points on one series
+shape, well inside what a hand-rolled chart can draw cleanly, and this
+project has consistently chosen a small bespoke component over a dependency
+for exactly this kind of bounded need (the Gantt itself; D-072's hand-built
+guided tour over `react-joyride`).
+
+**CSV, not PDF, for the export - also no new dependency.** Checked both
+`package.json`s for `xlsx`/`pdfkit`/`jspdf` first: none. A KPI rollup is
+tabular data regardless of the file extension it leaves in, and CSV needs
+nothing beyond a `Blob` and a synthetic `<a download>` click - already how
+every browser handles a same-origin text download, no library required.
+The exported file is built from the SAME `KpiCategory[]` the page already
+rendered (`buildKpiHierarchy`'s real output, not a second computation), so
+what a DRM downloads is guaranteed to match what they were just looking at
+- the honesty guarantee runs through one code path, not two that could
+drift apart.
+
+**Verified live end to end**, not from a code read. Reset the database to
+zero schedules, generated exactly two real weekly plans, and confirmed the
+oversight page showed the honest "Not enough history yet: 2 real
+weekly-horizon generations recorded, 3 needed" message rather than a chart.
+Generated a third and confirmed four real `<svg>` trend lines rendered
+(flat, because the input backlog had not changed between generations - the
+CORRECT result given D-022's determinism, not a rendering bug). Triggered
+the CSV download through a real Playwright `download` event (not just
+checked for a thrown error): `drm-oversight-SCH-20260825132510145.csv`
+saved, and its contents were read back - every KPI value and detail string
+matches the screen exactly, including the two "not tracked" rows with
+their full reasons, and the trend section carries the same three real
+schedule ids/timestamps/values the chart plotted. Zero console errors
+throughout. Frontend suite: 142/142 (+14: 8 for `lib/trends.ts`, 6 for
+`lib/exportReport.ts`). `tsc --noEmit` clean.
+
+---
+
+## D-082 — Task splitting (T29 Phase 1): a documented judgement call, a real
+model change, and two real costs found by testing it at full strength
+
+**Date:** 2026-08-25 · **Task:** T29 Phase 1 (new scope beyond T1-T28,
+explicitly not a PRD-numbered task - see `TASKS.md`)
+
+**Decision.** `solve_schedule` can now cover a task with 2+ non-contiguous
+window segments instead of exactly one, for defect types judged genuinely
+resumable across sessions. This is new domain modelling, not a PRD fact -
+flagged to the project owner alongside the real numbers it produces, per
+this task's own brief.
+
+**The splittability rule is keyed on `defectType`, a documented judgement
+call.** `app/core/splitting.py`: 6 of PRD 5.2's 12 real defect types are
+splittable (Engineering: track geometry defect, ballast deficiency, joint
+wear; S&T: cable fault; TRD: OHE snag, insulator damage), 6 are not
+(rail fracture, relay fault, point failure, interlocking snag, isolator
+fault, feeder fault) - reasoned per type in the module's own docstring
+(e.g. a rail fracture cannot be left mid-repair and reopened to traffic; a
+track geometry pass can safely stop and resume under the same permission).
+Keyed on `defectType` rather than `department` (too coarse - every
+department has both kinds) or on resource *type* (crew/machine/permission
+never survives the Node -> optimizer wire contract today, confirmed by
+research before choosing). An unrecognised defect type defaults to NOT
+splittable - safety-shaped mistakes are worse than missed opportunities.
+`defectType` itself had to be added to the wire contract
+(`OptimizerTask`/`TaskIn`/`MaintenanceTask`) - previously present in Mongo
+and the generator output but silently dropped at the Node payload-building
+step.
+
+**The minimum segment floor is 30 minutes, reused rather than invented.**
+Equal to T3's own free-window floor (D-010). Every window this model ever
+sees already clears that bar, so a lower floor would be meaningless and a
+higher one would need its own fresh justification this project does not
+have. Verified genuinely enforced, not decorative, with a deliberately
+adversarial hand-built test: three windows of exactly 30 minutes each (so
+a used segment can only ever be exactly 30) against a 61-minute task -
+90 minutes of total capacity clears the pre-solve check, but no
+floor-respecting combination sums to 61, and the task correctly defers
+`NO_CAPACITY` rather than the solver quietly using a sub-30 sliver.
+
+**Mechanism.** `assign[(task,window)]` keeps its exact pre-T29 meaning
+("task has some presence here") everywhere that only needs a boolean -
+dependency precedence, resource no-overlap, batching, pins - untouched by
+splitting. New: `segment_minutes[(task,window)]` (a real `IntVar` only for
+a task that genuinely needs to split - a plain `duration * assign`
+expression for everything else, no wasted variable) and a per-task
+`covered` flag replacing "at most one window" for a splittable task, tied
+by `sum(segment_minutes) == duration * covered` - so a task is always
+fully scheduled or fully deferred, never partially done. Coverage and SLA
+compliance in the objective moved from a per-window to a per-TASK term
+(`covered`/`within_sla`), which was necessary, not stylistic: summing the
+old per-window reward across a split task's segments would have paid it
+once per segment, over-rewarding splitting in proportion to segment count.
+
+**Real corpus, run at full strength on the owner's own request rather than
+a partial/estimated pass:** of the 53 tasks D-024 found structurally
+impossible (longer than any single window their corridor offers),
+**29 are now placed** via splitting. `tasksScheduled` rises from 35 to
+**64**; `tasksDeferred` falls from 54 to **25**. GZB-SBB - the corridor
+this project has always cited as its worst case, 281 trains/day leaving
+one 54-minute window - genuinely gets real coverage for the first time
+(TSK-00045, a 185-minute "ballast deficiency" job, split across four days
+of that same 54-minute window, 4x54=216>=185) without any traffic block or
+train displacement at all. A NEW, real `NO_CAPACITY` category appears for
+the first time on this corpus: 3 tasks (TSK-00044, TSK-00062, TSK-00085)
+now have enough TOTAL capacity to be split, but lose the resulting real
+fight for space to higher-priority work - previously they were simply
+impossible outright; now they are genuinely contestable and lose a fair
+fight, a meaningfully different and more precise finding. 21 tasks remain
+genuinely impossible even with splitting (their real total available
+capacity, summed across the whole horizon, still does not reach their
+duration) - `EXCEEDS_TOTAL_CAPACITY_EVEN_SPLIT`, a new, distinct deferral
+reason from `EXCEEDS_LONGEST_WINDOW`, naming that splitting was tried and
+still did not fit rather than skipped.
+
+**Cost #1, found by testing at full strength rather than a small sample:
+the model is genuinely harder, and the solve no longer proves OPTIMAL
+within the existing 10s budget.** Measured before accepting this:
+widening every splittable task's candidate set indiscriminately (the first
+implementation) pushed the real solve from OPTIMAL in under a second to
+FEASIBLE with a real, non-shrinking gap even at 90 seconds - and, worse,
+losing run-to-run determinism (two consecutive `/optimize` calls on
+identical input returned different `objectiveValue`s), directly
+threatening D-022's "a plan that changes when nothing changed is
+indefensible in a demo" guarantee. Fixed in two measured steps, not
+guessed: (1) only widen a splittable task's candidates when it actually
+NEEDS to split (exceeds its corridor's longest window) - 32 of the 89
+real tasks, not all 50 splittable-by-type ones, since nothing in the
+objective rewards gratuitous splitting and a task that already fits one
+window gets zero benefit from a wider candidate set; (2) stop allocating a
+real `segment_minutes` `IntVar` (plus its linking constraint) for a
+non-split task at all, since `duration * assign` already IS that value,
+definitionally. Together these bring the real corpus back to a **FEASIBLE,
+reproducible** result at the default 10s budget (verified: two independent
+solves of the identical corpus are byte-identical), with roughly a 2%
+gap to the solver's own best proven bound - accepted and reported
+honestly as FEASIBLE rather than dressed up as OPTIMAL, the same
+discipline T20's what-if solver already established for a cut-short solve
+(D-064).
+
+**Cost #2, a real, weakened guarantee, not a regression in the code:**
+two structural-equality tests that were previously PROVEN facts about an
+OPTIMAL solve (D-028's "swapping severity for the real FR2.3 score leaves
+the scheduled set identical"; D-061's "the exposed policy-slider range
+never trades away coverage, verified with a 10x safety margin") now show
+a small (1-3 task) difference between two FEASIBLE, non-optimal solves of
+slightly different objectives, because a time-boxed search can land in a
+genuinely different local optimum even where both orderings would agree
+if run to completion. Both tests were updated to assert a small, explained
+tolerance instead of exact equality, with the reasoning stated explicitly
+rather than silently loosened - this is flagged to the owner as a real
+cost of Phase 1 worth weighing against the win above, not swept under a
+passing test.
+
+**A real bug found only by re-running the T27 (emergency re-optimization)
+real-corpus test after enabling splitting, not by inspection.** T27's
+"hold everything off the affected corridor exactly fixed" (PRD 9.10)
+built one `Pin` per task from `current_placements` via
+`{p.task_id: p for p in current_placements}` - a plain dict, silently
+keeping only the LAST segment of a split task and leaving every other
+segment completely unpinned. Since T27 COMMITS (unlike T20's sandboxed
+what-if), this was a live, blast-radius risk: an emergency re-solve could
+silently move or drop part of an already-executed possession. Fixed at
+the source: `Pin` gained `window_keys` (a tuple, alongside the existing
+single `window_key`, mutually exclusive) so a caller can hold ALL of a
+split task's segments simultaneously; `generate_emergency_reoptimization`
+now groups `current_placements` by task id instead of overwriting, and -
+for the narrower edge case of a split task straddling the disruption's
+own `as_of` boundary on the SAME corridor being disrupted (some segments
+already executed, some not) - pins the WHOLE task rather than only its
+executed segments, the conservative direction (it can only under-use
+newly-freed capacity, never lose an executed one). Confirmed by re-running
+the exact real-corpus scenario this test already exercised: every
+off-corridor block is byte-identical to the baseline again.
+
+**A pre-existing, unrelated gap found and fixed along the way:** the local
+dev/test helper `optimizer/scripts/real_data.py` predates the 2026-08-25
+auth session (D-073) and was silently reporting `BackendUnavailable`
+(actually a 401, not a connectivity failure) for every real-corpus test
+and script since then - the real-corpus test suite had been quietly
+skipping, not passing, since auth shipped. Fixed by having it log in as
+the `controller` demo account first and send a bearer token, the same as
+any other authenticated client now must.
+
+**Known limitation, explicitly not built in this phase (flagged, not
+silently left for later):** `frontend`/backend UI does not yet render
+`splitTasks` or the decision log's new `isSplit`/`segments` fields - the
+brief's requirement to mark split placements clearly in the schedule and
+decision log is met at the data layer (additive, backward-compatible;
+every pre-T29 consumer keeps working unchanged), verified by dedicated
+tests, but the Comparison/Gantt/BlockDetailPanel screens do not yet
+visually distinguish a split block from a normal one. Building that is
+real, separate frontend work, out of this phase's scope per its own
+"stop after this phase" instruction.
+
+**Tests:** optimizer suite gained 9 new hand-built splitting tests in
+`test_scheduler.py` (basic multi-segment coverage, the non-splittable
+regression guard, the unset-defect-type default, the adversarial floor
+test, the total-capacity structural defer, cross-department batching
+across a segment, dependency precedence across a split prerequisite's
+full segment set, resource no-overlap across segments, and decision-log
+marking). Real-corpus tests across `test_scheduler_real_data.py` and
+`test_optimizer_api_real_data.py` updated with the new real numbers and
+reasoning inline, not silently patched to pass. `test_emergency.py`'s
+real-corpus scenario re-derived against the new baseline and re-verified
+byte-identical off-corridor after the `Pin` fix.
+
+---
+
+## D-083 — The 64-vs-47 discrepancy was a stale dev-server process, not a
+wire-contract bug - and the real, final T29 Phase 1 number is 64
+
+**Date:** 2026-08-25 · **Task:** T29 diagnostic session (owner-directed
+follow-up to D-082, before any Phase 2/3 decision)
+
+**The finding, stated first.** After D-082 landed, a real `POST
+/api/schedules/generate` through the actual product (Node -> optimizer
+HTTP -> MongoDB) returned **47 scheduled / 42 deferred**, not the 64/25
+D-082 reported from direct `solve_schedule()` calls - reproducibly, twice,
+on an otherwise-idle machine. That is exactly the number that would have
+gone in front of judges, so it was treated as the priority over any
+further Phase 2/3 work, per the owner's explicit instruction.
+
+**Root cause: the live optimizer process was never restarted after the
+mid-session performance fixes, not a payload or model bug.** D-082's own
+narrative describes THREE optimizer-side edits made in sequence during the
+same session (dropping the needless `segment_minutes` IntVar for
+non-split tasks; only widening a splittable task's candidate windows when
+it actually needs to split, not for all 50 splittable-by-type tasks; the
+`Pin.window_keys` fix for T27). The optimizer was restarted ONCE, before
+any of these three edits. `uvicorn app.main:app` runs without `--reload`
+(by design - D-005 dev servers restart deliberately, on the theory that a
+Python change is rare enough not to need a watcher), so the live process
+kept serving the ORIGINAL, unoptimized model (indiscriminate candidate
+widening for every splittable task) through every subsequent `curl`/Node
+call for the rest of the session, silently. Every *test-suite* number in
+D-082 was still correct, because `pytest` and every `python -c` diagnostic
+script re-import `app.core.scheduler` fresh on each invocation - only
+calls against the already-running HTTP server were affected, and that
+includes every one of D-082's own live-HTTP spot checks after the
+optimizations landed.
+
+**Verified, not assumed, per the diagnostic brief's own instruction not to
+guess.** Captured the EXACT JSON `scheduleGathering.ts` sends to
+`/optimize` for a real `POST /api/schedules/generate` (a one-line
+temporary log statement in `optimizerClient.ts`, removed after use - never
+committed) and diffed it field-by-field against `scripts/real_data.py`'s
+`build_payload()` output for the identical corpus/horizon. Result: **all
+89 tasks are byte-identical between the two payloads, including
+`defectType`** - T29's own new wire-contract field is wired correctly
+end-to-end, confirmed directly rather than inferred. The only differences
+found were `occupiedWindows`/`trainClassMix` on all 30 corridors, which
+`build_payload()`'s test helper does not populate at all (a pre-existing,
+unrelated gap in that script) - and those two fields are **never read by
+the CP-SAT model itself** (`scheduler.py`'s own docstring: "Unused by the
+CP-SAT model - carried so a deferral can be costed as a traffic block").
+They can change T22's displacement-cost TEXT on a deferral message; they
+cannot change which tasks get scheduled. So the payload diff itself proves
+the two paths are functionally identical for scheduling purposes, which
+is exactly what a **clean restart** of the optimizer then confirmed
+directly: the same real `POST /api/schedules/generate` call, against
+fresh code, returned **64 scheduled / 25 deferred / 29 split / 5
+cross-department batches** - matching direct `solve_schedule()` exactly.
+Repeated twice more for reproducibility (three real generate calls total,
+post-restart): identical every time.
+
+**The real, final T29 Phase 1 number, superseding the transient 47 from
+this session's stale-process window:** `tasksScheduled: 64`,
+`tasksDeferred: 25`, `tasksSplit: 29`, `crossDepartmentBatches: 5`,
+`status: FEASIBLE`. D-082's real-corpus test assertions
+(`test_optimize_reproduces_the_t29_numbers_over_http` et al.) already
+pinned these exact values, because they were built from the same
+always-fresh `TestClient` pytest uses - they did not need correcting.
+
+**The generalisable lesson, worth carrying into any future
+performance-tuning session on this project:** when iterating on
+`optimizer/app/core/*.py` during a live session, a code edit is invisible
+to anything hitting the already-running `uvicorn` process (no
+`--reload`) until it is restarted - `pytest` and `python -c` are not
+proof the live server agrees, because they always re-import fresh. Any
+"verify live" check against `curl`/the real Node orchestration must
+restart the optimizer immediately beforehand if the optimizer's own code
+changed since it was last started, not merely confirm `/health` returns
+200 (a stale process answers health checks identically to a fresh one).
+
+**No model or product code changed in this session** - diagnosis only, per
+the owner's explicit "no further changes to the CP-SAT model itself"
+guardrail. The one temporary instrumentation line added to
+`optimizerClient.ts` to capture the real payload was removed immediately
+after use and never reached the working tree in its diagnostic form.
+
+---
+
+## D-084 — The Comparison view's "impossible" count was stale after T29
+Phase 1, and got a genuine third category rather than a patched number
+
+**Date:** 2026-08-25 · **Task:** Comparison-view fix session (owner-directed
+follow-up to T29 Phase 1 / D-082, before TX4)
+
+**The bug, stated first.** After D-082/D-083, `comparisonToBaseline` on a
+real generated schedule showed `tasksScheduled: 64` next to
+`structurallyImpossibleCount: 53` - a response that is internally
+contradictory on its face. `structurallyImpossibleCount` was computed in
+Node as `totalTasks - contestableTaskCount`, which was correct pre-T29
+(everything not in the 36-task contestable set genuinely fit no window
+anywhere, for either engine) but silently became wrong the moment splitting
+made 32 of those 53 tasks placeable by the optimizer. The arithmetic itself
+never changed; what it meant did.
+
+**Decision: a third category, not a folded-in fix.** Two options existed -
+widen `contestableTaskCount` to include split-only tasks, or subtract them
+out of `structurallyImpossibleCount` some other way. Both would have been
+dishonest in a different direction than the original bug: folding split-only
+tasks into "contestable" would imply the BASELINE could also place them,
+which it categorically cannot (it never splits, by design - D-082). So a new,
+explicit `StructuralCategory` exists with three values -
+`contestable` (fits one window, unchanged, still 36 on the real corpus),
+`splitOnly` (fits no single window but the optimizer can place it via
+splitting - 32), and `impossible` (genuinely impossible for either engine
+even considering splitting - 21, corrected from 53). 36 + 32 + 21 = 89,
+verified directly against a real solve before writing any reporting code.
+
+**Single source of truth, not two computations that could drift.** A new
+`classify_structural_feasibility(task, candidates)` function in
+`app/core/scheduler.py` is the ONE place this three-way decision is made.
+`solve_schedule`'s own pre-solve check was refactored to call it (replacing
+inline duplicate logic, not adding a second copy), and
+`app.core.baseline.split_only_contestable()` (new, alongside the unchanged
+`structurally_contestable()`) calls the exact same function for reporting -
+so the actual solve and the Comparison view's denominators can never
+disagree again the way they just did.
+
+**A second, real bug found and fixed while auditing every consumer of the
+old binary, not left as a stale claim.** The baseline's own deferral message
+for `EXCEEDS_LONGEST_WINDOW` unconditionally said "impossible for any
+algorithm, not a baseline shortcoming" - true before T29 Phase 1, false for
+a split-only task the optimizer genuinely can place. `run_baseline` now
+checks the same shared classification and says "this non-splitting process
+cannot place it, but a splitting-aware engine could" for exactly that case,
+never overclaiming impossibility that isn't real.
+
+**Propagated additively through every layer, verified live at each one -
+not just at the API.** `/baseline` gained `splitOnlyTaskIds` alongside the
+unchanged `contestableTaskIds`. Node's `buildComparison()` reads both,
+fixes `structurallyImpossibleCount`'s arithmetic, and adds
+`splitOnlyTaskCount` plus a `splitOnlyScheduled` figure on each side
+(baseline's is asserted to be structurally 0, not merely observed as 0).
+A new caveat names the capability explicitly - "never counted inside the
+contestable comparison... crediting the baseline with a capability it does
+not have would be its own kind of misleading comparison" - and grounding.py
+carries `splitOnlyTaskCount` into `/explain`'s context so Ask the Planner
+can answer honestly too. The frontend's `ScopeBand` became a three-segment
+bar with corrected prose, and `buildMetricRows` gained a new HEADLINE row
+("Tasks placeable only by splitting", 0/32 baseline vs 28/32 optimizer on a
+live run) - a real, load-bearing capability difference, not a footnote,
+per the session's own brief. All of this was driven through a real
+Chromium session against a freshly generated schedule (login, click
+Generate, navigate to /comparison), not verified at the API layer alone -
+the rendered scope band, headline card, and caveats text all matched
+exactly what the fixed backend now computes, zero console errors.
+
+**Backward compatible by construction.** Both new fields are optional in
+the TypeScript contract (`splitOnlyTaskCount?`, `splitOnlyScheduled?`) since
+a schedule generated before this fix genuinely lacks them in storage - the
+new headline row and the scope band's third segment both collapse back to
+exactly the pre-T29 two-way presentation when the field is absent or zero,
+rather than rendering a hollow "0 / 0".
+
+**A process mistake repeated once more in this same session, caught before
+it produced a wrong number - not by luck.** Backend's `npm test` initially
+still showed `structurallyImpossibleCount: 53` (stale) after the Python
+fix landed, for the exact D-083 reason: the live `uvicorn` optimizer had
+not been restarted since the `classify_structural_feasibility`/
+`split_only_contestable` edits. Caught immediately by recognising the
+symptom from D-083 rather than re-diagnosing from scratch; a clean restart
+produced the correct `21`/`32` on the very next run.
+
+**Tests:** optimizer gained 2 new tests in `test_baseline.py`
+(`structurally_contestable` proven unchanged by a splittable task;
+`split_only_contestable` proven to find exactly the right set) plus a test
+pinning the corrected baseline deferral message; `test_optimizer_api_real_
+data.py` gained a real-corpus test for `splitOnlyTaskIds` (32, disjoint from
+the 36 contestable). Backend's CHECKPOINT test
+(`schedules.test.ts`) updated with the real, live numbers -
+`splitOnlyTaskCount: 32`, `structurallyImpossibleCount: 21`,
+`optimized.splitOnlyScheduled: 29`, `baseline.splitOnlyScheduled: 0`.
+Frontend gained 3 new tests in `comparison.test.ts` pinning the row's
+absence pre-T29/at zero and its presence and shape when real. All four
+layers green; zero regressions in the 300+ pre-existing tests this session
+touched only additively.
+
+---
+
+## D-085 — T29 Phase 2 (caution orders) investigated and stopped before any
+code: the honest rule yields zero eligible tasks on the real corpus
+
+**Date:** 2026-08-26 · **Task:** T29 Phase 2 (owner-directed follow-up to
+D-082/D-084, before TX4)
+
+**The question.** After D-084's corrected classification, 21 of 89 real
+tasks are genuinely impossible for either engine (fits no window, splittable
+or not). Phase 2's proposal: some of these might still be doable via a real
+Indian Railways mechanism - a **Caution Order** (a written speed
+restriction), where the corridor stays open to traffic at reduced speed
+instead of being closed for a possession. If some of the 21 qualify, they
+could be placed without needing a block at all.
+
+**The real 21-task pool was regenerated live, not reused from D-084's
+session.** `classify_structural_feasibility` run fresh against a live
+`load_scenario()` pull confirms 36 contestable / 32 split-only / 21
+impossible = 89, and the 21 fall into exactly six defect types: relay fault
+(9), rail fracture (7), isolator fault (2), interlocking snag (1), feeder
+fault (1), point failure (1) - precisely `splitting.py`'s existing
+NOT-splittable set (D-082). That overlap is a coincidence of reasoning, not
+of rule: splitting asks "can this be left in a safe intermediate state,"
+caution-order asks "can a train share the section while the work happens" -
+different questions that happen to fail for the same six types, for
+independent reasons each, as the per-type analysis below shows.
+
+**The rule, applied per defect type - the judgement call, made explicit
+before it became load-bearing anywhere, per this task's own brief:**
+
+* **relay fault (9), interlocking snag (1)** - NOT eligible. A relay pulled
+  mid-swap (or an interlocking mid-reconfiguration) makes the interlocking's
+  safety guarantee unverifiable for ANY train, slow or fast. A caution order
+  mitigates speed-related risk; it does nothing for "the signal might not
+  reflect the real track/point state," which is a correctness problem, not
+  a speed problem.
+* **point failure (1)** - NOT eligible. A failed switch mechanism is a
+  mis-routing/derailment risk. A slow train through a broken point is still
+  a wrong-track train - caution orders don't fix that.
+* **isolator fault (2), feeder fault (1)** - NOT eligible. This work happens
+  under Power Isolation; the hazard is electrical (touching de-energised-
+  but-uncertain equipment), which has no relationship to train speed at
+  all. A caution order changes nothing about the isolation state.
+* **rail fracture (7)** - NOT eligible, but the one case worth stating the
+  nuance on rather than dismissing by the same template as the other five.
+  Real IR practice genuinely does use caution orders as an interim TSR the
+  moment a fracture is detected, and brief look-out-protected fishplating
+  between train movements is a real quick-fix pattern. But that pattern is
+  for SHORT interim repairs; these 7 real tasks run 174-234 minutes of
+  continuous work - full weld/clamp-out duration, not a between-trains
+  patch - and a rail cannot be mid-cut or mid-weld while any train, at any
+  speed, passes over it. The real-world mechanism exists; it doesn't fit
+  what these specific tasks model.
+
+**Net result: 0 of 21 tasks are caution-order-eligible.** Flagged back to
+the project owner before writing any CP-SAT code, exactly as the task
+brief's own stop-gate required ("flag it back to me before it's
+load-bearing") - this is a bigger version of the same gate, since a 0-yield
+rule makes the entire placement mechanism (scope items 3-5 of the brief: a
+new placement path, pin interaction rules, decision-log wording, a fourth
+Comparison-view category) pure unexercised code for zero real benefit.
+Owner reviewed the per-type reasoning and the rail-fracture nuance
+specifically, and chose to accept the 0 finding rather than add a
+duration-based sub-rule or contest a verdict.
+
+**Decision: stop here, build nothing.** No changes to `scheduler.py`,
+`splitting.py`, the decision log, or the Comparison view's category count -
+the 36/32/21 split from D-084 remains the accurate, current picture of the
+real corpus. `is_splittable_defect()` is NOT reused or repurposed as a
+caution-order predicate anywhere; no `is_caution_order_eligible()` function
+was written, since a function that always returns `False` on every real
+input is not a rule worth shipping - the reasoning above **is** the
+artifact, recorded here for the next time this corpus's defect-type mix
+changes and the question is worth re-asking.
+
+**Phase 3 (alternate-route diversion) is also not started.** Its own
+premise in the original T29 brief was conditional on Phase 2 leaving "a
+small enough" residual pool to make it worth building - the residual pool
+Phase 2 was aimed at cracking is unchanged at 21, not reduced, so that
+premise doesn't hold any more strongly now than it did before this session.
+T29 stops at Phase 1 (D-082) plus this negative result until the owner
+directs otherwise.
+
+**No test changes.** No production code was touched, so no test corpus
+needed updating; `scripts/impossible_list.py`-style extraction used to
+regenerate the live 21-task list for this analysis was a disposable
+scratch script, not committed.
+
+---
+
+## D-086 — Cross-department batching at the default weight (5) is not
+"close to" the ceiling on the real corpus - it IS the ceiling
+
+**Date:** 2026-08-26 · **Task:** Batching-headroom investigation
+(owner-directed, before TX4)
+
+**The question.** D-061 verified `weights.batching` safe across
+`[0.1x, 10x]` of its default (3,000) without ever risking coverage. It never
+asked whether that weight was leaving real batching opportunities on the
+table. Before touching the default, the owner wanted the honest answer:
+is 5 near-optimal already, or is there real headroom a higher (still safe)
+weight would unlock?
+
+**A first attempt at the ceiling was wrong, and the wrongness was
+informative.** The natural way to compute "the true upper bound, before
+running the solver" is a standalone CP-SAT model that keeps every real hard
+constraint but replaces the whole weighted objective with "maximize the
+count of window instances hosting 2+ departments" - since policy weights
+only reshape the objective, never the constraint set, this is a
+mathematically valid ceiling for ANY weight vector, safe range or not. The
+first version of that model considered only whole-task (contestable, D-084)
+placements and returned a ceiling of **2**. That is immediately contradicted
+by the real corpus's own default-weight result: `crossDepartmentBatches: 5`
+(T29 Phase 1, D-082). A ceiling a real, already-achieved number exceeds is
+not a ceiling - it's a bug. The cause: a single split task (D-082) occupies
+several DIFFERENT window instances across several days, and each one is an
+independent fresh chance to pair with a different department's task there -
+something a whole-task-only model cannot see. Splitting doesn't just help
+coverage; it multiplies batching opportunities too, which is itself worth
+knowing and had not been stated anywhere before this investigation.
+
+**The corrected ceiling.** Rebuilt to faithfully reproduce every real hard
+constraint - the splitting `segment_minutes`/`covered` machinery, dependency
+precedence, resource no-overlap, and window capacity, copied in logic
+directly from `solve_schedule` rather than approximated - with the same
+"maximize batched-window count, nothing else" objective. Solved to
+**OPTIMAL** (not FEASIBLE - the batching-only objective is far smaller and
+cheaper to search than the full model): **ceiling = 5**, out of 147
+structurally eligible window instances that could in principle host 2+
+departments.
+
+**Empirical confirmation, not just the combinatorial proof.** A real sweep
+of `weights.batching` across five values spanning the full D-061 safe range
+(3,000 / 9,000 / 15,000 / 22,500 / 30,000 - 1x through the full 10x
+ceiling), holding every other weight at its D-023 default, on the real
+89-task corpus via direct `solve_schedule` calls:
+
+| batching weight | multiplier | tasksScheduled | tasksSplit | crossDepartmentBatches |
+|---:|---:|---:|---:|---:|
+| 3,000 | 1x (default) | 64 | 29 | **5** |
+| 9,000 | 3x | 64 | 29 | **5** |
+| 15,000 | 5x | 63 | 28 | **5** |
+| 22,500 | 7.5x | 64 | 29 | **5** |
+| 30,000 | 10x (safe max) | 64 | 29 | **5** |
+
+`crossDepartmentBatches` is flat at 5 across the entire safe range - it
+never climbs, confirming the combinatorial ceiling empirically rather than
+leaving it as a theoretical claim. The one wobble (63/28 at 5x, one fewer
+task scheduled and split) is the same FEASIBLE-not-OPTIMAL local-optimum
+noise D-082/D-061 already documented and gave an explicit tolerance for -
+not a new finding, and not batching-related.
+
+**Conclusion: no headroom exists, at any safe weight.** The default value
+already sits exactly on the structural ceiling for this corpus. This is a
+genuinely different, stronger finding than "5 seems reasonable" - it is a
+proven maximum, not an educated guess. **No change recommended** to the
+shipped default: there is nothing to gain by raising it, and D-061's own
+finding (the safe range trades placement day/window, never coverage) means
+a higher batching weight would only reshuffle which day the same 64 tasks
+land on for zero additional batched windows - pure churn against the Gantt
+a Controller would see, no metric improvement to show for it.
+
+**Scope discipline.** This was a read-only investigation - two disposable
+scratch scripts (a combinatorial ceiling solve, a real weight sweep), no
+edits to `scheduler.py`, no weight values outside `[0.1x, 10x]` tried at any
+point (the ceiling script's own objective swap never touches the live
+`ObjectiveWeights`, since it uses no weights at all - it isn't "the product
+run outside its safe range," it's a separate, offline combinatorial fact
+about the data, unconnected to any deployed configuration). No production
+code changed, so no test updates, no optimizer restart needed, no
+D-083/D-084 stale-process risk to check.
+
+---
+
+## D-087 — Docker Compose verified end to end via Podman (Docker itself
+unreachable in this environment), and CI added on the same pass
+
+**Date:** 2026-08-26 · **Task:** TX1, scope-expanded to include path-scoped
+CI (owner-directed this session)
+
+**Decision.** `docker-compose.yml` and the three T1 Dockerfiles are now
+verified end to end, closing D-005's known gap. Four independent,
+path-scoped GitHub Actions workflows were added on the same pass, since both
+touch the same build/test surface.
+
+**Why Podman, not Docker.** Neither `docker compose` nor a standalone
+`docker-compose` binary exists on this machine, and real Docker itself is
+unusable in this sandbox: the daemon isn't running, starting it needs `sudo`
+this session doesn't have, and the invoking user isn't in the `docker`
+group. Rootless Podman 5.4.2 was already installed and smoke-tested clean
+(`podman run hello-world`). `podman-compose` (`pip install --user
+podman-compose` - reversible, no sudo) reads the exact same
+`docker-compose.yml` unmodified; nothing in the compose file uses
+Docker-only syntax. **Flagged rather than silently substituted:** this is
+verification against a Docker-Compose-spec-compliant engine, not against
+`docker compose` itself. Worth a real-Docker confirmation once on a machine
+that has it working, before the demo depends on it.
+
+**Two real, pre-existing frontend bugs, found only by actually running the
+build - not Docker-specific.** `npm run build` (`tsc -b && vite build`) was
+already broken on `main`; `npm test` runs `vitest`, which never
+type-checks, so nothing had caught it before this session ran the Dockerfile
+for real:
+1. `oversight.test.ts` accessed `.value` on the `Kpi` discriminated union
+   (`KpiAvailable | KpiUnavailable`) in 9 places without narrowing. The file
+   already used the correct `as { value: string }` cast in 3 other places -
+   an inconsistently-applied pattern, not a missing one. Fixed all 9 to
+   match.
+2. `GanttTimeline.tsx`'s `HorizonToggle` defined a component (`Option`)
+   inside its own render function - `react-hooks/static-components`,
+   real state-reset risk on every render. Hoisted to module scope as
+   `HorizonOption`, `canSelect`/`onSelect` now passed as explicit props
+   instead of closure-captured.
+
+Both verified: `tsc -b` clean, `eslint .` clean, all 145 frontend tests
+still pass.
+
+**Real gap: the demo flow could not work in the container flow at all, for
+a reason unrelated to whether seeding is automatic.** The backend runtime
+image never receives `data/processed/*.json` - not copied at build time (it
+is git-ignored, regenerated output, correctly so per the data honesty
+rules), and no volume was declared. `DATA_PROCESSED_DIR` resolves to
+`/data/processed` inside the container (`REPO_ROOT` computed one level
+above `/app` - `backend/src/config/env.ts`), so `node dist/scripts/seed.js`
+always failed with "not found," seeded or not. Fixed with
+`./data/processed:/data/processed:ro,Z` on the `backend` service. The `:Z`
+SELinux relabel is required on this host (Fedora, `getenforce` = Enforcing)
+under Podman - without it, `EACCES` even though the file is world-readable
+(644) - and is a portable, harmless no-op under Docker on a non-SELinux
+host, so it stays in the file for both engines.
+
+**Decision: seeding stays manual**, not automatic on `up`. Matches local
+dev's own `npm run seed` step exactly; re-seeding on every container
+restart would be wasteful and surprising mid-demo, and D-019's
+replace-not-upsert semantics mean nothing is gained by forcing it
+automatically. Documented as
+`docker compose exec backend node dist/scripts/seed.js` - deliberately not
+`npm run seed`, because the runtime image drops `tsx` and `src/` after
+`tsc` builds it (only `dist/` ships, per the Dockerfile's own multi-stage
+split), so the `npm` script literally cannot run there.
+
+**Full demo flow verified for real over the compose network**, not
+simulated: seeded 10,149 corridors / 10,149 calendars / 55 assets / 89
+tasks / 102 resources / 4 demo accounts in ~15s inside the container,
+logged in as `controller` over HTTP, `POST /schedules/generate` returned a
+real solved plan with a cross-department batch on BBPR-SYU. The frontend's
+built JS bundle was independently grepped for its baked-in API host,
+confirming the `VITE_API_BASE_URL` build-arg wiring is real, not just that
+a plausible file exists.
+
+**Backend and frontend had no healthcheck before this session** - only
+mongo/optimizer did, so `frontend: depends_on: - backend` waited only for
+container start, never readiness. Added both, matching the existing
+`test:`/`interval`/`retries` shape, and changed `frontend`'s `depends_on` to
+`backend: condition: service_healthy`. **The frontend healthcheck as first
+written was itself broken, caught only by testing it standalone before
+trusting it in the full stack:** `wget http://localhost:80/` returned
+ECONNREFUSED even though nginx was genuinely serving traffic, because this
+image's `nginx.conf` is customized, so the base image's entrypoint script
+skips its usual IPv6-listen patch (logged as "differs from the packaged
+version", not silent) - nginx binds only `0.0.0.0:80`, `localhost` resolves
+to `::1` first inside the container, and busybox `wget` does not fall back
+across address families the way Node's `http.get` and Python's
+`urllib.request` both do (confirmed: the existing optimizer/backend
+healthchecks, using Python and Node respectively, never hit this). Fixed by
+hardcoding `127.0.0.1` in the healthcheck command.
+
+**CI: four independent path-scoped workflows**, confirmed against a real
+GitHub remote (`git remote -v` → `github.com/aroy2o/railway`, so these
+actually run once pushed, not inert):
+- `backend.yml` - `npm ci`, `npm run typecheck`, `npm test`, with a real
+  `mongo:8` GitHub Actions service container. Several backend suites
+  (`api.test.ts`, `auth.test.ts`, `approvals.test.ts`, `overrides.test.ts`,
+  `schedules.test.ts`) self-skip cleanly without Mongo reachable; the
+  service container means they genuinely run in CI instead.
+- `optimizer.yml` - `python -m pytest` (the `not live` exclusion is
+  already `pytest.ini`'s own `addopts`), **no backend or Mongo
+  provisioned**. Flagged, not silently decided: `test_optimizer_api_real_data.py`
+  and `test_scheduler_real_data.py` already catch `BackendUnavailable` and
+  `pytest.skip()` rather than fail, so they skip in this job rather than
+  running for real. Running them for real would need backend + Mongo + the
+  data pipeline's actual output present in CI too - real infrastructure
+  this hackathon CI doesn't need, versus a fast/isolated suite that already
+  degrades honestly.
+- `frontend.yml` - `npm ci`, `npm run build`, `npm run lint`,
+  `npx vitest run` - the exact four commands whose bugs this same session
+  found and fixed.
+- `data.yml` - `python -m pytest` (105 tests, `data/README.md`'s own
+  documented command). Deliberately does NOT run `ingestion.download`
+  (~98MB from external hosts on every `data/**` change - slow, and a real
+  external-network dependency this CI shouldn't carry). Verified first,
+  not assumed: every corpus-dependent test across all four
+  `data/tests/test_*.py` files is behind a `skipif` keyed to
+  `raw_path.exists()` / `corridors_required`, the same self-skip pattern
+  `backend.yml` and `optimizer.yml` already rely on - so a fresh checkout
+  with no downloaded data runs the pure hand-built-fixture tests cleanly
+  and skips the rest, rather than failing.
+
+All four workflow files verified with `actionlint` v1.7.12 (downloaded the
+release binary fresh - none was installed) - zero findings.
+
+**Known gap, not fixed this session.** TX1's own verification substituted
+Podman for Docker; a one-time confirmation with real `docker compose` on a
+machine that has it (before the demo, not on demo day) would close the
+small remaining gap between "verified against a compliant engine" and
+"verified against the exact tool README documents."
