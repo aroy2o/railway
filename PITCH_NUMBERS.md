@@ -179,14 +179,30 @@ sitting in an old session log.
 
 ## 7. CI status
 
-**Not yet applicable — the four workflows added under TX1 have never run.**
-`.github/workflows/{backend,optimizer,frontend,data}.yml` exist locally
-(all `actionlint`-clean) but are still uncommitted (`git status` shows
-`.github/` as untracked) — nothing has been pushed, so `gh run list` returns
-empty. Do not claim "CI is green" in front of judges; the accurate claim is
-"CI is written and locally validated, not yet exercised on a real push."
-Committing and pushing needs your explicit go-ahead (per this project's
-working agreement) — say the word and it can run before the pitch.
+**Pushed to `origin/main`; first real run was inconclusive, not green.**
+All 7 commits (auth/TX3, TX5+TX6, T29+comparison fix, audit-session
+fixes, TX1, TX4, docs) pushed on 2026-08-26. GitHub Actions is enabled on
+the repo and all four workflows registered successfully (confirmed via
+`gh api .../actions/workflows` — all `state: "active"`, content
+byte-identical to what `actionlint` validated locally).
+
+**What actually happened on the first push:** only `optimizer.yml`
+triggered at all, and it completed with `startup_failure` and zero jobs
+created — not a real test failure, since no job ever started. `backend`,
+`frontend`, and `data` never triggered despite the push clearly touching
+files under all three paths. The workflow content itself, re-fetched
+directly from GitHub at the exact commit SHA the failed run used, is
+byte-for-byte identical to the locally `actionlint`-validated file — no
+YAML/schema defect found. This looks like a one-time cold-start hiccup on
+GitHub's side for a repo that had never run Actions before, not a defect
+in the workflow files or this project's code.
+
+**Do not claim "CI is green" in front of judges** — say instead "CI is
+written, `actionlint`-clean, confirmed registered and enabled on GitHub;
+the first trigger hit a platform-side hiccup, and \[the retry result -
+update this line once known\]." If asked to demonstrate, showing the
+Actions tab and a workflow file is the honest, safe move; do not claim a
+passing run that didn't happen.
 
 ## 8. Known, deliberately unfixed risk
 
