@@ -468,7 +468,7 @@ test('T27: an unknown corridor id is a clean 422, not a 500', async (t) => {
 });
 
 test('T27: an empty disruptedWindows array is refused at the boundary', async (t) => {
-  if (!needs(t)) return;
+  if (!needs(t, { optimizer: true })) return;
 
   const generated = await authed(app)
     .post('/api/schedules/generate')
@@ -482,7 +482,7 @@ test('T27: an empty disruptedWindows array is refused at the boundary', async (t
 });
 
 test('T27: a short reason is refused at the boundary', async (t) => {
-  if (!needs(t)) return;
+  if (!needs(t, { optimizer: true })) return;
 
   const generated = await authed(app)
     .post('/api/schedules/generate')
