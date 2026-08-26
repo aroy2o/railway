@@ -36,6 +36,7 @@ import EmergencyPanel from '../components/EmergencyPanel.tsx'
 import PolicySliders from '../components/PolicySliders.tsx'
 import { OVERRIDABLE_STATES } from '../lib/approval.ts'
 import OverridePanel from '../components/OverridePanel.tsx'
+import BlockDetailPanel from '../components/BlockDetailPanel.tsx'
 import AskThePlanner from '../components/AskThePlanner.tsx'
 import KnownLimitations from '../components/KnownLimitations.tsx'
 import WeatherRiskPanel from '../components/WeatherRiskPanel.tsx'
@@ -45,14 +46,16 @@ import QueryState from '../components/QueryState.tsx'
 import { blockKey } from '../lib/gantt.ts'
 import { PageHeader } from '../components/Table.tsx'
 
-/** The dataset's reference week, so a demo run is reproducible. */
-const DEFAULT_HORIZON_START = '2026-08-24'
-
 export function ControllerDashboard() {
   const schedule = useGetLatestScheduleQuery()
   const tasks = useGetTasksQuery({ limit: 200 })
   const [generate, generation] = useGenerateScheduleMutation()
+  // TX5: the block currently being INSPECTED (Task/Block Detail Drill-down).
+  // Renamed in spirit from a pure "override selection" now that clicking a
+  // block always opens the read-only drill-down first - `overriding` below
+  // is what decides whether that same block is also showing the write flow.
   const [selected, setSelected] = useState<ScheduleBlock | null>(null)
+  const [overriding, setOverriding] = useState(false)
   // T20: independent of the override selection above - a what-if works on a
   // deferred task too, which has no block on the Gantt to select at all.
   const [whatIfTaskId, setWhatIfTaskId] = useState<string | null>(null)
@@ -71,6 +74,12 @@ export function ControllerDashboard() {
   // FR6.1: a published plan is frozen and a rejected one is discarded. Read
   // from the same set the server enforces, rather than restating the rule here.
   const overridable = OVERRIDABLE_STATES.has(plan?.workflowState ?? 'draft')
+  // TX5: which tasks the CURRENT (post-override) plan actually places -
+  // what `BlockDetailPanel`'s dependency chain uses to say whether a
+  // prerequisite has its own block here, not just what its stored `status`
+  // claims (oversight.ts's own comment: task status is written once at seed
+  // time and never updated after generation).
+  const scheduledTaskIds = new Set(visibleBlocks.flatMap((b) => b.taskIds))
   // A 404 means "none generated yet", which is an empty state rather than an
   // error - the difference matters on first run.
   const noScheduleYet =
@@ -89,8 +98,11 @@ export function ControllerDashboard() {
   ) {
     const days = requestedHorizonDays ?? horizonDays
     try {
+      // No horizonStart: the backend's own default (D-076) is the real
+      // current date, which is what "the coming week" should mean whenever
+      // this button is actually clicked - not a date pinned to whichever day
+      // the dashboard happened to be built on.
       await generate({
-        horizonStart: DEFAULT_HORIZON_START,
         horizonDays: days,
         ...(policyWeights && Object.keys(policyWeights).length > 0 ? { policyWeights } : {}),
       }).unwrap()
@@ -172,7 +184,7 @@ export function ControllerDashboard() {
                   status={plan.status}
                 />
               </div>
-
+            
               {/* The comparison is computed in the same run as this plan, so a
                   Controller reviewing one will want the other close by. */}
               {plan.comparisonToBaseline && (
@@ -200,26 +212,48 @@ export function ControllerDashboard() {
                     horizonStart={plan.horizonStart}
                     horizonDays={plan.horizonDays}
                     horizon={plan.horizon}
-                    // Withheld once the workflow closes the plan: a published
-                    // plan is frozen and a rejected one is discarded, so the
-                    // server would refuse the override this click starts.
-                    onSelectBlock={overridable ? setSelected : undefined}
+                    // TX5: always wired, regardless of override permission -
+                    // this opens the read-only drill-down, which every role
+                    // and every workflow state can use. Overriding is reached
+                    // from inside it, gated there instead (D-080).
+                    onSelectBlock={(block) => {
+                      setSelected(block)
+                      setOverriding(false)
+                    }}
                     selectedBlockKey={selected ? blockKey(selected) : null}
+                    overridable={overridable}
                     onSelectHorizon={(days) => onGenerate(undefined, days)}
                     isGeneratingHorizon={generation.isLoading}
                   />
 
-                  {overridable && selected && (
-                    <OverridePanel
-                      scheduleId={plan._id}
-                      // Re-read from the current plan so the panel never acts on
-                      // a placement a previous override has already changed.
-                      block={
+                  {selected &&
+                    // Re-read from the current plan so a panel never acts on -
+                    // or describes - a placement a previous override already
+                    // changed underneath it.
+                    (() => {
+                      const currentBlock =
                         visibleBlocks.find((b) => blockKey(b) === blockKey(selected)) ?? selected
-                      }
-                      onClose={() => setSelected(null)}
-                    />
-                  )}
+                      return overridable && overriding ? (
+                        <OverridePanel
+                          scheduleId={plan._id}
+                          block={currentBlock}
+                          onClose={() => {
+                            setSelected(null)
+                            setOverriding(false)
+                          }}
+                        />
+                      ) : (
+                        <BlockDetailPanel
+                          block={currentBlock}
+                          tasks={tasks.data?.data ?? []}
+                          decisionLog={plan.decisionLog}
+                          scheduledTaskIds={scheduledTaskIds}
+                          overridable={overridable}
+                          onClose={() => setSelected(null)}
+                          onOverride={() => setOverriding(true)}
+                        />
+                      )
+                    })()}
 
                   {/* Sits under the timeline, in the wide column: a Controller
                       asks about the plan they are looking at, and the grounding

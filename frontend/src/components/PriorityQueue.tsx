@@ -15,29 +15,8 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import type { Schedule, Task } from '../api/apiSlice.ts'
+import { FACTOR_LABEL, RISK_FRAMING } from '../lib/priorityFraming.ts'
 import { DepartmentPill } from './Table.tsx'
-
-const FACTOR_LABEL: Record<string, string> = {
-  severity: 'severity',
-  asset_criticality: 'asset criticality',
-  failure_risk: 'predicted risk',
-  sla_urgency: 'SLA urgency',
-  sla_breach: 'overdue',
-}
-
-/**
- * PRD 9.1 / NG4, shown wherever the FR2.2 score is.
- *
- * Not optional decoration: the score is a model output over SIMULATED
- * degradation data, and PRD Section 6 lists presenting it as a real failure
- * forecast as an explicit non-goal. A test asserts this string renders whenever
- * a risk figure does.
- */
-const RISK_FRAMING =
-  'Predicted risk is a prototype model trained on simulated asset degradation patterns, ' +
-  'designed to be retrained on real railway asset-health data when available. It does not ' +
-  'predict real Indian Railways asset failures.'
-
 
 interface PriorityQueueProps {
   tasks: Task[]

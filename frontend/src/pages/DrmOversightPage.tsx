@@ -16,9 +16,17 @@ import {
   useGetTasksQuery,
 } from '../api/apiSlice.ts'
 import { buildKpiHierarchy, type Kpi, type KpiCategory } from '../lib/oversight.ts'
+import {
+  MIN_POINTS_FOR_TREND,
+  buildTrendSeries,
+  hasEnoughHistory,
+  sameHorizonHistory,
+} from '../lib/trends.ts'
+import { buildKpiReportCsv, reportFileName } from '../lib/exportReport.ts'
 import { useAutoTour } from '../lib/useAutoTour.ts'
 import { OVERSIGHT_TOUR_ID, OVERSIGHT_TOUR_STEPS } from '../tours/oversightTour.ts'
 import QueryState from '../components/QueryState.tsx'
+import TrendChart from '../components/TrendChart.tsx'
 import { PageHeader } from '../components/Table.tsx'
 
 const CATEGORY_NOTE: Record<KpiCategory['category'], string> = {
@@ -47,9 +55,25 @@ function KpiCard({ kpi }: { kpi: Kpi }) {
   )
 }
 
+/** Client-side CSV download - a Blob URL and a synthetic click, no library. */
+function downloadCsv(fileName: string, content: string): void {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
 export function DrmOversightPage() {
   const latest = useGetLatestScheduleQuery()
-  const versions = useGetSchedulesQuery({ limit: 20 })
+  // TX6: 50, not 20 - the light list `getSchedules` returns (id, metrics,
+  // horizonDays, generatedAt - no blocks) is what the trend chart plots, so
+  // it needs real history, not just the version picker's short list.
+  const versions = useGetSchedulesQuery({ limit: 50 })
   const tasks = useGetTasksQuery({ limit: 200 })
   const assets = useGetAssetsQuery({ limit: 200 })
 
@@ -81,11 +105,39 @@ export function DrmOversightPage() {
         )
       : []
 
+  // TX6: the trend is scoped to this plan's own horizon type (D-070's rule -
+  // see trends.ts), and refuses to draw a "trend" out of fewer real points
+  // than `MIN_POINTS_FOR_TREND` rather than smoothing two dots into a line.
+  const horizonHistory = plan ? sameHorizonHistory(versions.data?.data ?? [], plan.horizonDays) : []
+  const trendReady = hasEnoughHistory(horizonHistory)
+  const trendSeries = trendReady ? buildTrendSeries(horizonHistory) : []
+
+  function onDownloadReport() {
+    if (!plan) return
+    const csv = buildKpiReportCsv(
+      { scheduleId: plan._id, generatedAt: plan.generatedAt, horizon: plan.horizon },
+      categories,
+      { series: trendSeries, hasEnoughHistory: trendReady },
+    )
+    downloadCsv(reportFileName(plan._id), csv)
+  }
+
   return (
     <>
       <PageHeader
         title="DRM oversight"
         subtitle="Every KPI PRD Section 14 names, grouped by category - real where the data supports it, marked unavailable where it does not."
+        meta={
+          plan && (
+            <button
+              type="button"
+              onClick={onDownloadReport}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Download report (CSV)
+            </button>
+          )
+        }
       />
 
       {noScheduleYet ? (
@@ -121,6 +173,35 @@ export function DrmOversightPage() {
                   </div>
                 </section>
               ))}
+
+              <section
+                data-tour="oversight-trends"
+                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+              >
+                <h3 className="text-sm font-semibold text-slate-900">Trend history</h3>
+                <p className="mb-3 text-xs text-slate-500">
+                  Real KPI values across every {plan.horizon}-horizon plan this prototype has
+                  generated, oldest first - not literally "monthly": PRD names this "monthly
+                  trend charts", but a hackathon prototype's real operating history runs hours to
+                  days, never months. Plotting what actually exists, honestly labelled, beats
+                  claiming a cadence this data cannot back up.
+                </p>
+                {trendReady ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {trendSeries.map((series) => (
+                      <TrendChart key={series.key} series={series} />
+                    ))}
+                  </div>
+                ) : (
+                  <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50/60 px-3.5 py-3 text-sm text-slate-500">
+                    Not enough history yet to show a trend: {horizonHistory.length} real{' '}
+                    {plan.horizon}-horizon generation{horizonHistory.length === 1 ? '' : 's'}{' '}
+                    recorded, {MIN_POINTS_FOR_TREND} needed. Generate a schedule again later to
+                    add another point - this section draws a line only once there is a real
+                    direction to show, never from one or two points alone.
+                  </p>
+                )}
+              </section>
             </div>
           )}
         </QueryState>

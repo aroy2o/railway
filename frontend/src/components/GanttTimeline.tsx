@@ -19,6 +19,7 @@ import {
   blockKey,
   blockPosition,
   corridorRowsForDay,
+  defaultSelectedDay,
   monthlyReservationRows,
   summariseDays,
   type ReservationRow,
@@ -43,9 +44,20 @@ interface GanttTimelineProps {
   /** PRD Section 15's own enum (`"weekly"|"monthly"`) - which real solve this
    * plan came from, not a view mode chosen in the browser (T28). */
   horizon: string
-  /** When given, blocks become clickable to start a manual override (FR6.2). */
+  /**
+   * When given, blocks become clickable to open the Task/Block Detail
+   * Drill-down (PRD Section 8 screen 7, TX5) - a read-only inspection, not
+   * an override. Deliberately NOT gated on override permission: a published
+   * plan or a DRM's read-only session should still be able to inspect a
+   * block, even though neither can act on it. Overriding is reached FROM
+   * the drill-down (a button inside it, shown only when legal), not from
+   * this click directly - see `docs/DECISIONS.md` D-080.
+   */
   onSelectBlock?: (block: ScheduleBlock) => void
   selectedBlockKey?: string | null
+  /** Purely for the legend hint below - whether the drill-down this click
+   * opens will itself offer an override button. Never gates the click. */
+  overridable?: boolean
   /** T28: re-solve at the other horizon. Omitted keeps the toggle a plain
    * (real, not faked) indicator rather than a control - e.g. inside a
    * what-if or emergency panel, where triggering a full regenerate makes no
@@ -61,6 +73,7 @@ export function GanttTimeline({
   horizon,
   onSelectBlock,
   selectedBlockKey,
+  overridable = false,
   onSelectHorizon,
   isGeneratingHorizon,
 }: GanttTimelineProps) {
@@ -70,18 +83,11 @@ export function GanttTimeline({
     () => summariseDays(blocks, horizonStart, horizonDays),
     [blocks, horizonStart, horizonDays],
   )
-  // Open on the first day carrying a cross-department batch, falling back to
-  // the busiest day.
-  //
-  // Not merely a demo convenience: a shared possession is the thing the
-  // optimizer *did* that a human planner could not, so it is the most
-  // informative day to review first. Defaulting to the busiest day instead
-  // opened on a Monday with thirteen blocks and no batch at all - dense, but
-  // showing none of the coordination the plan exists to produce.
-  const defaultDay =
-    days.find((day) => day.batchCount > 0) ??
-    days.reduce((best, day) => (day.blockCount > best.blockCount ? day : best), days[0])
-  const [selected, setSelected] = useState(defaultDay?.date ?? horizonStart)
+  // D-075: open on today when it falls inside the horizon, else fall back to
+  // D-040's heuristic (first cross-department batch, else the busiest day).
+  const [selected, setSelected] = useState(() =>
+    defaultSelectedDay(days, new Date().toISOString().slice(0, 10)),
+  )
 
   const rows = useMemo(() => corridorRowsForDay(blocks, selected), [blocks, selected])
 
@@ -200,7 +206,10 @@ export function GanttTimeline({
         </>
       )}
 
-      <Legend canOverride={!isMonthly && onSelectBlock !== undefined} />
+      <Legend
+        clickable={!isMonthly && onSelectBlock !== undefined}
+        overridable={!isMonthly && overridable}
+      />
     </section>
   )
 }
@@ -332,7 +341,7 @@ function BlockBar({
   if (!block.isCrossDepartmentBatch) {
     return (
       <div
-        title={clickable ? `${title}\n\nClick to override` : title}
+        title={clickable ? `${title}\n\nClick for details` : title}
         style={position}
         onClick={() => onSelect?.(block)}
         className={`absolute top-1 flex h-7 items-center overflow-hidden rounded px-1.5 ${
@@ -356,7 +365,7 @@ function BlockBar({
 
   return (
     <div
-      title={clickable ? `SHARED BLOCK — ${title}\n\nClick to override` : `SHARED BLOCK — ${title}`}
+      title={clickable ? `SHARED BLOCK — ${title}\n\nClick for details` : `SHARED BLOCK — ${title}`}
       style={position}
       onClick={() => onSelect?.(block)}
       className={`absolute -top-0.5 flex h-10 overflow-hidden rounded-md ring-2 ring-violet-600 ring-offset-1 ${interaction}`}
@@ -390,6 +399,43 @@ function BlockBar({
  * days (docs/DECISIONS.md D-070) - never a cached view switch over the same
  * data, because the two ARE different real solves.
  */
+function HorizonOption({
+  label,
+  active,
+  horizonDays,
+  canSelect,
+  onSelect,
+}: {
+  label: string
+  active: boolean
+  horizonDays: 7 | 30
+  canSelect: boolean
+  onSelect?: (horizonDays: 7 | 30) => void
+}) {
+  if (active) {
+    return (
+      <span className="rounded bg-white px-2.5 py-1 text-xs font-medium text-slate-900 shadow-sm">
+        {label}
+      </span>
+    )
+  }
+  return (
+    <button
+      type="button"
+      disabled={!canSelect}
+      onClick={() => onSelect?.(horizonDays)}
+      title={
+        onSelect
+          ? `Re-solve for real at this horizon (a genuine ${horizonDays}-day CP-SAT run)`
+          : undefined
+      }
+      className="rounded px-2.5 py-1 text-xs font-medium text-slate-500 transition hover:bg-white hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {label}
+    </button>
+  )
+}
+
 function HorizonToggle({
   horizon,
   onSelect,
@@ -402,44 +448,25 @@ function HorizonToggle({
   const isMonthly = horizon === 'monthly'
   const canSelect = Boolean(onSelect) && !isGenerating
 
-  function Option({ label, active, horizonDays }: { label: string; active: boolean; horizonDays: 7 | 30 }) {
-    if (active) {
-      return (
-        <span className="rounded bg-white px-2.5 py-1 text-xs font-medium text-slate-900 shadow-sm">
-          {label}
-        </span>
-      )
-    }
-    return (
-      <button
-        type="button"
-        disabled={!canSelect}
-        onClick={() => onSelect?.(horizonDays)}
-        title={
-          onSelect
-            ? `Re-solve for real at this horizon (a genuine ${horizonDays}-day CP-SAT run)`
-            : undefined
-        }
-        className="rounded px-2.5 py-1 text-xs font-medium text-slate-500 transition hover:bg-white hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {label}
-      </button>
-    )
-  }
-
   return (
     <div
       data-tour="dashboard-horizon-toggle"
       className="flex items-center gap-1 rounded-lg bg-slate-100 p-1"
     >
-      <Option label="Weekly" active={!isMonthly} horizonDays={7} />
-      <Option label="Monthly" active={isMonthly} horizonDays={30} />
+      <HorizonOption label="Weekly" active={!isMonthly} horizonDays={7} canSelect={canSelect} onSelect={onSelect} />
+      <HorizonOption label="Monthly" active={isMonthly} horizonDays={30} canSelect={canSelect} onSelect={onSelect} />
       {isGenerating && <span className="px-1.5 text-[11px] text-slate-400">solving…</span>}
     </div>
   )
 }
 
-function Legend({ canOverride }: { canOverride: boolean }) {
+function Legend({
+  clickable,
+  overridable,
+}: {
+  clickable: boolean
+  overridable: boolean
+}) {
   return (
     <div className="flex flex-wrap items-center gap-4 border-t border-slate-100 px-5 py-3 text-[11px] text-slate-500">
       {(Object.keys(DEPARTMENT_BAR) as Department[]).map((department) => (
@@ -457,12 +484,18 @@ function Legend({ canOverride }: { canOverride: boolean }) {
           Shared block — one possession, two departments
         </span>
       </span>
-      {/* Only offered when the caller actually accepts a selection. A
-          published plan is frozen (T19), and inviting a click the server would
-          then refuse reads as the system being broken rather than as the plan
-          being closed. */}
-      {canOverride && (
-        <span className="ml-auto text-slate-400">Click a block to override its placement</span>
+      {/* Only offered when the caller actually accepts a selection (never on
+          the read-only monthly grid, which has no single block to select -
+          see MonthlyReservationGrid's own comment). Inspecting a block is
+          always available once clickable; overriding is a further action
+          reached from inside the drill-down, so the hint says so only when
+          that door is actually open (D-080) - a published plan is frozen
+          (T19), and promising an action the server would then refuse reads
+          as the system being broken rather than as the plan being closed. */}
+      {clickable && (
+        <span className="ml-auto text-slate-400">
+          Click a block for details{overridable ? ' · override from there' : ''}
+        </span>
       )}
     </div>
   )
