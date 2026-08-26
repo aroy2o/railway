@@ -17,11 +17,11 @@
  */
 import test, { before, after, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import request from 'supertest';
 import mongoose from 'mongoose';
 
 import { createApp } from '../src/app.js';
 import { config } from '../src/config/env.js';
+import { authed } from './authTestHelpers.js';
 import {
   Corridor,
   CorridorCalendar,
@@ -101,6 +101,32 @@ test('the terminal states refuse everything, and say why generating a new plan i
       assert.equal(result.legal, false);
       assert.match(result.refusal.reason, /terminal state/);
       assert.match(result.refusal.reason, /Generate a new plan/);
+    }
+  }
+});
+
+// D-079: found by driving the real API adversarially (submit/reject/publish
+// against an already-published plan), not by reading the code. The
+// "terminal state" test above only checked that phrase was present - loose
+// enough that `${action}d` built "submitd"/"rejectd"/"publishd" for three of
+// the four actions and nothing caught it, since only `approve` -> "approved"
+// happens to be grammatically correct by accident.
+test('the terminal-state refusal uses correct English for every action, not just the one that happens to end in "e"', () => {
+  const pastTense: Record<string, string> = {
+    submit: 'submitted',
+    approve: 'approved',
+    reject: 'rejected',
+    publish: 'published',
+  };
+  for (const state of TERMINAL_STATES) {
+    for (const action of ALL_ACTIONS) {
+      const result = checkTransition(state, action);
+      assert.equal(result.legal, false);
+      assert.match(
+        result.refusal.reason,
+        new RegExp(`cannot be ${pastTense[action]}\\b`),
+        `${action} from terminal state ${state} should read "cannot be ${pastTense[action]}", got: ${result.refusal.reason}`,
+      );
     }
   }
 });
@@ -374,12 +400,12 @@ function needsDb(t: TestContext): boolean {
 }
 
 function workflow(id: string, body: Record<string, unknown>) {
-  return request(app).post(`/api/schedules/${id}/workflow`).send(body);
+  return authed(app).post(`/api/schedules/${id}/workflow`).send(body);
 }
 
 test('a freshly generated plan is a draft with submit as its only action', async (t) => {
   if (!needsDb(t)) return;
-  const res = await request(app).get(`/api/schedules/${PLANS.illegal}`).expect(200);
+  const res = await authed(app).get(`/api/schedules/${PLANS.illegal}`).expect(200);
   assert.equal(res.body.data.workflowState, 'draft');
   assert.deepEqual(res.body.data.allowedActions, ['submit']);
 });
@@ -452,7 +478,7 @@ test('ILLEGAL: publishing twice is refused', async (t) => {
 
 test('FREEZE: a published plan cannot be overridden', async (t) => {
   if (!needsDb(t)) return;
-  const res = await request(app)
+  const res = await authed(app)
     .post(`/api/schedules/${PLANS.publish}/override`)
     .send({
       taskId: 'T1',
@@ -466,7 +492,7 @@ test('FREEZE: a published plan cannot be overridden', async (t) => {
 
 test('a rejected plan cannot be overridden either', async (t) => {
   if (!needsDb(t)) return;
-  const res = await request(app)
+  const res = await authed(app)
     .post(`/api/schedules/${PLANS.reject}/override`)
     .send({ taskId: 'T1', action: 'defer', reason: 'amending a discarded plan' })
     .expect(409);
@@ -489,7 +515,7 @@ test('an override applied before publication stays attached to that plan version
   if (!needsDb(t)) return;
 
   // Amend `newer` while it is still a draft, then take it all the way through.
-  await request(app)
+  await authed(app)
     .post(`/api/schedules/${PLANS.newer}/override`)
     .send({
       taskId: 'T1',
@@ -505,7 +531,7 @@ test('an override applied before publication stays attached to that plan version
   const published = await workflow(PLANS.newer, { action: 'publish' }).expect(201);
   assert.equal(published.body.data.version, 2);
 
-  const audit = await request(app).get(`/api/schedules/${PLANS.newer}/audit`).expect(200);
+  const audit = await authed(app).get(`/api/schedules/${PLANS.newer}/audit`).expect(200);
   assert.equal(audit.body.data.state, 'published');
   assert.equal(audit.body.data.version, 2);
   // The amendment is still on THIS plan and still names the solver's placement.
@@ -517,7 +543,7 @@ test('an override applied before publication stays attached to that plan version
   assert.equal(audit.body.data.digestMatchesPublished, true);
 
   // The earlier version's own overrides are untouched by any of this.
-  const first = await request(app).get(`/api/schedules/${PLANS.publish}/audit`).expect(200);
+  const first = await authed(app).get(`/api/schedules/${PLANS.publish}/audit`).expect(200);
   assert.equal(first.body.data.version, 1);
   assert.equal(
     first.body.data.entries.filter((e: { kind: string }) => e.kind === 'override').length,
@@ -545,17 +571,17 @@ test('MUTATION: the published digest actually detects a plan that changed undern
     createdAt: new Date(),
   });
 
-  const audit = await request(app).get(`/api/schedules/${PLANS.newer}/audit`).expect(200);
+  const audit = await authed(app).get(`/api/schedules/${PLANS.newer}/audit`).expect(200);
   assert.equal(audit.body.data.digestMatchesPublished, false);
 
   await ScheduleOverride.deleteOne({ _id: smuggled._id });
-  const restored = await request(app).get(`/api/schedules/${PLANS.newer}/audit`).expect(200);
+  const restored = await authed(app).get(`/api/schedules/${PLANS.newer}/audit`).expect(200);
   assert.equal(restored.body.data.digestMatchesPublished, true);
 });
 
 test('the audit trail is one time-ordered narrative across both collections', async (t) => {
   if (!needsDb(t)) return;
-  const res = await request(app).get(`/api/schedules/${PLANS.newer}/audit`).expect(200);
+  const res = await authed(app).get(`/api/schedules/${PLANS.newer}/audit`).expect(200);
   const kinds = res.body.data.entries.map((entry: { kind: string }) => entry.kind);
 
   // Generation first, then the amendment, then the sign-offs - FR6.2's
@@ -573,11 +599,11 @@ test('the published plan is a different query from the latest plan', async (t) =
   // A fifth plan generated after publication: newest, but nobody has approved it.
   await makeSchedule('SCH-TEST-APR-UNSEEN', new Date('2026-08-23T06:00:00Z'));
 
-  const latest = await request(app).get('/api/schedules/latest').expect(200);
+  const latest = await authed(app).get('/api/schedules/latest').expect(200);
   assert.equal(latest.body.data._id, 'SCH-TEST-APR-UNSEEN');
   assert.equal(latest.body.data.workflowState, 'draft');
 
-  const published = await request(app).get('/api/schedules/published').expect(200);
+  const published = await authed(app).get('/api/schedules/published').expect(200);
   assert.equal(published.body.data._id, PLANS.newer, 'still the last plan actually issued');
   assert.equal(published.body.data.version, 2);
 
@@ -586,7 +612,7 @@ test('the published plan is a different query from the latest plan', async (t) =
 
 test('the plan list carries each version its workflow state (FR6.3)', async (t) => {
   if (!needsDb(t)) return;
-  const res = await request(app).get('/api/schedules?limit=10').expect(200);
+  const res = await authed(app).get('/api/schedules?limit=10').expect(200);
   const byId = new Map(
     res.body.data.map((row: { _id: string; workflowState: string }) => [row._id, row.workflowState]),
   );

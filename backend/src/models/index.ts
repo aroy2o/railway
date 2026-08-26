@@ -58,3 +58,6 @@ export type {
   PlanCheck,
   PlanValidation,
 } from './ScheduleApproval.js';
+
+export { User } from './User.js';
+export type { IUser, UserDocument, UserRole } from './User.js';

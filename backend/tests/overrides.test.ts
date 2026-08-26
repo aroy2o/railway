@@ -15,11 +15,11 @@
  */
 import test, { before, after, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import request from 'supertest';
 import mongoose from 'mongoose';
 
 import { createApp } from '../src/app.js';
 import { config } from '../src/config/env.js';
+import { authed } from './authTestHelpers.js';
 import {
   Asset,
   Corridor,
@@ -404,7 +404,7 @@ function needsDb(t: TestContext): boolean {
 test('a valid move is accepted and recorded with its re-validation', async (t) => {
   if (!needsDb(t)) return;
 
-  const res = await request(app)
+  const res = await authed(app)
     .post(`/api/schedules/${SCHEDULE_ID}/override`)
     .send({
       taskId: 'T1',
@@ -439,7 +439,7 @@ test('the schedule document itself is never mutated', async (t) => {
 test('the effective plan reflects the override', async (t) => {
   if (!needsDb(t)) return;
 
-  const res = await request(app).get(`/api/schedules/${SCHEDULE_ID}`).expect(200);
+  const res = await authed(app).get(`/api/schedules/${SCHEDULE_ID}`).expect(200);
 
   assert.equal(res.body.data.blocks[0].date, DATES[0], 'base plan untouched');
   assert.equal(res.body.data.effectivePlan.blocks[0].date, DATES[1], 'effective plan moved');
@@ -450,7 +450,7 @@ test('a move into a window without room is refused with the specific reason', as
   if (!needsDb(t)) return;
 
   // T1 (120 min) now occupies Tuesday's 200-minute window. T2 needs 100.
-  const res = await request(app)
+  const res = await authed(app)
     .post(`/api/schedules/${SCHEDULE_ID}/override`)
     .send({
       taskId: 'T2',
@@ -470,7 +470,7 @@ test('a move into a window without room is refused with the specific reason', as
 test('a task too long for the target window is refused', async (t) => {
   if (!needsDb(t)) return;
 
-  const res = await request(app)
+  const res = await authed(app)
     .post(`/api/schedules/${SCHEDULE_ID}/override`)
     .send({
       taskId: 'T2',
@@ -488,7 +488,7 @@ test('a task too long for the target window is refused', async (t) => {
 test('override targets offered to the UI are exactly those the write path accepts', async (t) => {
   if (!needsDb(t)) return;
 
-  const targets = (await request(app)
+  const targets = (await authed(app)
     .get(`/api/schedules/${SCHEDULE_ID}/override-targets/T2`)
     .expect(200)).body.data as Array<{ date: string; windowIndex: number }>;
 
@@ -502,12 +502,12 @@ test('override targets offered to the UI are exactly those the write path accept
 test('deferring a scheduled task is accepted and frees its window', async (t) => {
   if (!needsDb(t)) return;
 
-  await request(app)
+  await authed(app)
     .post(`/api/schedules/${SCHEDULE_ID}/override`)
     .send({ taskId: 'T1', action: 'defer', reason: 'Awaiting a spare tamping machine' })
     .expect(201);
 
-  const res = await request(app).get(`/api/schedules/${SCHEDULE_ID}`).expect(200);
+  const res = await authed(app).get(`/api/schedules/${SCHEDULE_ID}`).expect(200);
   assert.deepEqual(res.body.data.effectivePlan.deferredTaskIds, ['T1']);
   assert.equal(res.body.data.effectivePlan.blocks.length, 0, 'the emptied window is released');
 });
@@ -515,12 +515,12 @@ test('deferring a scheduled task is accepted and frees its window', async (t) =>
 test('an override without a real reason is rejected at the boundary', async (t) => {
   if (!needsDb(t)) return;
 
-  await request(app)
+  await authed(app)
     .post(`/api/schedules/${SCHEDULE_ID}/override`)
     .send({ taskId: 'T1', action: 'defer', reason: 'x' })
     .expect(400);
 
-  await request(app)
+  await authed(app)
     .post(`/api/schedules/${SCHEDULE_ID}/override`)
     .send({ taskId: 'T1', action: 'defer' })
     .expect(400);
@@ -529,7 +529,7 @@ test('an override without a real reason is rejected at the boundary', async (t) 
 test('a move without a target is rejected at the boundary', async (t) => {
   if (!needsDb(t)) return;
 
-  const res = await request(app)
+  const res = await authed(app)
     .post(`/api/schedules/${SCHEDULE_ID}/override`)
     .send({ taskId: 'T1', action: 'move', reason: 'No target supplied at all' })
     .expect(400);
@@ -540,7 +540,7 @@ test('a move without a target is rejected at the boundary', async (t) => {
 test('overriding a task that is not in this plan is refused, not silently ignored', async (t) => {
   if (!needsDb(t)) return;
 
-  const res = await request(app)
+  const res = await authed(app)
     .post(`/api/schedules/${SCHEDULE_ID}/override`)
     .send({ taskId: 'T2', action: 'defer', reason: 'This one is already deferred' })
     .expect(409);
@@ -551,7 +551,7 @@ test('overriding a task that is not in this plan is refused, not silently ignore
 test('overriding a nonexistent task returns a clean 404', async (t) => {
   if (!needsDb(t)) return;
 
-  const res = await request(app)
+  const res = await authed(app)
     .post(`/api/schedules/${SCHEDULE_ID}/override`)
     .send({ taskId: 'NO-SUCH-TASK', action: 'defer', reason: 'Should not be possible' })
     .expect(404);
@@ -562,7 +562,7 @@ test('overriding a nonexistent task returns a clean 404', async (t) => {
 test('the override history is the FR6.2 audit trail', async (t) => {
   if (!needsDb(t)) return;
 
-  const res = await request(app).get(`/api/schedules/${SCHEDULE_ID}/overrides`).expect(200);
+  const res = await authed(app).get(`/api/schedules/${SCHEDULE_ID}/overrides`).expect(200);
 
   assert.equal(res.body.data.length, 2); // the move, then the defer
   for (const entry of res.body.data) {

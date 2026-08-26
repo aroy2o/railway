@@ -45,6 +45,14 @@ export interface ITask {
   dependsOnTaskId: string | null;
   workflowStage: string | null;
 
+  /**
+   * The dept_engineer account that submitted this request via FR1.1's
+   * submission form (auth session). `null` for every seed-generated task -
+   * the synthetic 89-task backlog was never "raised by" any account, and null
+   * must stay null rather than being backfilled to a guess.
+   */
+  raisedByUserId: string | null;
+
   /** Written by T10's orchestration from the FR2.3 engine. */
   priorityScore: number | null;
   /** Null until T16 (FR2.2 / PRD 9.1). */
@@ -83,6 +91,8 @@ const taskSchema = new Schema<ITask>(
 
     dependsOnTaskId: { type: String, default: null, index: true },
     workflowStage: { type: String, default: null },
+
+    raisedByUserId: { type: String, default: null, index: true },
 
     // The seed always writes null; T10's orchestration fills priorityScore
     // from the FR2.3 engine, and T16 will fill failureRiskScore.

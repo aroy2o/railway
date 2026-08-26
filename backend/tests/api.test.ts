@@ -9,11 +9,11 @@
  */
 import test, { before, after, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import request from 'supertest';
 import mongoose from 'mongoose';
 
 import { createApp } from '../src/app.js';
 import { config } from '../src/config/env.js';
+import { authed } from './authTestHelpers.js';
 import {
   Asset,
   Corridor,
@@ -168,8 +168,8 @@ function requireDatabase(t: TestContext): boolean {
 test('the synthetic-demand filter genuinely narrows the corridor set', async (t) => {
   if (!requireDatabase(t)) return;
 
-  const all = await request(app).get('/api/corridors').expect(200);
-  const filtered = await request(app)
+  const all = await authed(app).get('/api/corridors').expect(200);
+  const filtered = await authed(app)
     .get('/api/corridors?hasSyntheticDemand=true')
     .expect(200);
 
@@ -183,7 +183,7 @@ test('hasSyntheticDemand=false is honoured, not treated as truthy', async (t) =>
 
   // A plain boolean coercion turns the string "false" into true; this asserts
   // the query parser does not make that mistake.
-  const res = await request(app).get('/api/corridors?hasSyntheticDemand=false').expect(200);
+  const res = await authed(app).get('/api/corridors?hasSyntheticDemand=false').expect(200);
 
   assert.equal(res.body.pagination.total, 1);
   assert.equal(res.body.data[0]._id, 'CC-DD');
@@ -192,7 +192,7 @@ test('hasSyntheticDemand=false is honoured, not treated as truthy', async (t) =>
 test('corridor detail joins maxDailyBlockWindows from corridor_calendar', async (t) => {
   if (!requireDatabase(t)) return;
 
-  const res = await request(app).get('/api/corridors/AA-BB').expect(200);
+  const res = await authed(app).get('/api/corridors/AA-BB').expect(200);
 
   // Stored in a separate collection (D-009/D-016) but presented on the corridor,
   // which is the shape PRD Section 15 describes.
@@ -204,7 +204,7 @@ test('corridor detail joins maxDailyBlockWindows from corridor_calendar', async 
 test('a missing corridor returns the standard error envelope', async (t) => {
   if (!requireDatabase(t)) return;
 
-  const res = await request(app).get('/api/corridors/NOPE-NOPE').expect(404);
+  const res = await authed(app).get('/api/corridors/NOPE-NOPE').expect(404);
 
   assert.equal(res.body.error.code, 'NOT_FOUND');
 });
@@ -212,8 +212,8 @@ test('a missing corridor returns the standard error envelope', async (t) => {
 test('synthetic flag survives the MongoDB round trip on assets and tasks', async (t) => {
   if (!requireDatabase(t)) return;
 
-  const assets = await request(app).get('/api/assets').expect(200);
-  const tasks = await request(app).get('/api/tasks').expect(200);
+  const assets = await authed(app).get('/api/assets').expect(200);
+  const tasks = await authed(app).get('/api/tasks').expect(200);
 
   assert.equal(assets.body.data[0].synthetic, true);
   assert.equal(tasks.body.data[0].synthetic, true);
@@ -224,7 +224,7 @@ test('synthetic flag survives the MongoDB round trip on assets and tasks', async
 test('fieldProvenance survives the round trip and is served to the UI', async (t) => {
   if (!requireDatabase(t)) return;
 
-  const res = await request(app).get('/api/provenance').expect(200);
+  const res = await authed(app).get('/api/provenance').expect(200);
   const assets = res.body.data.find((entry: { _id: string }) => entry._id === 'assets');
 
   assert.equal(assets.synthetic, true);
@@ -237,21 +237,21 @@ test('fieldProvenance survives the round trip and is served to the UI', async (t
 test('tasks filter by corridor, department and status', async (t) => {
   if (!requireDatabase(t)) return;
 
-  const byDept = await request(app).get('/api/tasks?department=S%26T').expect(200);
+  const byDept = await authed(app).get('/api/tasks?department=S%26T').expect(200);
   assert.equal(byDept.body.pagination.total, 1);
   assert.equal(byDept.body.data[0]._id, 'TSK-00001');
 
-  const byCorridor = await request(app).get('/api/tasks?corridorId=AA-BB').expect(200);
+  const byCorridor = await authed(app).get('/api/tasks?corridorId=AA-BB').expect(200);
   assert.equal(byCorridor.body.pagination.total, 2);
 
-  const none = await request(app).get('/api/tasks?status=scheduled').expect(200);
+  const none = await authed(app).get('/api/tasks?status=scheduled').expect(200);
   assert.equal(none.body.pagination.total, 0);
 });
 
 test('tasks come back with unscored fields null, not zero', async (t) => {
   if (!requireDatabase(t)) return;
 
-  const res = await request(app).get('/api/tasks').expect(200);
+  const res = await authed(app).get('/api/tasks').expect(200);
 
   // T7 and T16 populate these. Null must never be read as "scored zero".
   assert.equal(res.body.data[0].priorityScore, null);
@@ -262,7 +262,7 @@ test('resources match on corridorScope, not equality', async (t) => {
   if (!requireDatabase(t)) return;
 
   // The resource is scoped to two corridors; asking for either must find it.
-  const res = await request(app).get('/api/resources?corridorId=CC-DD').expect(200);
+  const res = await authed(app).get('/api/resources?corridorId=CC-DD').expect(200);
 
   assert.equal(res.body.pagination.total, 1);
   assert.equal(res.body.data[0]._id, 'RES-D01-tower-wagon');
@@ -271,8 +271,8 @@ test('resources match on corridorScope, not equality', async (t) => {
 test('assets filter by corridorId', async (t) => {
   if (!requireDatabase(t)) return;
 
-  const hit = await request(app).get('/api/assets?corridorId=AA-BB').expect(200);
-  const miss = await request(app).get('/api/assets?corridorId=CC-DD').expect(200);
+  const hit = await authed(app).get('/api/assets?corridorId=AA-BB').expect(200);
+  const miss = await authed(app).get('/api/assets?corridorId=CC-DD').expect(200);
 
   assert.equal(hit.body.pagination.total, 1);
   assert.equal(miss.body.pagination.total, 0);
@@ -281,7 +281,7 @@ test('assets filter by corridorId', async (t) => {
 test('list responses are bounded and paginate', async (t) => {
   if (!requireDatabase(t)) return;
 
-  const res = await request(app).get('/api/tasks?limit=1&offset=0').expect(200);
+  const res = await authed(app).get('/api/tasks?limit=1&offset=0').expect(200);
 
   assert.equal(res.body.data.length, 1);
   assert.equal(res.body.pagination.hasMore, true);
@@ -292,10 +292,10 @@ test('invalid query parameters are rejected at the boundary', async (t) => {
   if (!requireDatabase(t)) return;
 
   // Over the hard cap - guards against an unbounded scan of 10k corridors.
-  const overLimit = await request(app).get('/api/corridors?limit=5000').expect(400);
+  const overLimit = await authed(app).get('/api/corridors?limit=5000').expect(400);
   assert.equal(overLimit.body.error.code, 'BAD_REQUEST');
   assert.equal(overLimit.body.error.details[0].location, 'query');
 
-  await request(app).get('/api/tasks?department=Catering').expect(400);
-  await request(app).get('/api/tasks?minSeverity=99').expect(400);
+  await authed(app).get('/api/tasks?department=Catering').expect(400);
+  await authed(app).get('/api/tasks?minSeverity=99').expect(400);
 });

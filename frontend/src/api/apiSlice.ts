@@ -12,9 +12,12 @@
  *   baseline comparison                    task T14     (FR9)
  */
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
+import type { BaseQueryFn, FetchArgs, FetchBaseQueryError } from '@reduxjs/toolkit/query/react'
 import { API_BASE_URL } from '../config.ts'
 import type { ComparisonToBaseline } from '../lib/comparison.ts'
 import type { RootState } from '../store/store.ts'
+import { loggedOut } from '../store/slices/authSlice.ts'
+import type { AuthUser } from '../store/slices/authSlice.ts'
 
 /* -------------------------------------------------------------------------- */
 /* Response types                                                              */
@@ -214,6 +217,21 @@ export interface ScheduleBlock {
   trainImpact: unknown | null
 }
 
+/**
+ * One row of the solver's own decision log (FR2.4/FR8.1) - what it decided
+ * for one task, and the structured factors behind it. `contributingFactors`
+ * stays a loose bag rather than a fully-typed shape: the optimizer is free to
+ * add fields to it (T22's traffic-block costing, T26's weather flag) without
+ * every consumer's type needing to track each addition, the same latitude
+ * `BaselineResult.metrics` already takes below.
+ */
+export interface DecisionLogEntry {
+  taskId: string
+  decision: 'scheduled' | 'deferred'
+  corridorId: string
+  contributingFactors: Record<string, unknown>
+}
+
 /** T22: what forcing a deferred task through as a traffic block would cost. */
 export interface DisplacementOption {
   corridorId: string
@@ -383,12 +401,7 @@ export interface Schedule {
   metrics: ScheduleMetrics
   blocks: ScheduleBlock[]
   deferredTasks: DeferredTask[]
-  decisionLog: Array<{
-    taskId: string
-    decision: 'scheduled' | 'deferred'
-    corridorId: string
-    contributingFactors: Record<string, unknown>
-  }>
+  decisionLog: DecisionLogEntry[]
   knownGaps: KnownGaps
   /** PRD 9.5 typed conflicts on the OPTIMIZED layer (T21). */
   conflictReport: import('../lib/conflicts.ts').ConflictReport | null
@@ -471,27 +484,52 @@ function withQuery(path: string, args: object = {}): string {
 /* API slice                                                                   */
 /* -------------------------------------------------------------------------- */
 
+const rawBaseQuery = fetchBaseQuery({
+  baseUrl: API_BASE_URL,
+  // Read the token straight from the store so no component ever has to
+  // remember to pass it, and a logout instantly applies to every request.
+  prepareHeaders: (headers, { getState }) => {
+    const token = (getState() as RootState).auth.token
+    if (token) headers.set('authorization', `Bearer ${token}`)
+    return headers
+  },
+  // A hung solver must not hold a request open indefinitely. The optimizer's
+  // own budget is SOLVER_MAX_SECONDS; this is the browser-side backstop.
+  timeout: 30_000,
+})
+
+/**
+ * A 401 means the token is missing, invalid or expired server-side (FR10.2).
+ * Clearing the session here - rather than in every component that might see
+ * one - means the route guards (which redirect to /login the moment the
+ * token goes null) recover automatically, instead of a stale session
+ * appearing to work while every request silently fails.
+ */
+const baseQueryWithReauth: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryError> = async (
+  args,
+  apiInstance,
+  extraOptions,
+) => {
+  const result = await rawBaseQuery(args, apiInstance, extraOptions)
+  if (result.error?.status === 401) {
+    apiInstance.dispatch(loggedOut())
+  }
+  return result
+}
+
 export const api = createApi({
   reducerPath: 'api',
-  baseQuery: fetchBaseQuery({
-    baseUrl: API_BASE_URL,
-    // Read the token straight from the store so no component ever has to
-    // remember to pass it, and a logout instantly applies to every request.
-    prepareHeaders: (headers, { getState }) => {
-      const token = (getState() as RootState).auth.token
-      if (token) headers.set('authorization', `Bearer ${token}`)
-      return headers
-    },
-    // A hung solver must not hold a request open indefinitely. The optimizer's
-    // own budget is SOLVER_MAX_SECONDS; this is the browser-side backstop.
-    timeout: 30_000,
-  }),
+  baseQuery: baseQueryWithReauth,
   // Cache invalidation tags, extended as CRUD endpoints are added (T10-T11).
   tagTypes: [
     'Health', 'Task', 'Corridor', 'Asset', 'Resource', 'Provenance', 'Schedule', 'Override',
     'Approval',
   ],
   endpoints: (builder) => ({
+    /** FR10.2 - the only public endpoint besides /health. */
+    login: builder.mutation<{ data: { token: string; user: AuthUser } }, { username: string; password: string }>({
+      query: (body) => ({ url: '/auth/login', method: 'POST', body }),
+    }),
     /**
      * Cross-service wiring probe: React -> Express -> MongoDB + Python
      * optimizer. Backs the status panel on the landing screen so a broken link
@@ -532,10 +570,38 @@ export const api = createApi({
 
     getTasks: builder.query<
       ListResponse<Task>,
-      ListArgs & { corridorId?: string; department?: Department; status?: string }
+      ListArgs & {
+        corridorId?: string
+        department?: Department
+        status?: string
+        /** The Dept Engineer Portal's "my submitted requests" filter (FR1.1). */
+        raisedByUserId?: string
+      }
     >({
       query: (args = {}) => withQuery('/tasks', args),
       providesTags: ['Task'],
+    }),
+
+    /**
+     * POST /api/tasks - FR1.1, the Dept Engineer Portal's submission form.
+     * `department` and `raisedByUserId` are NOT sent - the server derives
+     * both from the authenticated session (backend/src/routes/tasks.ts), so
+     * an engineer can never file into a department that is not their own.
+     */
+    createTask: builder.mutation<
+      { data: Task },
+      {
+        corridorId: string
+        assetId: string
+        defectType: string
+        severity: number
+        estBlockDurationMins: number
+        requiredResourceIds?: string[]
+        dependsOnTaskId?: string | null
+      }
+    >({
+      query: (body) => ({ url: '/tasks', method: 'POST', body }),
+      invalidatesTags: ['Task'],
     }),
 
     getResources: builder.query<
@@ -572,6 +638,17 @@ export const api = createApi({
     /** The most recently generated plan. 404s until one has been generated. */
     getLatestSchedule: builder.query<{ data: Schedule }, void>({
       query: () => '/schedules/latest',
+      providesTags: ['Schedule'],
+    }),
+
+    /**
+     * The plan currently in force (FR6.3) - not the newest one. Backs the
+     * Dept Engineer Portal's read-only "my department's scheduled blocks"
+     * view (PRD Section 8 screen 2) and is reachable by every authenticated
+     * role, unlike `getLatestSchedule` (controller/drm only).
+     */
+    getPublishedSchedule: builder.query<{ data: Schedule }, void>({
+      query: () => '/schedules/published',
       providesTags: ['Schedule'],
     }),
 
@@ -738,14 +815,17 @@ export const api = createApi({
 })
 
 export const {
+  useLoginMutation,
   useGetDependencyHealthQuery,
   useGetCorridorsQuery,
   useGetCorridorQuery,
   useGetAssetsQuery,
   useGetTasksQuery,
+  useCreateTaskMutation,
   useGetResourcesQuery,
   useGetProvenanceQuery,
   useGetLatestScheduleQuery,
+  useGetPublishedScheduleQuery,
   useGetScheduleQuery,
   useGetSchedulesQuery,
   useGenerateScheduleMutation,

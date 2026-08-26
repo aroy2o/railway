@@ -15,6 +15,7 @@ import { z } from 'zod';
 
 import { Schedule } from '../models/index.js';
 import { validate, validated } from '../middleware/validate.js';
+import { requireRole } from '../middleware/auth.js';
 import { listResponse, paginationSchema, type Pagination } from '../utils/query.js';
 import {
   findLatestSchedule,
@@ -89,6 +90,7 @@ type GenerateBody = z.infer<typeof generateSchema>;
  */
 router.post(
   '/generate',
+  requireRole('controller'),
   validate({ body: generateSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -104,6 +106,7 @@ router.post(
 
 router.get(
   '/',
+  requireRole('controller', 'drm'),
   validate({ query: paginationSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -135,30 +138,34 @@ router.get(
 );
 
 /** Declared before `/:id` so "latest" is never read as a schedule id. */
-router.get('/latest', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const schedule = await findLatestSchedule();
-    if (!schedule) {
-      throw ApiError.notFound('No schedule has been generated yet. POST /api/schedules/generate');
+router.get(
+  '/latest',
+  requireRole('controller', 'drm'),
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const schedule = await findLatestSchedule();
+      if (!schedule) {
+        throw ApiError.notFound('No schedule has been generated yet. POST /api/schedules/generate');
+      }
+      // `blocks` stays exactly as the solver produced it - the decision log
+      // explains those. `effectivePlan` is that plan with manual overrides
+      // replayed on top, which is what a Controller is looking at (D-043).
+      const { overrides, effectivePlan } = await getEffectivePlan(schedule._id);
+      const workflowState = await getWorkflowState(schedule._id);
+      res.json({
+        data: {
+          ...schedule,
+          overrides,
+          effectivePlan,
+          workflowState,
+          allowedActions: allowedActions(workflowState),
+        },
+      });
+    } catch (err) {
+      next(err);
     }
-    // `blocks` stays exactly as the solver produced it - the decision log
-    // explains those. `effectivePlan` is that plan with manual overrides
-    // replayed on top, which is what a Controller is looking at (D-043).
-    const { overrides, effectivePlan } = await getEffectivePlan(schedule._id);
-    const workflowState = await getWorkflowState(schedule._id);
-    res.json({
-      data: {
-        ...schedule,
-        overrides,
-        effectivePlan,
-        workflowState,
-        allowedActions: allowedActions(workflowState),
-      },
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+  },
+);
 
 /**
  * GET /api/schedules/published - the plan currently in force (FR6.3).
@@ -199,6 +206,7 @@ type IdParam = z.infer<typeof idParamSchema>;
 
 router.get(
   '/:id',
+  requireRole('controller', 'drm'),
   validate({ params: idParamSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -258,6 +266,7 @@ type ExplainBody = z.infer<typeof explainSchema>;
  */
 router.post(
   '/latest/explain',
+  requireRole('controller'),
   validate({ body: explainSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -280,6 +289,7 @@ router.post(
  */
 router.post(
   '/:id/explain',
+  requireRole('controller'),
   validate({ params: idParamSchema, body: explainSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -307,6 +317,7 @@ type WhatIfBody = z.infer<typeof whatIfSchema>;
  */
 router.post(
   '/:id/whatif',
+  requireRole('controller'),
   validate({ params: idParamSchema, body: whatIfSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -349,6 +360,7 @@ type EmergencyBody = z.infer<typeof emergencySchema>;
  */
 router.post(
   '/:id/emergency',
+  requireRole('controller'),
   validate({ params: idParamSchema, body: emergencySchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -371,12 +383,19 @@ router.post(
  */
 router.post(
   '/:id/override',
+  requireRole('controller'),
   validate({ params: idParamSchema, body: overrideSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = validated<IdParam>(req.params);
       const body = validated<OverrideBody>(req.body);
-      const override = await recordOverride({ scheduleId: id, ...body });
+      // `actorRole` predates real auth and was a client-asserted field
+      // (default 'controller', never actually checked against anything). Now
+      // that a verified identity exists, the audit trail records the real
+      // authenticated role (normally 'controller', or 'super_admin' when the
+      // bypass role used this route) rather than trusting what the request
+      // body claims.
+      const override = await recordOverride({ scheduleId: id, ...body, actorRole: req.user!.role });
       res.status(201).json({ data: override });
     } catch (err) {
       next(err);
@@ -387,6 +406,7 @@ router.post(
 /** The audit trail for one plan: what was changed, by whom, and why (FR6.2). */
 router.get(
   '/:id/overrides',
+  requireRole('controller', 'drm'),
   validate({ params: idParamSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -406,6 +426,7 @@ router.get(
  */
 router.get(
   '/:id/override-targets/:taskId',
+  requireRole('controller'),
   validate({
     params: z.object({
       id: z.string().min(1).max(64),
@@ -452,12 +473,15 @@ type WorkflowBody = z.infer<typeof workflowSchema>;
  */
 router.post(
   '/:id/workflow',
+  requireRole('controller'),
   validate({ params: idParamSchema, body: workflowSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = validated<IdParam>(req.params);
       const body = validated<WorkflowBody>(req.body);
-      const approval = await recordTransition({ scheduleId: id, ...body });
+      // Same reasoning as the override route above: record the real
+      // authenticated role rather than the client-asserted default.
+      const approval = await recordTransition({ scheduleId: id, ...body, actorRole: req.user!.role });
       res.status(201).json({ data: approval });
     } catch (err) {
       next(err);
@@ -468,6 +492,7 @@ router.post(
 /** The approval/rejection history alone. The merged trail is `/:id/audit`. */
 router.get(
   '/:id/approvals',
+  requireRole('controller', 'drm'),
   validate({ params: idParamSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -489,6 +514,7 @@ router.get(
  */
 router.get(
   '/:id/audit',
+  requireRole('controller', 'drm'),
   validate({ params: idParamSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {

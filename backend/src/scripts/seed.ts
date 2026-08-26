@@ -24,6 +24,7 @@ import mongoose, { type Model } from 'mongoose';
 import { config } from '../config/env.js';
 import { connectDatabase, disconnectDatabase } from '../config/db.js';
 import { logger } from '../utils/logger.js';
+import { hashPassword } from '../services/authTokens.js';
 import {
   Asset,
   Corridor,
@@ -31,12 +32,14 @@ import {
   DatasetProvenance,
   Resource,
   Task,
+  User,
   type IAsset,
   type ICorridor,
   type ICorridorCalendar,
   type IDatasetProvenance,
   type IResource,
   type ITask,
+  type IUser,
 } from '../models/index.js';
 
 /** insertMany batch size - keeps peak memory bounded on the 47 MB calendar. */
@@ -299,15 +302,105 @@ async function verifyRoundTrip(
   });
 }
 
+/**
+ * FR10.1's four fixed demo accounts - one per role, no self-registration.
+ * `super_admin` is a demo/dev-convenience role beyond FR10.1's three named
+ * roles; see docs/DECISIONS.md.
+ *
+ * Credentials live here (single source of truth) and in `DEMO_ACCOUNTS.md` at
+ * the repo root, per the auth session brief: visible somewhere convenient for
+ * the developer, never hardcoded into the login UI itself.
+ */
+export const DEMO_ACCOUNTS: ReadonlyArray<{
+  _id: string;
+  username: string;
+  password: string;
+  role: IUser['role'];
+  name: string;
+  department: IUser['department'];
+}> = [
+  {
+    _id: 'USR-engineer',
+    username: 'engineer',
+    password: 'engineer123',
+    role: 'dept_engineer',
+    name: 'Dept Engineer (demo)',
+    department: 'Engineering',
+  },
+  {
+    _id: 'USR-controller',
+    username: 'controller',
+    password: 'controller123',
+    role: 'controller',
+    name: 'Controller (demo)',
+    department: null,
+  },
+  {
+    _id: 'USR-drm',
+    username: 'drm',
+    password: 'drm123',
+    role: 'drm',
+    name: 'DRM (demo)',
+    department: null,
+  },
+  {
+    _id: 'USR-admin',
+    username: 'admin',
+    password: 'admin123',
+    role: 'super_admin',
+    name: 'Super Admin (demo)',
+    department: null,
+  },
+];
+
+/**
+ * Seeds the four fixed demo accounts, replace-not-upsert like the pipeline
+ * collections (D-019) - simpler than upserting for exactly four rows, and it
+ * keeps a stored hash in sync if a password is ever changed here. Kept
+ * separate from `seed()` above: users are hand-authored accounts, not
+ * pipeline output, so they do not belong in that function's "six
+ * source-of-truth collections" contract.
+ */
+export async function seedUsers(): Promise<number> {
+  // D-018: index builds must be awaited explicitly or Mongoose abandons them
+  // mid-flight once the script disconnects - the `username` uniqueness
+  // constraint needs to actually exist, not just be declared.
+  await User.syncIndexes();
+
+  await User.deleteMany({ _id: { $in: DEMO_ACCOUNTS.map((account) => account._id) } });
+
+  const documents: IUser[] = await Promise.all(
+    DEMO_ACCOUNTS.map(async (account) => ({
+      _id: account._id,
+      username: account.username,
+      email: null,
+      passwordHash: await hashPassword(account.password),
+      role: account.role,
+      name: account.name,
+      department: account.department,
+      createdAt: new Date(),
+    })),
+  );
+
+  await User.insertMany(documents, { ordered: true });
+  logger.info('seeded demo accounts', { count: documents.length });
+  return documents.length;
+}
+
 async function main(): Promise<void> {
   const startedAt = Date.now();
   await connectDatabase();
   try {
     const { counts, corridorsWithDemand } = await seed();
+    const usersSeeded = await seedUsers();
     logger.info('Seed complete', {
       ...counts,
+      users: usersSeeded,
       corridorsWithSyntheticDemand: corridorsWithDemand,
       seconds: ((Date.now() - startedAt) / 1000).toFixed(1),
+    });
+    logger.info('Demo account credentials - see DEMO_ACCOUNTS.md at the repo root', {
+      accounts: DEMO_ACCOUNTS.map((account) => `${account.username} / ${account.password} (${account.role})`),
     });
   } finally {
     await disconnectDatabase();
