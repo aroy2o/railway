@@ -179,30 +179,48 @@ sitting in an old session log.
 
 ## 7. CI status
 
-**Pushed to `origin/main`; first real run was inconclusive, not green.**
-All 7 commits (auth/TX3, TX5+TX6, T29+comparison fix, audit-session
-fixes, TX1, TX4, docs) pushed on 2026-08-26. GitHub Actions is enabled on
-the repo and all four workflows registered successfully (confirmed via
-`gh api .../actions/workflows` — all `state: "active"`, content
-byte-identical to what `actionlint` validated locally).
+**Pushed to `origin/main` and confirmed registered — but every real
+execution attempt has failed with `startup_failure`, not a test
+failure.** All 7 feature commits plus 2 follow-ups (9 total) pushed on
+2026-08-26. GitHub Actions is enabled on the repo and all four workflows
+registered as `state: "active"`; their content, re-fetched directly from
+GitHub, is byte-identical to the locally `actionlint`-validated files —
+this is not a YAML/schema defect in the workflow files.
 
-**What actually happened on the first push:** only `optimizer.yml`
-triggered at all, and it completed with `startup_failure` and zero jobs
-created — not a real test failure, since no job ever started. `backend`,
-`frontend`, and `data` never triggered despite the push clearly touching
-files under all three paths. The workflow content itself, re-fetched
-directly from GitHub at the exact commit SHA the failed run used, is
-byte-for-byte identical to the locally `actionlint`-validated file — no
-YAML/schema defect found. This looks like a one-time cold-start hiccup on
-GitHub's side for a repo that had never run Actions before, not a defect
-in the workflow files or this project's code.
+**What actually happened, across six real attempts spanning both trigger
+types:** `optimizer` (push, then `workflow_dispatch`), `backend`
+(`workflow_dispatch`), and `data` (push) each completed with
+`startup_failure` and **zero jobs ever created** - no logs, no
+annotations, nothing ran. `repos/.../actions/cache/usage` shows 0 bytes
+cached and 0 caches, confirming this repository has never had a single
+Actions job actually execute, on any workflow, ever. That consistency
+across three different workflow files and two different trigger
+mechanisms (`push` and manual `workflow_dispatch`) rules out a per-file
+bug or a one-off fluke - it points to an **account- or repository-level
+gate that blocks job execution before a runner is even assigned**, most
+consistent with a GitHub Actions billing/spending-limit setting on this
+private repository (the classic real-world cause of exactly this
+signature). One more run got stuck indefinitely in a pre-queued limbo
+state; attempting to cancel it returned "Cannot cancel a workflow run
+that has not been queued yet" (HTTP 409) - the run record exists but
+GitHub's scheduler never actually admitted it to the real queue, which is
+consistent with a gate rejecting it before scheduling rather than any
+runner-availability or code issue. This cannot be diagnosed or changed
+via the API access
+available in this session (`gh auth status` lacks the `user` scope
+billing needs) - **check
+[github.com/settings/billing](https://github.com/settings/billing) and
+this repo's Settings → Actions → General page directly.** If a spending
+limit is set to $0 or free private-repo minutes are exhausted for this
+billing cycle, that is almost certainly it.
 
-**Do not claim "CI is green" in front of judges** — say instead "CI is
-written, `actionlint`-clean, confirmed registered and enabled on GitHub;
-the first trigger hit a platform-side hiccup, and \[the retry result -
-update this line once known\]." If asked to demonstrate, showing the
-Actions tab and a workflow file is the honest, safe move; do not claim a
-passing run that didn't happen.
+**Do not claim "CI is green" in front of judges.** The accurate claim is:
+"CI is written, `actionlint`-clean, and registered on GitHub; execution
+is currently blocked by an account-level setting, not a code or test
+failure - the actual test suites all pass locally (§6)." If asked to
+demonstrate, show the local test runs (§6, real and fresh) rather than
+the Actions tab, and be upfront that CI itself hasn't executed yet if
+asked directly - do not claim a passing run that didn't happen.
 
 ## 8. Known, deliberately unfixed risk
 
