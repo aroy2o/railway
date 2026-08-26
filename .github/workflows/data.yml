@@ -1,0 +1,40 @@
+name: data
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "data/**"
+      - ".github/workflows/data.yml"
+  pull_request:
+    paths:
+      - "data/**"
+      - ".github/workflows/data.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: data
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: data/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      # data/README.md's own documented check (105 tests as of T26). Every
+      # test needing raw/ or processed/ output is behind a skipif keyed to
+      # those files existing (raw_data_required / corridors_required in each
+      # tests/test_*.py) - real, not invented, and the same self-skip pattern
+      # backend.yml and optimizer.yml rely on. This job deliberately does NOT
+      # run `ingestion.download` (fetches ~98 MB from datameet/railways and
+      # data.gov.in on every data/** change - slow and a real-network
+      # dependency this hackathon CI shouldn't carry); it runs the pure,
+      # hand-built-fixture tests that need no external data at all.
+      - run: python -m pytest

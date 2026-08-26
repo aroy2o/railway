@@ -1,0 +1,41 @@
+name: optimizer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "optimizer/**"
+      - ".github/workflows/optimizer.yml"
+  pull_request:
+    paths:
+      - "optimizer/**"
+      - ".github/workflows/optimizer.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: optimizer
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: optimizer/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      # pytest.ini's addopts already excludes `live` (real Claude API calls -
+      # cost money, need ANTHROPIC_API_KEY). Real-corpus tests
+      # (test_optimizer_api_real_data.py, test_scheduler_real_data.py) call
+      # the backend over HTTP and catch BackendUnavailable to pytest.skip()
+      # rather than fail when it's not reachable - no backend/Mongo is started
+      # in this job, so those skip cleanly instead of running for real. Running
+      # them for real would need backend+Mongo (and the data pipeline's
+      # output) present in this job too, which is more CI infrastructure than
+      # this hackathon prototype's fast/isolated suite needs; flagged in
+      # docs/DECISIONS.md D-087 rather than silently deciding it.
+      - run: python -m pytest

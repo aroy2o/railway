@@ -1,0 +1,52 @@
+name: backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Some backend tests connect to a real MongoDB and skip cleanly when it's
+    # unreachable (see tests/api.test.ts, approvals.test.ts, schedules.test.ts,
+    # auth.test.ts, overrides.test.ts) - a real service container here means
+    # those actually run in CI instead of silently skipping (CLAUDE.md
+    # testing priority #3: API contract tests).
+    services:
+      mongo:
+        image: mongo:8
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # tests/.env.test (committed) points MONGODB_URI at 127.0.0.1:27017,
+      # which is exactly where the service container above publishes to on
+      # the runner - no extra wiring needed. Tests that also need the Python
+      # optimizer service (not started in this job) skip cleanly the same way.
+      - run: npm test

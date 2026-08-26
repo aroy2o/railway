@@ -1,0 +1,39 @@
+name: frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      # `build` runs `tsc -b && vite build` - this is a real type-check gate,
+      # not just a bundler pass (TX1 found and fixed a type error in
+      # oversight.test.ts that only `tsc -b` catches; vitest itself does not
+      # type-check).
+      - run: npm run build
+
+      - run: npm run lint
+
+      - run: npx vitest run

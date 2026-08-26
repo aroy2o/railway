@@ -169,7 +169,7 @@ describe('operationsKpis', () => {
     const kpis = operationsKpis(plan)
     const delay = kpis.find((k) => k.label === 'Estimated train delay')!
     expect(delay.available).toBe(true)
-    expect(delay.value).toBe('0 min from this plan')
+    expect((delay as { value: string }).value).toBe('0 min from this plan')
     expect((delay as { detail: string }).detail).toContain('40 min')
 
     const trains = kpis.find((k) => k.label === 'Affected trains')!
@@ -190,8 +190,8 @@ describe('operationsKpis', () => {
       },
     })
     const kpis = operationsKpis(plan)
-    expect(kpis.find((k) => k.label === 'Blocked corridor hours')!.value).toBe('2.0 h')
-    expect(kpis.find((k) => k.label === 'Unused block hours')!.value).toBe('1.0 h')
+    expect((kpis.find((k) => k.label === 'Blocked corridor hours') as { value: string }).value).toBe('2.0 h')
+    expect((kpis.find((k) => k.label === 'Unused block hours') as { value: string }).value).toBe('1.0 h')
   })
 })
 
@@ -202,7 +202,7 @@ describe('maintenanceKpis', () => {
     const assets = [asset({ _id: 'AST-1', criticalityScore: 90 })]
 
     const kpis = maintenanceKpis(plan, tasks, assets)
-    expect(kpis.find((k) => k.label === 'Tasks scheduled')!.value).toBe('1')
+    expect((kpis.find((k) => k.label === 'Tasks scheduled') as { value: string }).value).toBe('1')
     expect(kpis.find((k) => k.label === 'Predicted failure risk reduced')!.available).toBe(false)
   })
 
@@ -213,7 +213,7 @@ describe('maintenanceKpis', () => {
       task({ _id: 'T2', priorityBreakdown: { components: {}, contributions: {}, daysToDue: 10, isOverdue: false, usesFailureRisk: false } }),
     ]
     const kpis = maintenanceKpis(plan, tasks, [])
-    expect(kpis.find((k) => k.label === 'Overdue tasks')!.value).toBe('1')
+    expect((kpis.find((k) => k.label === 'Overdue tasks') as { value: string }).value).toBe('1')
   })
 
   it('only counts a critical task as "scheduled" when its real asset criticality is top-quartile', () => {
@@ -230,7 +230,7 @@ describe('maintenanceKpis', () => {
       asset({ _id: 'AST-MID2', criticalityScore: 30 }),
     ]
     const kpis = maintenanceKpis(plan, tasks, assets)
-    expect(kpis.find((k) => k.label === 'Critical tasks scheduled')!.value).toBe('1')
+    expect((kpis.find((k) => k.label === 'Critical tasks scheduled') as { value: string }).value).toBe('1')
   })
 })
 
@@ -272,7 +272,7 @@ describe('planningKpis', () => {
       },
     })
     const kpis = planningKpis(plan, null, null)
-    expect(kpis.find((k) => k.label === 'Batching ratio')!.value).toBe('25.0%')
+    expect((kpis.find((k) => k.label === 'Batching ratio') as { value: string }).value).toBe('25.0%')
   })
 
   it('reports a real, checked zero conflict count when byPlan carries no "optimized" key - not "unavailable"', () => {
@@ -309,7 +309,7 @@ describe('planningKpis', () => {
       note: '',
     }
     const kpis = planningKpis(schedule(), report, null)
-    expect(kpis.find((k) => k.label === 'Conflict count')!.value).toBe('3')
+    expect((kpis.find((k) => k.label === 'Conflict count') as { value: string }).value).toBe('3')
   })
 })
 
@@ -332,6 +332,6 @@ describe('assetKpis', () => {
     const kpis = assetKpis(plan, tasks, assets)
     expect(kpis.find((k) => k.label === 'Asset availability %')!.available).toBe(false)
     expect(kpis.find((k) => k.label === 'Downtime')!.available).toBe(false)
-    expect(kpis.find((k) => k.label === 'High-criticality assets still at risk')!.value).toBe('1')
+    expect((kpis.find((k) => k.label === 'High-criticality assets still at risk') as { value: string }).value).toBe('1')
   })
 })

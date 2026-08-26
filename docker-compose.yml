@@ -1,14 +1,16 @@
 # Full-stack demo wiring: Mongo + Node API + Python optimizer + React frontend.
 #
-# STATUS: skeleton (task T1). Each service builds and answers its health check,
-# but the images are not yet tuned for the demo (no seed step, no healthcheck
-# ordering beyond depends_on). Completing this is task TX1.
+# Verified end to end under task TX1 (docs/DECISIONS.md D-087): all four
+# services build, become healthy, and the real demo flow (login -> generate
+# schedule) works over this network. Local dev without Docker stays the
+# primary day-to-day workflow (D-005) - this file is the demo-packaging path.
 #
 #     docker compose up --build
+#     docker compose exec backend node dist/scripts/seed.js   # once, after first up
 #
-# Local dev without Docker is the primary path - see README.md. `docker compose`
-# is not installed on the current dev machine, so this file is currently
-# unverified end to end; that verification is part of TX1.
+# Note: this binds host ports 27017/8000/5000/5173 and a local `mongod` or
+# `npm run dev` on those same ports will conflict - stop local dev services
+# first, or this compose stack, not both at once.
 
 services:
   mongo:
@@ -50,11 +52,25 @@ services:
       BACKEND_PORT: 5000
     ports:
       - "5000:5000"
+    volumes:
+      # `DATA_PROCESSED_DIR` resolves to /data/processed inside the container
+      # (REPO_ROOT computed one level above /app - see config/env.ts). Without
+      # this mount `node dist/scripts/seed.js` cannot find the pipeline's
+      # output at all, seeded or not (TX1 finding). Read-only: the container
+      # never writes to the host's pipeline output. `:Z` relabels the mount
+      # for SELinux-enforcing hosts (Podman requires it; Docker ignores it
+      # harmlessly where SELinux isn't active).
+      - ./data/processed:/data/processed:ro,Z
     depends_on:
       mongo:
         condition: service_healthy
       optimizer:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   frontend:
     build:
@@ -67,7 +83,19 @@ services:
     ports:
       - "5173:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      # 127.0.0.1, not localhost: nginx's conf.d/default.conf is customized,
+      # so the base image's entrypoint script skips its usual IPv6-listen
+      # patch (logged as "differs from the packaged version") and binds only
+      # 0.0.0.0:80 - busybox wget resolves "localhost" to ::1 first and does
+      # not fall back to IPv4 the way Node/Python's HTTP clients do, so it
+      # gets ECONNREFUSED even though the server is genuinely up (TX1 finding).
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   mongo_data:

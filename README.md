@@ -99,10 +99,15 @@ curl localhost:5000/api/health/dependencies   # both, in one call
 
 ```bash
 docker compose up --build
+
+# once, after the first `up` - the containers don't seed themselves:
+docker compose exec backend node dist/scripts/seed.js
 ```
 
-Local dev is the primary workflow; compose is demo packaging and is not yet
-verified end to end (see `docs/DECISIONS.md` D-005, task TX1).
+Local dev is the primary workflow; compose is demo packaging, verified end
+to end under task TX1 (see `docs/DECISIONS.md` D-087). It binds host ports
+27017/8000/5000/5173, same as local dev - stop `mongod` and any `npm run
+dev` processes first, or run one path at a time, not both.
 
 ## Ports
 
