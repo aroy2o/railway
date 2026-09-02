@@ -57,7 +57,7 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
       data-tour="dashboard-priority-queue"
       className="rounded-xl border border-slate-200 bg-white shadow-sm"
     >
-      <header className="border-b border-slate-100 px-4 py-3">
+      <header className="border-b border-slate-100 px-5 py-3">
         <h2 className="text-sm font-semibold text-slate-900">Priority queue</h2>
         <p className="text-xs text-slate-500">
           Ranked by severity, asset criticality, predicted risk and SLA pressure. Top{' '}
@@ -67,15 +67,19 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
       </header>
 
       {ranked.length === 0 ? (
-        <p className="px-4 py-8 text-sm text-slate-500">
+        <p className="px-5 py-8 text-sm text-slate-500">
           No priority scores yet. Generate a schedule to rank the backlog.
         </p>
       ) : (
         <ol className="divide-y divide-slate-100">
           {ranked.map((task, index) => {
             const isScheduled = scheduledIds.has(task._id)
+            // Light rest every 3 rows so ~10 near-identical rows read as a
+            // few clusters rather than one undifferentiated block - a wider
+            // gap before the divider, not a restructure of the ranking.
+            const isGroupEnd = (index + 1) % 3 === 0 && index !== ranked.length - 1
             return (
-              <li key={task._id} className="px-4 py-2.5">
+              <li key={task._id} className={`px-5 py-2.5 ${isGroupEnd ? 'mb-2' : ''}`}>
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="flex items-baseline gap-2">
                     <span className="w-4 text-right text-[11px] tabular-nums text-slate-400">
@@ -144,14 +148,14 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
       )}
 
       {unscored > 0 && (
-        <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-400">
+        <p className="border-t border-slate-100 px-5 py-2 text-[11px] text-slate-400">
           {unscored} task{unscored > 1 ? 's' : ''} not yet scored — generate a schedule to rank
           them.
         </p>
       )}
 
       {showsRisk && (
-        <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">
+        <p className="border-t border-slate-100 px-5 py-2 text-[11px] text-slate-500">
           <span className="font-medium text-slate-600">Predicted risk:</span> {RISK_FRAMING}
         </p>
       )}

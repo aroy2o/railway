@@ -25,6 +25,7 @@ import {
 } from '../api/apiSlice.ts'
 import { describeApiError } from '../api/apiSlice.ts'
 import type { ScheduleBlock } from '../api/apiSlice.ts'
+import { useAppSelector } from '../store/hooks.ts'
 import { useAutoTour } from '../lib/useAutoTour.ts'
 import { DASHBOARD_TOUR_ID, DASHBOARD_TOUR_STEPS } from '../tours/dashboardTour.ts'
 import DeferredTasksPanel from '../components/DeferredTasksPanel.tsx'
@@ -46,6 +47,33 @@ import QueryState from '../components/QueryState.tsx'
 import { blockKey } from '../lib/gantt.ts'
 import { PageHeader } from '../components/Table.tsx'
 
+/**
+ * Sidebar panels grouped by purpose rather than build order (session:
+ * "Dashboard sidebar restructure") - things a Controller actively does, the
+ * ranked backlog, and read-only context/flags, so six unrelated panel types
+ * don't all carry equal visual weight in one stacked column.
+ */
+type SidebarTab = 'actions' | 'priorities' | 'context'
+
+const SIDEBAR_TABS: { id: SidebarTab; label: string }[] = [
+  { id: 'actions', label: 'Plan actions' },
+  { id: 'priorities', label: 'Priorities' },
+  { id: 'context', label: 'Context & flags' },
+]
+
+/**
+ * Keeps `dashboardTour.ts`'s per-panel steps working now that panels are
+ * tabbed: maps a step id to the tab that contains its target element, so the
+ * dashboard can switch tabs to match as the tour advances. Steps not listed
+ * here don't target a sidebar panel and never move the tab.
+ */
+const TAB_FOR_TOUR_STEP: Partial<Record<string, SidebarTab>> = {
+  'priority-queue': 'priorities',
+  'policy-sliders': 'actions',
+  'weather-risk': 'context',
+  'known-limitations': 'context',
+}
+
 export function ControllerDashboard() {
   const schedule = useGetLatestScheduleQuery()
   const tasks = useGetTasksQuery({ limit: 200 })
@@ -65,6 +93,23 @@ export function ControllerDashboard() {
   // T28: tracked so a policy-slider regenerate stays on whatever horizon is
   // currently being viewed, rather than silently reverting to weekly.
   const [horizonDays, setHorizonDays] = useState<7 | 30>(7)
+  // Sidebar restructure: which purpose-group is showing. Panels stay
+  // mounted (CSS-hidden, not conditionally rendered) so every
+  // dashboardTour.ts target is still findable by `document.querySelector`
+  // regardless of the active tab - see `TAB_FOR_TOUR_STEP` above.
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('actions')
+
+  // Keep the guided tour working across tabs: when it steps into a panel
+  // that lives in a different tab, switch tabs to match. Done here, DURING
+  // render (not in a useEffect) so the DOM is already correct before
+  // TourOverlay's own layout effect measures the target on this same step
+  // change - an effect-based sync would race it and sometimes measure the
+  // still-hidden previous tab for one frame.
+  const currentTourStep = useAppSelector((state) => state.tour.steps[state.tour.stepIndex] ?? null)
+  const desiredSidebarTab = currentTourStep ? TAB_FOR_TOUR_STEP[currentTourStep.id] : undefined
+  if (desiredSidebarTab && desiredSidebarTab !== sidebarTab) {
+    setSidebarTab(desiredSidebarTab)
+  }
 
   const plan = schedule.data?.data
   // `blocks` is the solver's plan and what `decisionLog` explains; the
@@ -184,7 +229,7 @@ export function ControllerDashboard() {
                   status={plan.status}
                 />
               </div>
-            
+
               {/* The comparison is computed in the same run as this plan, so a
                   Controller reviewing one will want the other close by. */}
               {plan.comparisonToBaseline && (
@@ -279,28 +324,48 @@ export function ControllerDashboard() {
                   <DeferredTasksPanel deferred={plan.deferredTasks} />
                 </div>
 
-                <div className="space-y-6">
-                  {/* First in the sidebar: whether this plan has been issued
-                      changes how everything below it should be read. */}
-                  <WorkflowPanel
-                    scheduleId={plan._id}
-                    state={plan.workflowState ?? 'draft'}
-                    allowedActions={plan.allowedActions ?? []}
-                    version={null}
-                  />
-                  <PolicySliders onRegenerate={onGenerate} isLoading={generation.isLoading} />
-                  <PriorityQueue
-                    tasks={tasks.data?.data ?? []}
-                    schedule={plan}
-                    onWhatIf={setWhatIfTaskId}
-                  />
-                  <OverrideHistory overrides={plan.overrides ?? []} />
-                  <WeatherRiskPanel weatherRisk={plan.knownGaps?.weatherRisk} />
-                  <KnownLimitations
-                    knownGaps={plan.knownGaps}
-                    conflictReport={plan.conflictReport}
-                    generationErrors={plan.generationErrors}
-                  />
+                <div className="space-y-4">
+                  <SidebarTabBar active={sidebarTab} onSelect={setSidebarTab} />
+
+                  {/* Things a Controller actively does. */}
+                  <div
+                    className={sidebarTab === 'actions' ? 'space-y-6' : 'hidden'}
+                    aria-hidden={sidebarTab !== 'actions'}
+                  >
+                    <WorkflowPanel
+                      scheduleId={plan._id}
+                      state={plan.workflowState ?? 'draft'}
+                      allowedActions={plan.allowedActions ?? []}
+                      version={null}
+                    />
+                    <PolicySliders onRegenerate={onGenerate} isLoading={generation.isLoading} />
+                    <OverrideHistory overrides={plan.overrides ?? []} />
+                  </div>
+
+                  {/* The ranked backlog. */}
+                  <div
+                    className={sidebarTab === 'priorities' ? '' : 'hidden'}
+                    aria-hidden={sidebarTab !== 'priorities'}
+                  >
+                    <PriorityQueue
+                      tasks={tasks.data?.data ?? []}
+                      schedule={plan}
+                      onWhatIf={setWhatIfTaskId}
+                    />
+                  </div>
+
+                  {/* Things a Controller reads, not acts on. */}
+                  <div
+                    className={sidebarTab === 'context' ? 'space-y-6' : 'hidden'}
+                    aria-hidden={sidebarTab !== 'context'}
+                  >
+                    <WeatherRiskPanel weatherRisk={plan.knownGaps?.weatherRisk} />
+                    <KnownLimitations
+                      knownGaps={plan.knownGaps}
+                      conflictReport={plan.conflictReport}
+                      generationErrors={plan.generationErrors}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -308,6 +373,39 @@ export function ControllerDashboard() {
         </QueryState>
       )}
     </>
+  )
+}
+
+function SidebarTabBar({
+  active,
+  onSelect,
+}: {
+  active: SidebarTab
+  onSelect: (tab: SidebarTab) => void
+}) {
+  return (
+    <div
+      className="flex items-center gap-1 rounded-lg bg-slate-100 p-1"
+      role="tablist"
+      aria-label="Sidebar sections"
+    >
+      {SIDEBAR_TABS.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          aria-selected={active === tab.id}
+          onClick={() => onSelect(tab.id)}
+          className={`flex-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition ${
+            active === tab.id
+              ? 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
   )
 }
 

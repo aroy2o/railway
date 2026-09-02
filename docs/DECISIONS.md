@@ -4890,3 +4890,58 @@ Podman for Docker; a one-time confirmation with real `docker compose` on a
 machine that has it (before the demo, not on demo day) would close the
 small remaining gap between "verified against a compliant engine" and
 "verified against the exact tool README documents."
+
+## D-088 — Controller Dashboard sidebar restructured into three purpose tabs
+(owner-directed, pre-demo readiness session)
+
+**Date:** 2026-09-02 · **Task:** not T-numbered — owner-directed UI
+housekeeping, found uncommitted at the start of a presentation-readiness
+audit (`docs/FEATURE_AUDIT.md` §3.28/§7) and finished/committed on the
+owner's explicit instruction during that same session.
+
+**Decision.** The Controller Dashboard sidebar's six panels (`WorkflowPanel`,
+`PolicySliders`, `PriorityQueue`, `OverrideHistory`, `WeatherRiskPanel`,
+`KnownLimitations`) no longer stack in one flat column. They're grouped into
+three tabs by what a Controller is doing with them, not build order: **Plan
+actions** (workflow, sliders, override history — things acted on), **Priorities**
+(the ranked backlog), **Context & flags** (weather advisory, known
+limitations — read-only). All six panels stay mounted (CSS-hidden via
+`hidden`, never conditionally unmounted) so every `data-tour` target D-072's
+guided walkthrough already depends on stays queryable by
+`document.querySelector` regardless of which tab is active. `KnownLimitations`
+also gained a collapsed-by-default state with a "N flagged" header summary,
+since it was the single densest, least time-critical panel in the old column.
+
+**Why not build order.** The un-tabbed column mixed things a Controller
+clicks (override a task, drag a slider) with things they only read
+(the weather advisory, the conflict taxonomy) at equal visual weight —
+readable, but not scannable under demo time pressure.
+
+**Tour sync.** `dashboardTour.ts`'s step targets didn't move, so a step
+whose target now lives in a different tab needed the dashboard to switch
+tabs to match. Done via a `TAB_FOR_TOUR_STEP` lookup keyed by tour step id,
+applied *during render* rather than in a `useEffect` — an effect-based sync
+would race `TourOverlay`'s own layout effect on the same step change and
+could measure the still-hidden previous tab for one frame.
+
+**What real data backs it.** Verified live against the running dev stack
+(controller/controller123), not just `tsc -b`/lint/vitest (145/145,
+unchanged — no new tests were added for the tab/collapse logic, matching
+this task's frontend-coverage discipline for UI-only changes): a full
+12-step guided-tour walkthrough was driven headlessly end to end, and the
+active sidebar tab was captured at every step. It matched
+`TAB_FOR_TOUR_STEP` exactly — `priority-queue` (step 6) switched to
+**Priorities**, `policy-sliders` (step 8) switched back to **Plan
+actions**, `weather-risk`/`known-limitations` (steps 10–11) switched to
+**Context & flags**, and every unmapped step left the tab untouched.
+Manual tab clicks independently confirmed the right panels render per tab,
+and `KnownLimitations` collapsed to "none flagged" by default, expanding
+correctly (`aria-expanded` false → true) on click. Zero browser console
+errors across the whole run.
+
+**Known limitations.** None material found. This entry closes the
+`docs/FEATURE_AUDIT.md` §3.28/§7 gap (uncommitted, untested, undocumented)
+by committing, live-verifying, and logging it here — the frontend test
+count is still 145/145 by design, per this project's stated convention of
+either adding tests or explicitly stating "verified live instead" for
+UI-only structural changes (matching D-072, D-080, D-081).

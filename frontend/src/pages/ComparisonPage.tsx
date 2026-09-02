@@ -94,7 +94,7 @@ export function ComparisonPage() {
             const rows = buildMetricRows(comparison)
             return (
               <>
-                <h2 className="mt-8 mb-1 text-sm font-semibold text-slate-900">
+                <h2 className="mt-6 mb-1 text-sm font-semibold text-slate-900">
                   What coordination actually changes
                 </h2>
                 <p className="mb-3 max-w-3xl text-xs text-slate-500">
@@ -107,7 +107,7 @@ export function ComparisonPage() {
                   ))}
                 </div>
 
-                <h2 className="mt-8 mb-3 text-sm font-semibold text-slate-900">
+                <h2 className="mt-6 mb-3 text-sm font-semibold text-slate-900">
                   Numbers that need their context
                 </h2>
                 <div data-tour="comparison-supporting" className="grid gap-4 lg:grid-cols-2">
@@ -372,7 +372,7 @@ function ConflictEvidence({
   const overSubscriptionType = byType.get('WINDOW_OVER_SUBSCRIPTION')
 
   return (
-    <section data-tour="comparison-conflict-evidence" className="mt-8">
+    <section data-tour="comparison-conflict-evidence" className="mt-6">
       <h2 className="mb-1 text-sm font-semibold text-slate-900">The conflicts themselves</h2>
       <p className="mb-3 max-w-3xl text-xs text-slate-500">{note}</p>
 
@@ -479,7 +479,7 @@ function ConflictEvidence({
  */
 function Caveats({ caveats }: { caveats: string[] }) {
   return (
-    <section data-tour="comparison-caveats" className="mt-8 rounded-xl border border-slate-300 bg-slate-100 px-5 py-4">
+    <section data-tour="comparison-caveats" className="mt-6 rounded-xl border border-slate-300 bg-slate-100 px-5 py-4">
       <h2 className="text-sm font-semibold text-slate-900">How to read this comparison</h2>
       <p className="mb-2 text-xs text-slate-500">
         Stored with the comparison by the system that computed it, not written by this page.
