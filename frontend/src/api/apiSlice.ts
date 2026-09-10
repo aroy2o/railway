@@ -507,7 +507,13 @@ const rawBaseQuery = fetchBaseQuery({
   },
   // A hung solver must not hold a request open indefinitely. The optimizer's
   // own budget is SOLVER_MAX_SECONDS; this is the browser-side backstop.
-  timeout: 30_000,
+  // 90s, not 30s: on the scale-to-zero Azure deployment (docs/deploy/), the
+  // optimizer Container App can cold-start from zero replicas, which alone
+  // can approach 30s before the solver's own budget even starts running -
+  // a real generate-schedule call was observed timing out at the old 30s
+  // value despite completing successfully ~15s later. Local dev and
+  // docker-compose never cold-start, so this only ever matters there.
+  timeout: 90_000,
 })
 
 /**
