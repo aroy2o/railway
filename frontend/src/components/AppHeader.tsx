@@ -97,7 +97,15 @@ export function AppHeader() {
 
   return (
     <header className="border-b border-slate-200 bg-white">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 pt-4 sm:px-6">
+      <div
+        className={`mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 pt-4 sm:px-6 ${
+          // The nav row below (only rendered once logged in) supplies its own
+          // bottom spacing before the header's bottom edge - without it, this
+          // row has no bottom padding at all and sits cramped right against
+          // that edge (visible on /login, the one route with no nav row).
+          user ? '' : 'pb-4'
+        }`}
+      >
         <div className="flex items-center gap-3">
           <RexLogo className="h-9 w-9 shrink-0" />
           <div>
