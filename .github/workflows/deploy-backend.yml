@@ -1,0 +1,64 @@
+name: deploy-backend
+
+# Builds the backend image, pushes it to GHCR (free - avoids Azure Container
+# Registry's ~$5/mo Basic tier), and rolls it out to the existing Azure
+# Container App. Provisioning the Container App itself is a one-time step
+# done via docs/deploy/azure-setup.sh, not this workflow - see
+# docs/deploy/README.md for the full sequence and required secrets/vars.
+#
+# Auth to Azure uses OIDC federated login (azure/login with client-id/
+# tenant-id/subscription-id only) - no client secret is stored in GitHub.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write # required for azure/login OIDC
+  contents: read
+  packages: write # required to push to ghcr.io
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/railway-backend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy new image to Container App
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            az containerapp update \
+              --name ${{ vars.AZURE_BACKEND_APP_NAME }} \
+              --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+              --image ${{ env.IMAGE }}:${{ github.sha }}

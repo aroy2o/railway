@@ -1,0 +1,58 @@
+name: deploy-optimizer
+
+# Mirrors deploy-backend.yml for the Python/FastAPI optimizer service. See
+# that file's header and docs/deploy/README.md for the shared setup notes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "optimizer/**"
+      - ".github/workflows/deploy-optimizer.yml"
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/railway-optimizer
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: optimizer
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy new image to Container App
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            az containerapp update \
+              --name ${{ vars.AZURE_OPTIMIZER_APP_NAME }} \
+              --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+              --image ${{ env.IMAGE }}:${{ github.sha }}
