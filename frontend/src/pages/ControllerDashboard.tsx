@@ -40,6 +40,7 @@ import BlockDetailPanel from '../components/BlockDetailPanel.tsx'
 import AskThePlanner from '../components/AskThePlanner.tsx'
 import KnownLimitations from '../components/KnownLimitations.tsx'
 import WeatherRiskPanel from '../components/WeatherRiskPanel.tsx'
+import { useSlowLoadHint } from '../lib/useSlowLoadHint.ts'
 import KpiStrip from '../components/KpiStrip.tsx'
 import PriorityQueue from '../components/PriorityQueue.tsx'
 import QueryState from '../components/QueryState.tsx'
@@ -77,6 +78,7 @@ export function ControllerDashboard() {
   const schedule = useGetLatestScheduleQuery()
   const tasks = useGetTasksQuery({ limit: 200 })
   const [generate, generation] = useGenerateScheduleMutation()
+  const showSlowGenerateHint = useSlowLoadHint(generation.isLoading)
   // TX5: the block currently being INSPECTED (Task/Block Detail Drill-down).
   // Renamed in spirit from a pure "override selection" now that clicking a
   // block always opens the read-only drill-down first - `overriding` below
@@ -195,11 +197,16 @@ export function ControllerDashboard() {
         }
       />
 
-      {/* A CP-SAT run takes a second or two. Saying so beats looking frozen. */}
+      {/* A CP-SAT run takes a second or two. Saying so beats looking frozen.
+          Past SLOW_LOAD_HINT_DELAY_MS, swap to the cold-start explanation
+          instead - the deployed optimizer scales to zero when idle
+          (docs/deploy/README.md), so "a couple of seconds" would read as
+          broken rather than honest once a real cold start is under way. */}
       {generation.isLoading && (
         <div className="mb-5 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-          Running the constraint solver over the pending backlog. This usually takes a couple of
-          seconds.
+          {showSlowGenerateHint
+            ? 'Starting up the solver service after a break — this can take up to 30s. It will speed back up once warm.'
+            : 'Running the constraint solver over the pending backlog. This usually takes a couple of seconds.'}
         </div>
       )}
 

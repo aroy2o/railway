@@ -6,6 +6,7 @@
  */
 import type { ReactNode } from 'react'
 import { describeApiError } from '../api/apiSlice.ts'
+import { useSlowLoadHint } from '../lib/useSlowLoadHint.ts'
 
 interface QueryStateProps {
   isLoading: boolean
@@ -22,8 +23,19 @@ export function QueryState({
   emptyMessage = 'Nothing to show.',
   children,
 }: QueryStateProps) {
+  const showSlowLoadHint = useSlowLoadHint(isLoading)
+
   if (isLoading) {
-    return <p className="px-5 py-8 text-sm text-slate-500">Loading…</p>
+    return (
+      <div className="px-5 py-8">
+        <p className="text-sm text-slate-500">Loading…</p>
+        {showSlowLoadHint && (
+          <p className="mt-1 text-xs text-slate-400">
+            Starting up the service — this can take up to 30s after a break.
+          </p>
+        )}
+      </div>
+    )
   }
 
   if (error) {
