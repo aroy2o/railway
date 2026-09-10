@@ -85,7 +85,13 @@ BACKEND_ENV_VARS=(
   "JWT_SECRET=secretref:jwt-secret"
   "JWT_EXPIRES_IN=12h"
   "OPTIMIZER_URL=https://${OPTIMIZER_APP}.internal.$(az containerapp env show -n "$ENV_NAME" -g "$RESOURCE_GROUP" --query 'properties.defaultDomain' -o tsv)"
-  "OPTIMIZER_TIMEOUT_MS=30000"
+  # 75s, not the .env.example default of 30s: the optimizer Container App
+  # is scale-to-zero, and a cold start alone can approach 30s before the
+  # solver's own budget starts - a real generate-schedule call timed out at
+  # 30s despite completing successfully ~15s later. Frontend's matching
+  # client-side timeout lives in frontend/src/api/apiSlice.ts (90s there,
+  # deliberately higher to leave headroom above this value).
+  "OPTIMIZER_TIMEOUT_MS=75000"
   "LLM_PROVIDER=groq"
   "GROQ_MODEL=openai/gpt-oss-120b"
 )
