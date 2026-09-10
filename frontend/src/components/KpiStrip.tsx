@@ -14,7 +14,8 @@ interface KpiStripProps {
 }
 
 export function KpiStrip({ metrics, solveSeconds, status }: KpiStripProps) {
-  const cards = [
+  // The four figures a Controller decides from. Full-size cards.
+  const primaryCards = [
     { label: 'Tasks scheduled', value: metrics.tasksScheduled, note: 'placed into a block' },
     {
       label: 'Deferred',
@@ -22,47 +23,62 @@ export function KpiStrip({ metrics, solveSeconds, status }: KpiStripProps) {
       note: 'each with a stated reason',
       tone: metrics.tasksDeferred > 0 ? 'warn' : 'plain',
     },
-    { label: 'Blocks used', value: metrics.blocksUsed, note: 'possessions taken' },
+    {
+      label: 'Block utilisation',
+      value: `${metrics.blockUtilisationPct}%`,
+      note: `${metrics.blockMinutesUsed} of ${metrics.blockMinutesCapacity} min`,
+    },
     {
       label: 'Shared blocks',
       value: metrics.crossDepartmentBatches,
       note: 'serving 2+ departments',
       tone: 'highlight',
     },
-    {
-      label: 'Block utilisation',
-      value: `${metrics.blockUtilisationPct}%`,
-      note: `${metrics.blockMinutesUsed} of ${metrics.blockMinutesCapacity} min`,
-    },
-    { label: 'Solve time', value: `${solveSeconds.toFixed(2)}s`, note: status.toLowerCase() },
+  ] as const
+
+  // Implementation detail rather than decision signal — a quieter line
+  // underneath the primary cards, not cards of their own.
+  const secondaryStats = [
+    { label: 'Blocks used', value: metrics.blocksUsed },
+    { label: 'Solve time', value: `${solveSeconds.toFixed(2)}s (${status.toLowerCase()})` },
   ] as const
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-      {cards.map((card) => (
-        <div
-          key={card.label}
-          className={`rounded-xl border bg-white px-4 py-3 shadow-sm ${
-            'tone' in card && card.tone === 'highlight'
-              ? 'border-violet-300 ring-1 ring-violet-200'
-              : 'border-slate-200'
-          }`}
-        >
-          <p className="text-[11px] tracking-wide text-slate-500 uppercase">{card.label}</p>
-          <p
-            className={`mt-0.5 text-2xl font-semibold tabular-nums ${
+    <div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {primaryCards.map((card) => (
+          <div
+            key={card.label}
+            className={`rounded-xl border bg-white px-4 py-3 shadow-sm ${
               'tone' in card && card.tone === 'highlight'
-                ? 'text-violet-700'
-                : 'tone' in card && card.tone === 'warn'
-                  ? 'text-amber-700'
-                  : 'text-slate-900'
+                ? 'border-violet-300 ring-1 ring-violet-200'
+                : 'border-slate-200'
             }`}
           >
-            {card.value}
-          </p>
-          <p className="text-[11px] text-slate-400">{card.note}</p>
-        </div>
-      ))}
+            <p className="text-[11px] tracking-wide text-slate-500 uppercase">{card.label}</p>
+            <p
+              className={`mt-0.5 text-2xl font-semibold tabular-nums ${
+                'tone' in card && card.tone === 'highlight'
+                  ? 'text-violet-700'
+                  : 'tone' in card && card.tone === 'warn'
+                    ? 'text-amber-700'
+                    : 'text-slate-900'
+              }`}
+            >
+              {card.value}
+            </p>
+            <p className="text-[11px] text-slate-400">{card.note}</p>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 px-1 text-[11px] text-slate-400">
+        {secondaryStats.map((stat) => (
+          <span key={stat.label}>
+            <span className="text-slate-500">{stat.label}:</span> {stat.value}
+          </span>
+        ))}
+      </p>
     </div>
   )
 }

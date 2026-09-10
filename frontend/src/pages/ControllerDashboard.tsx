@@ -30,7 +30,6 @@ import { useAutoTour } from '../lib/useAutoTour.ts'
 import { DASHBOARD_TOUR_ID, DASHBOARD_TOUR_STEPS } from '../tours/dashboardTour.ts'
 import DeferredTasksPanel from '../components/DeferredTasksPanel.tsx'
 import GanttTimeline from '../components/GanttTimeline.tsx'
-import OverrideHistory from '../components/OverrideHistory.tsx'
 import WorkflowPanel from '../components/WorkflowPanel.tsx'
 import WhatIfPanel from '../components/WhatIfPanel.tsx'
 import EmergencyPanel from '../components/EmergencyPanel.tsx'
@@ -98,6 +97,10 @@ export function ControllerDashboard() {
   // dashboardTour.ts target is still findable by `document.querySelector`
   // regardless of the active tab - see `TAB_FOR_TOUR_STEP` above.
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('actions')
+  // Decluttering pass: Ask the Planner and Deferred work are real panels but
+  // not needed on every load, so they sit behind a toggle rather than always
+  // taking main-column space under the Gantt.
+  const [moreOpen, setMoreOpen] = useState(false)
 
   // Keep the guided tour working across tabs: when it steps into a panel
   // that lives in a different tab, switch tabs to match. Done here, DURING
@@ -319,9 +322,27 @@ export function ControllerDashboard() {
                     />
                   )}
 
-                  <AskThePlanner scheduleId={plan._id} />
-
-                  <DeferredTasksPanel deferred={plan.deferredTasks} />
+                  <div className="rounded-xl border border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setMoreOpen((open) => !open)}
+                      aria-expanded={moreOpen}
+                      className="flex w-full items-center justify-between gap-3 px-5 py-3 text-left"
+                    >
+                      <span className="text-xs font-semibold tracking-wide text-slate-600 uppercase">
+                        Ask the Planner &amp; deferred work
+                      </span>
+                      <span className="shrink-0 text-xs text-slate-400" aria-hidden="true">
+                        {moreOpen ? '▾' : '▸'}
+                      </span>
+                    </button>
+                    {moreOpen && (
+                      <div className="space-y-6 px-5 pb-5">
+                        <AskThePlanner scheduleId={plan._id} />
+                        <DeferredTasksPanel deferred={plan.deferredTasks} />
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="space-y-4">
@@ -339,7 +360,6 @@ export function ControllerDashboard() {
                       version={null}
                     />
                     <PolicySliders onRegenerate={onGenerate} isLoading={generation.isLoading} />
-                    <OverrideHistory overrides={plan.overrides ?? []} />
                   </div>
 
                   {/* The ranked backlog. */}

@@ -58,7 +58,7 @@ export function AskThePlanner({ scheduleId }: AskThePlannerProps) {
   }
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section>
       <h2 className="text-sm font-semibold text-slate-900">Ask the Planner</h2>
       <p className="mt-0.5 mb-3 text-xs text-slate-500">
         Answers come only from this plan's own decision log, conflicts and overrides. Every

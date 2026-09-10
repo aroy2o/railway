@@ -5,7 +5,8 @@
  * real roles see only what their `RequireRole` route guards actually let them
  * reach (see App.tsx) - the same bypass check as the backend's `requireRole`.
  */
-import { NavLink, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 
 import { useAppDispatch, useAppSelector } from '../store/hooks.ts'
 import { replayRequested } from '../store/slices/tourSlice.ts'
@@ -17,12 +18,17 @@ interface NavItem {
   roles: UserRole[]
 }
 
-const NAV_ITEMS: NavItem[] = [
+/** The screens a role actually acts on. Always visible. */
+const PRIMARY_NAV_ITEMS: NavItem[] = [
   { to: '/dashboard', label: 'Dashboard', roles: ['controller'] },
   { to: '/comparison', label: 'Baseline vs AI', roles: ['controller'] },
   { to: '/audit', label: 'Approvals & audit', roles: ['controller', 'drm'] },
   { to: '/oversight', label: 'DRM oversight', roles: ['drm'] },
   { to: '/engineer', label: 'My requests', roles: ['dept_engineer'] },
+]
+
+/** Read-only lookup tables — grouped behind "Reference data" (decluttering pass). */
+const REFERENCE_NAV_ITEMS: NavItem[] = [
   { to: '/corridors', label: 'Corridors', roles: ['controller', 'drm'] },
   { to: '/assets', label: 'Assets', roles: ['controller', 'drm'] },
   { to: '/tasks', label: 'Backlog', roles: ['controller', 'drm'] },
@@ -40,11 +46,38 @@ const ROLE_LABELS: Record<UserRole, string> = {
 export function AppHeader() {
   const dispatch = useAppDispatch()
   const navigate = useNavigate()
+  const location = useLocation()
   const user = useAppSelector((state) => state.auth.user)
+  const [referenceOpen, setReferenceOpen] = useState(false)
+  const referenceMenuRef = useRef<HTMLLIElement>(null)
 
-  const visibleItems = user
-    ? NAV_ITEMS.filter((item) => user.role === 'super_admin' || item.roles.includes(user.role))
+  const visiblePrimaryItems = user
+    ? PRIMARY_NAV_ITEMS.filter((item) => user.role === 'super_admin' || item.roles.includes(user.role))
     : []
+  const visibleReferenceItems = user
+    ? REFERENCE_NAV_ITEMS.filter((item) => user.role === 'super_admin' || item.roles.includes(user.role))
+    : []
+  const referenceActive = visibleReferenceItems.some((item) => location.pathname.startsWith(item.to))
+
+  // Close the dropdown on an outside click or Escape — it isn't a native
+  // <details> element, so nothing does this for free.
+  useEffect(() => {
+    if (!referenceOpen) return
+    function onPointerDown(event: MouseEvent) {
+      if (!referenceMenuRef.current?.contains(event.target as Node)) {
+        setReferenceOpen(false)
+      }
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setReferenceOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [referenceOpen])
 
   // Every route has its own tour (docs/DECISIONS.md D-072). This button
   // lives here, globally, because it must be reachable from any page - but
@@ -111,8 +144,8 @@ export function AppHeader() {
 
       {user && (
         <nav className="mx-auto max-w-7xl px-4 sm:px-6">
-          <ul className="flex flex-wrap gap-1 pt-3">
-            {visibleItems.map((item) => (
+          <ul className="flex flex-wrap items-center gap-1 pt-3">
+            {visiblePrimaryItems.map((item) => (
               <li key={item.to}>
                 <NavLink
                   to={item.to}
@@ -128,6 +161,49 @@ export function AppHeader() {
                 </NavLink>
               </li>
             ))}
+
+            {visibleReferenceItems.length > 0 && (
+              <li ref={referenceMenuRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setReferenceOpen((open) => !open)}
+                  aria-expanded={referenceOpen}
+                  aria-haspopup="true"
+                  className={`inline-flex items-center gap-1 rounded-t-lg border-b-2 px-3 py-2 text-sm font-medium transition ${
+                    referenceActive
+                      ? 'border-slate-900 text-slate-900'
+                      : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
+                  }`}
+                >
+                  Reference data
+                  <span className={`text-[10px] transition-transform ${referenceOpen ? 'rotate-180' : ''}`} aria-hidden="true">
+                    ▾
+                  </span>
+                </button>
+
+                {referenceOpen && (
+                  <ul className="absolute left-0 z-10 mt-1 w-48 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                    {visibleReferenceItems.map((item) => (
+                      <li key={item.to}>
+                        <NavLink
+                          to={item.to}
+                          onClick={() => setReferenceOpen(false)}
+                          className={({ isActive }) =>
+                            `block px-3 py-2 text-sm transition ${
+                              isActive
+                                ? 'bg-slate-100 font-medium text-slate-900'
+                                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                            }`
+                          }
+                        >
+                          {item.label}
+                        </NavLink>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            )}
           </ul>
         </nav>
       )}

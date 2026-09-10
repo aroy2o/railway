@@ -47,7 +47,7 @@ export function DeferredTasksPanel({ deferred }: { deferred: DeferredTask[] }) {
 
   if (deferred.length === 0) {
     return (
-      <section className="rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4">
+      <section className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
         <h2 className="text-sm font-semibold text-emerald-900">Nothing deferred</h2>
         <p className="text-xs text-emerald-700">Every pending task was placed into a block.</p>
       </section>
@@ -55,8 +55,8 @@ export function DeferredTasksPanel({ deferred }: { deferred: DeferredTask[] }) {
   }
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-      <header className="border-b border-slate-100 px-5 py-4">
+    <section>
+      <header className="pb-3">
         <h2 className="text-sm font-semibold text-slate-900">
           Deferred work{' '}
           <span className="font-normal text-slate-500">({deferred.length} tasks)</span>
@@ -68,7 +68,7 @@ export function DeferredTasksPanel({ deferred }: { deferred: DeferredTask[] }) {
       </header>
 
       {costedCount > 0 && (
-        <p className="border-b border-slate-100 bg-amber-50/50 px-5 py-2 text-[11px] text-slate-600">
+        <p className="mb-3 rounded-lg bg-amber-50/50 px-3 py-2 text-[11px] text-slate-600">
           <span className="font-medium text-slate-700">Traffic-block cost</span> — {costedCount} of
           these could be forced through by displacing trains. Displaced counts and minutes are
           measured from the real timetable; the class split behind the weighting is apportioned
@@ -77,9 +77,9 @@ export function DeferredTasksPanel({ deferred }: { deferred: DeferredTask[] }) {
         </p>
       )}
 
-      <div className="divide-y divide-slate-100">
+      <div className="divide-y divide-slate-100 rounded-lg border border-slate-100">
         {groups.map(([reason, tasks]) => (
-          <div key={reason} className="px-5 py-4">
+          <div key={reason} className="px-4 py-3">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <h3 className="text-sm font-medium text-slate-800">{REASON_LABEL[reason]}</h3>
               <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-600/20 ring-inset">

@@ -27,9 +27,11 @@ export function WeatherRiskPanel({ weatherRisk }: WeatherRiskPanelProps) {
   return (
     <section
       data-tour="dashboard-weather-risk"
-      className="rounded-xl border border-sky-200 bg-sky-50/40 px-5 py-4"
+      className="rounded-lg border border-sky-100 bg-sky-50/40 px-4 py-3"
     >
-      <h2 className="text-sm font-semibold text-slate-900">Seasonal risk (PRD 9.9)</h2>
+      <h2 className="text-xs font-semibold tracking-wide text-slate-600 uppercase">
+        Seasonal risk (PRD 9.9)
+      </h2>
       <p className="mt-1 text-xs text-slate-600">
         <span className="rounded bg-white px-1.5 py-0.5 font-semibold tabular-nums text-sky-800 ring-1 ring-sky-200 ring-inset">
           {weatherRisk.count}

@@ -13,10 +13,11 @@ import {
   useGetLatestScheduleQuery,
   useGetSchedulesQuery,
 } from '../api/apiSlice.ts'
-import { describeState } from '../lib/approval.ts'
+import { describeState, type AuditEntry } from '../lib/approval.ts'
 import { useAutoTour } from '../lib/useAutoTour.ts'
 import { AUDIT_TOUR_ID, AUDIT_TOUR_STEPS } from '../tours/auditTour.ts'
 import AuditTrail from '../components/AuditTrail.tsx'
+import OverrideHistory from '../components/OverrideHistory.tsx'
 import WorkflowPanel from '../components/WorkflowPanel.tsx'
 import QueryState from '../components/QueryState.tsx'
 import { useAppSelector } from '../store/hooks.ts'
@@ -154,6 +155,17 @@ export function AuditPage() {
                     )}
                   </div>
                   <AuditTrail trail={trail.data.data} />
+                  {/* Moved here from the Dashboard's Actions tab (decluttering
+                      pass, round 1) — this is the audit-history read of the
+                      same overrides AuditTrail already narrates above. */}
+                  <OverrideHistory
+                    overrides={trail.data.data.entries
+                      .filter(
+                        (entry): entry is Extract<AuditEntry, { kind: 'override' }> =>
+                          entry.kind === 'override',
+                      )
+                      .map((entry) => entry.detail)}
+                  />
                 </>
               )}
             </QueryState>
