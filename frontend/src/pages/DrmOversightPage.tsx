@@ -8,6 +8,8 @@
  * tracking, no runtime asset state) is shown as unavailable with the
  * specific reason, never a plausible-looking invented number.
  */
+import { useState } from 'react'
+
 import {
   useGetAssetsQuery,
   useGetLatestScheduleQuery,
@@ -36,22 +38,105 @@ const CATEGORY_NOTE: Record<KpiCategory['category'], string> = {
   Asset: 'What still needs attention once this plan is committed.',
 }
 
+/** The other KPIs in a category, once expanded — deliberately smaller and
+ *  quieter than the headline so the one number a fast health check needs
+ *  doesn't compete with the other three. */
 function KpiCard({ kpi }: { kpi: Kpi }) {
   if (!kpi.available) {
     return (
-      <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50/60 px-3.5 py-3">
-        <p className="text-[11px] font-medium tracking-wide text-slate-500 uppercase">{kpi.label}</p>
-        <p className="mt-1 text-sm font-semibold text-slate-400">not tracked</p>
-        <p className="mt-1 text-[11px] text-slate-500">{kpi.reason}</p>
+      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/60 px-3 py-2.5">
+        <p className="text-[10px] font-medium tracking-wide text-slate-500 uppercase">{kpi.label}</p>
+        <p className="mt-0.5 text-sm font-semibold text-slate-400">not tracked</p>
+        <p className="mt-0.5 text-[11px] text-slate-500">{kpi.reason}</p>
       </div>
     )
   }
   return (
-    <div className="rounded-lg border border-slate-200 bg-white px-3.5 py-3">
-      <p className="text-[11px] font-medium tracking-wide text-slate-500 uppercase">{kpi.label}</p>
-      <p className="mt-1 text-lg font-semibold text-slate-900 tabular-nums">{kpi.value}</p>
-      <p className="mt-1 text-[11px] text-slate-500">{kpi.detail}</p>
+    <div className="rounded-lg border border-slate-100 bg-white px-3 py-2.5">
+      <p className="text-[10px] font-medium tracking-wide text-slate-500 uppercase">{kpi.label}</p>
+      <p className="mt-0.5 text-base font-semibold text-slate-800 tabular-nums">{kpi.value}</p>
+      <p className="mt-0.5 text-[11px] text-slate-500">{kpi.detail}</p>
     </div>
+  )
+}
+
+/** The one number a DRM checks first for this category — full size, visible
+ *  whether or not the category is expanded. Picks the first AVAILABLE KPI in
+ *  the category's own array (already PRD-priority-ordered per `oversight.ts`),
+ *  falling back to the first KPI so a category that is entirely unavailable
+ *  still has something to show rather than an empty headline. */
+function pickHeadline(kpis: Kpi[]): Kpi {
+  return kpis.find((kpi) => kpi.available) ?? kpis[0]!
+}
+
+function HeadlineStat({ kpi }: { kpi: Kpi }) {
+  return (
+    <div className="text-right">
+      <p className="text-[11px] font-medium tracking-wide text-slate-500 uppercase">{kpi.label}</p>
+      <p
+        className={`text-xl font-semibold tabular-nums ${
+          kpi.available ? 'text-slate-900' : 'text-slate-400'
+        }`}
+      >
+        {kpi.available ? kpi.value : 'not tracked'}
+      </p>
+    </div>
+  )
+}
+
+function CategorySection({
+  category,
+  kpis,
+  note,
+}: {
+  category: KpiCategory['category']
+  kpis: Kpi[]
+  note: string
+}) {
+  // Collapsed by default: a DRM should be able to read all four headline
+  // numbers in one screenful before choosing which category to drill into.
+  const [expanded, setExpanded] = useState(false)
+  const headline = pickHeadline(kpis)
+  const rest = kpis.filter((kpi) => kpi !== headline)
+
+  return (
+    <section
+      data-tour={`oversight-category-${category}`}
+      className="rounded-xl border border-slate-200 bg-white shadow-sm"
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+      >
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-slate-900">{category}</h3>
+          <p className="mt-0.5 text-xs text-slate-500">{note}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-4">
+          <HeadlineStat kpi={headline} />
+          <span className="text-xs text-slate-400" aria-hidden="true">
+            {expanded ? '▾' : '▸'}
+          </span>
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-slate-100 px-5 py-4">
+          {/* The headline's own detail text, elided from the collapsed row —
+              shown once, here, rather than duplicated in both places. */}
+          <p className="mb-3 text-xs text-slate-500">
+            {headline.available ? headline.detail : headline.reason}
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {rest.map((kpi) => (
+              <KpiCard key={kpi.label} kpi={kpi} />
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -159,19 +244,12 @@ export function DrmOversightPage() {
                 {plan._id} · {plan.horizon} · generated {new Date(plan.generatedAt).toLocaleString()}
               </p>
               {categories.map(({ category, kpis }) => (
-                <section
+                <CategorySection
                   key={category}
-                  data-tour={`oversight-category-${category}`}
-                  className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
-                >
-                  <h3 className="text-sm font-semibold text-slate-900">{category}</h3>
-                  <p className="mb-3 text-xs text-slate-500">{CATEGORY_NOTE[category]}</p>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    {kpis.map((kpi) => (
-                      <KpiCard key={kpi.label} kpi={kpi} />
-                    ))}
-                  </div>
-                </section>
+                  category={category}
+                  kpis={kpis}
+                  note={CATEGORY_NOTE[category]}
+                />
               ))}
 
               <section

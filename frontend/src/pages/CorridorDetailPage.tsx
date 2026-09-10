@@ -5,6 +5,7 @@
  * `maxDailyBlockWindows` shown here is joined from `corridor_calendar` by the
  * API (docs/DECISIONS.md D-016), not stored on the corridor document.
  */
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   useGetAssetsQuery,
@@ -26,6 +27,37 @@ function Stat({ label, value, note }: { label: string; value: string; note?: str
   )
 }
 
+type DetailTab = 'assets' | 'backlog' | 'resources'
+
+function DetailTabButton({
+  active,
+  onClick,
+  label,
+  count,
+}: {
+  active: boolean
+  onClick: () => void
+  label: string
+  count?: number
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+        active ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
+      }`}
+    >
+      {label}
+      {count != null && (
+        <span className={active ? 'ml-1.5 text-slate-300' : 'ml-1.5 text-slate-400'}>{count}</span>
+      )}
+    </button>
+  )
+}
+
 export function CorridorDetailPage() {
   const { id = '' } = useParams()
   const corridor = useGetCorridorQuery(id, { skip: !id })
@@ -34,6 +66,11 @@ export function CorridorDetailPage() {
   const resources = useGetResourcesQuery({ corridorId: id }, { skip: !id })
 
   const data = corridor.data?.data
+
+  // Decluttering pass: the 4 stat cards + block windows above stay the
+  // dominant top section; these 3 were always-expanded full tables stacked
+  // underneath. One at a time, on demand, is enough - nothing here is cut.
+  const [tab, setTab] = useState<DetailTab>('assets')
 
   return (
     <>
@@ -106,124 +143,147 @@ export function CorridorDetailPage() {
               )}
             </section>
 
-            <section className="mb-6">
-              <h3 className="mb-2 text-sm font-semibold text-slate-900">
-                Assets <span className="font-normal text-slate-500">({assets.data?.pagination.total ?? 0})</span>
-              </h3>
-              <QueryState
-                isLoading={assets.isLoading}
-                error={assets.error}
-                isEmpty={(assets.data?.data.length ?? 0) === 0}
-                emptyMessage="No assets on this corridor."
+            <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div
+                role="tablist"
+                aria-label="Corridor detail"
+                className="flex items-center gap-1 border-b border-slate-100 p-2"
               >
-                <TableShell>
-                  <thead>
-                    <tr>
-                      <Th>Asset</Th>
-                      <Th>Type</Th>
-                      <Th>Dept</Th>
-                      <Th align="right">Criticality</Th>
-                      <Th>Dominant factor</Th>
-                      <Th align="right">Trains affected</Th>
-                      <Th>Data</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(assets.data?.data ?? []).map((asset) => (
-                      <tr key={asset._id} className="hover:bg-slate-50">
-                        <Td mono>{asset._id}</Td>
-                        <Td>{asset.assetType}</Td>
-                        <Td>
-                          <DepartmentPill department={asset.department} />
-                        </Td>
-                        <Td align="right">{asset.criticalityScore.toFixed(2)}</Td>
-                        <Td>
-                          <span className="text-xs text-slate-500">
-                            {asset.dominantCriticalityFactor?.replace(/_/g, ' ')}
-                          </span>
-                        </Td>
-                        <Td align="right">
-                          {asset.criticality.trainsAffectedCount}{' '}
-                          <SyntheticBadge synthetic realNote="Real — trains observed in the timetable (T3)" />
-                        </Td>
-                        <Td>
-                          <SyntheticBadge synthetic={asset.synthetic} />
-                        </Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </TableShell>
-              </QueryState>
-            </section>
+                <DetailTabButton
+                  active={tab === 'assets'}
+                  onClick={() => setTab('assets')}
+                  label="Assets"
+                  count={assets.data?.pagination.total}
+                />
+                <DetailTabButton
+                  active={tab === 'backlog'}
+                  onClick={() => setTab('backlog')}
+                  label="Backlog"
+                  count={tasks.data?.pagination.total}
+                />
+                <DetailTabButton
+                  active={tab === 'resources'}
+                  onClick={() => setTab('resources')}
+                  label="Resources"
+                  count={resources.data?.pagination.total}
+                />
+              </div>
 
-            <section className="mb-6">
-              <h3 className="mb-2 text-sm font-semibold text-slate-900">
-                Maintenance backlog{' '}
-                <span className="font-normal text-slate-500">({tasks.data?.pagination.total ?? 0})</span>
-              </h3>
-              <QueryState
-                isLoading={tasks.isLoading}
-                error={tasks.error}
-                isEmpty={(tasks.data?.data.length ?? 0) === 0}
-                emptyMessage="No pending tasks on this corridor."
-              >
-                <TableShell>
-                  <thead>
-                    <tr>
-                      <Th>Task</Th>
-                      <Th>Dept</Th>
-                      <Th>Defect</Th>
-                      <Th>Sev</Th>
-                      <Th align="right">Duration</Th>
-                      <Th>SLA due</Th>
-                      <Th>Depends on</Th>
-                      <Th>Data</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(tasks.data?.data ?? []).map((task) => (
-                      <tr key={task._id} className="hover:bg-slate-50">
-                        <Td mono>{task._id}</Td>
-                        <Td>
-                          <DepartmentPill department={task.department} />
-                        </Td>
-                        <Td>{task.defectType}</Td>
-                        <Td>
-                          <SeverityPill severity={task.severity} />
-                        </Td>
-                        <Td align="right">{task.estBlockDurationMins}m</Td>
-                        <Td mono>{task.slaDueDate}</Td>
-                        <Td mono>{task.dependsOnTaskId ?? '—'}</Td>
-                        <Td>
-                          <SyntheticBadge synthetic={task.synthetic} />
-                        </Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </TableShell>
-              </QueryState>
-            </section>
-
-            <section>
-              <h3 className="mb-2 text-sm font-semibold text-slate-900">
-                Resources available here{' '}
-                <span className="font-normal text-slate-500">
-                  ({resources.data?.pagination.total ?? 0})
-                </span>
-              </h3>
-              <p className="mb-2 text-xs text-slate-500">
-                Depot-scoped, so the same machine can be contended for by tasks on other corridors.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {(resources.data?.data ?? []).map((resource) => (
-                  <span
-                    key={resource._id}
-                    className="rounded-lg bg-white px-2.5 py-1 text-xs text-slate-700 ring-1 ring-slate-200 ring-inset"
+              <div className="p-5">
+                {tab === 'assets' && (
+                  <QueryState
+                    isLoading={assets.isLoading}
+                    error={assets.error}
+                    isEmpty={(assets.data?.data.length ?? 0) === 0}
+                    emptyMessage="No assets on this corridor."
                   >
-                    {resource.name}{' '}
-                    <span className="text-slate-400">· {resource.type}</span>
-                  </span>
-                ))}
+                    <TableShell>
+                      <thead>
+                        <tr>
+                          <Th>Asset</Th>
+                          <Th>Type</Th>
+                          <Th>Dept</Th>
+                          <Th align="right">Criticality</Th>
+                          <Th>Dominant factor</Th>
+                          <Th align="right">Trains affected</Th>
+                          <Th>Data</Th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(assets.data?.data ?? []).map((asset) => (
+                          <tr key={asset._id} className="hover:bg-slate-50">
+                            <Td mono>{asset._id}</Td>
+                            <Td>{asset.assetType}</Td>
+                            <Td>
+                              <DepartmentPill department={asset.department} />
+                            </Td>
+                            <Td align="right">{asset.criticalityScore.toFixed(2)}</Td>
+                            <Td>
+                              <span className="text-xs text-slate-500">
+                                {asset.dominantCriticalityFactor?.replace(/_/g, ' ')}
+                              </span>
+                            </Td>
+                            <Td align="right">
+                              {asset.criticality.trainsAffectedCount}{' '}
+                              <SyntheticBadge synthetic realNote="Real — trains observed in the timetable (T3)" />
+                            </Td>
+                            <Td>
+                              <SyntheticBadge synthetic={asset.synthetic} />
+                            </Td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </TableShell>
+                  </QueryState>
+                )}
+
+                {tab === 'backlog' && (
+                  <QueryState
+                    isLoading={tasks.isLoading}
+                    error={tasks.error}
+                    isEmpty={(tasks.data?.data.length ?? 0) === 0}
+                    emptyMessage="No pending tasks on this corridor."
+                  >
+                    <TableShell>
+                      <thead>
+                        <tr>
+                          <Th>Task</Th>
+                          <Th>Dept</Th>
+                          <Th>Defect</Th>
+                          <Th>Sev</Th>
+                          <Th align="right">Duration</Th>
+                          <Th>SLA due</Th>
+                          <Th>Depends on</Th>
+                          <Th>Data</Th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(tasks.data?.data ?? []).map((task) => (
+                          <tr key={task._id} className="hover:bg-slate-50">
+                            <Td mono>{task._id}</Td>
+                            <Td>
+                              <DepartmentPill department={task.department} />
+                            </Td>
+                            <Td>{task.defectType}</Td>
+                            <Td>
+                              <SeverityPill severity={task.severity} />
+                            </Td>
+                            <Td align="right">{task.estBlockDurationMins}m</Td>
+                            <Td mono>{task.slaDueDate}</Td>
+                            <Td mono>{task.dependsOnTaskId ?? '—'}</Td>
+                            <Td>
+                              <SyntheticBadge synthetic={task.synthetic} />
+                            </Td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </TableShell>
+                  </QueryState>
+                )}
+
+                {tab === 'resources' && (
+                  <>
+                    <p className="mb-3 text-xs text-slate-500">
+                      Depot-scoped, so the same machine can be contended for by tasks on other
+                      corridors.
+                    </p>
+                    {(resources.data?.data.length ?? 0) === 0 ? (
+                      <p className="text-sm text-slate-500">No resources scoped to this corridor.</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {(resources.data?.data ?? []).map((resource) => (
+                          <span
+                            key={resource._id}
+                            className="rounded-lg bg-white px-2.5 py-1 text-xs text-slate-700 ring-1 ring-slate-200 ring-inset"
+                          >
+                            {resource.name}{' '}
+                            <span className="text-slate-400">· {resource.type}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </section>
           </>
