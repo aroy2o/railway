@@ -73,6 +73,27 @@ az role assignment create \
   --output none
 
 echo "== 4. Backend Container App (placeholder image - CI takes over from here) =="
+# GROQ_API_KEY is optional (/explain endpoint only - .env.example: "the
+# service must start fine without it"). Container Apps rejects a secret
+# declared with an empty value outright, so the secret/env-var pair is only
+# added when a real key is present, rather than passing an empty string.
+BACKEND_SECRETS=("mongodb-uri=${MONGODB_URI}" "jwt-secret=${JWT_SECRET}")
+BACKEND_ENV_VARS=(
+  "NODE_ENV=production"
+  "BACKEND_PORT=5000"
+  "MONGODB_URI=secretref:mongodb-uri"
+  "JWT_SECRET=secretref:jwt-secret"
+  "JWT_EXPIRES_IN=12h"
+  "OPTIMIZER_URL=https://${OPTIMIZER_APP}.internal.$(az containerapp env show -n "$ENV_NAME" -g "$RESOURCE_GROUP" --query 'properties.defaultDomain' -o tsv)"
+  "OPTIMIZER_TIMEOUT_MS=30000"
+  "LLM_PROVIDER=groq"
+  "GROQ_MODEL=openai/gpt-oss-120b"
+)
+if [ -n "$GROQ_API_KEY" ]; then
+  BACKEND_SECRETS+=("groq-api-key=${GROQ_API_KEY}")
+  BACKEND_ENV_VARS+=("GROQ_API_KEY=secretref:groq-api-key")
+fi
+
 az containerapp create \
   --name "$BACKEND_APP" \
   --resource-group "$RESOURCE_GROUP" \
@@ -86,18 +107,8 @@ az containerapp create \
   --registry-server ghcr.io \
   --registry-username "$GHCR_USERNAME" \
   --registry-password "$GHCR_PAT" \
-  --secrets "mongodb-uri=${MONGODB_URI}" "jwt-secret=${JWT_SECRET}" "groq-api-key=${GROQ_API_KEY}" \
-  --env-vars \
-    "NODE_ENV=production" \
-    "BACKEND_PORT=5000" \
-    "MONGODB_URI=secretref:mongodb-uri" \
-    "JWT_SECRET=secretref:jwt-secret" \
-    "JWT_EXPIRES_IN=12h" \
-    "OPTIMIZER_URL=https://${OPTIMIZER_APP}.internal.$(az containerapp env show -n "$ENV_NAME" -g "$RESOURCE_GROUP" --query 'properties.defaultDomain' -o tsv)" \
-    "OPTIMIZER_TIMEOUT_MS=30000" \
-    "LLM_PROVIDER=groq" \
-    "GROQ_API_KEY=secretref:groq-api-key" \
-    "GROQ_MODEL=openai/gpt-oss-120b" \
+  --secrets "${BACKEND_SECRETS[@]}" \
+  --env-vars "${BACKEND_ENV_VARS[@]}" \
   --output none
 
 echo "== 5. Optimizer Container App (placeholder image - CI takes over from here) =="
