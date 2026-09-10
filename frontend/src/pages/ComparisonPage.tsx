@@ -24,6 +24,7 @@
  * tested, so a future edit that headlines throughput fails a test rather than a
  * dry run.
  */
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { useGetLatestScheduleQuery } from '../api/apiSlice.ts'
@@ -94,27 +95,27 @@ export function ComparisonPage() {
             const rows = buildMetricRows(comparison)
             return (
               <>
-                <h2 className="mt-6 mb-1 text-sm font-semibold text-slate-900">
-                  What coordination actually changes
-                </h2>
-                <p className="mb-3 max-w-3xl text-xs text-slate-500">
-                  The optimizer's advantage is that its plan can be executed — not that it
-                  schedules more work.
-                </p>
-                <div data-tour="comparison-headline" className="grid gap-4 lg:grid-cols-2">
-                  {headlineRows(rows).map((row) => (
-                    <HeadlineCard key={row.key} row={row} />
-                  ))}
-                </div>
+                <section className="mt-10">
+                  <h2 className="mb-1 text-sm font-semibold text-slate-900">
+                    What coordination actually changes
+                  </h2>
+                  <p className="mb-4 max-w-3xl text-xs text-slate-500">
+                    The optimizer's advantage is that its plan can be executed — not that it
+                    schedules more work.
+                  </p>
+                  <HeadlineGroup rows={headlineRows(rows)} />
+                </section>
 
-                <h2 className="mt-6 mb-3 text-sm font-semibold text-slate-900">
-                  Numbers that need their context
-                </h2>
-                <div data-tour="comparison-supporting" className="grid gap-4 lg:grid-cols-2">
-                  {supportingRows(rows).map((row) => (
-                    <SupportingCard key={row.key} row={row} />
-                  ))}
-                </div>
+                <section className="mt-10">
+                  <h2 className="mb-3 text-sm font-semibold text-slate-900">
+                    Numbers that need their context
+                  </h2>
+                  <div data-tour="comparison-supporting" className="grid gap-4 lg:grid-cols-2">
+                    {supportingRows(rows).map((row) => (
+                      <SupportingCard key={row.key} row={row} />
+                    ))}
+                  </div>
+                </section>
               </>
             )
           })()}
@@ -128,7 +129,7 @@ export function ComparisonPage() {
 
           <Caveats caveats={comparison.caveats} />
 
-          <p className="mt-6 text-xs text-slate-500">
+          <p className="mt-10 text-xs text-slate-500">
             Both plans were produced from the same backlog in the same run.{' '}
             <Link to="/dashboard" className="text-sky-700 hover:underline">
               See the optimized plan on the dashboard →
@@ -165,9 +166,11 @@ function ScopeBand({
 }) {
   const total = contestable + splitOnly + impossible
   return (
-    <div data-tour="comparison-scope-band" className="rounded-xl border border-slate-300 bg-slate-100 px-5 py-4">
-      <h2 className="text-sm font-semibold text-slate-900">What this comparison covers</h2>
-      <p className="mt-1 max-w-4xl text-sm text-slate-700">
+    <div data-tour="comparison-scope-band" className="border-b border-slate-100 pb-5">
+      <h2 className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+        What this comparison covers
+      </h2>
+      <p className="mt-2 max-w-4xl text-sm text-slate-600">
         Of {total} pending tasks, <strong>{impossible} fit no combination of windows at all</strong>{' '}
         (even considering splitting) and are impossible for <em>both</em> engines — traffic leaves
         no gap long enough, so that work needs a traffic block that displaces trains.
@@ -184,23 +187,23 @@ function ScopeBand({
         <strong>{contestable} contestable tasks</strong> that either engine could actually place —
         the split-only tasks are reported on their own, separately, never folded into that count.
       </p>
-      <div className="mt-3 flex overflow-hidden rounded-md text-[11px] font-medium">
+      <div className="mt-4 flex overflow-hidden rounded-md text-[11px] font-medium">
         <div
-          className="bg-slate-900 px-2 py-1 text-center text-white"
+          className="bg-slate-900 px-2 py-1.5 text-center text-white"
           style={{ width: `${(contestable / total) * 100}%` }}
         >
           {contestable} contestable
         </div>
         {splitOnly > 0 && (
           <div
-            className="bg-sky-700 px-2 py-1 text-center text-white"
+            className="bg-sky-700 px-2 py-1.5 text-center text-white"
             style={{ width: `${(splitOnly / total) * 100}%` }}
           >
             {splitOnly} split-only
           </div>
         )}
         <div
-          className="bg-slate-300 px-2 py-1 text-center text-slate-700"
+          className="bg-slate-300 px-2 py-1.5 text-center text-slate-700"
           style={{ width: `${(impossible / total) * 100}%` }}
         >
           {impossible} impossible for either engine
@@ -210,19 +213,68 @@ function ScopeBand({
   )
 }
 
-/** A real, defensible difference. These are the largest numbers on the page. */
-function HeadlineCard({ row }: { row: MetricRow }) {
+/**
+ * The two numbers this page exists to show: double-booked corridors and
+ * cross-department shared blocks. Deliberately the largest, boldest thing on
+ * the page - everything else (including `SecondaryHeadlineCard`, below) is
+ * sized to stay out of their way.
+ */
+const DOMINANT_ROW_KEYS = new Set(['doubleBookings', 'batches'])
+
+/**
+ * Groups the headline rows so the two dominant metrics (see
+ * `DOMINANT_ROW_KEYS`) read as one bold moment, while a row like "tasks
+ * placeable only by splitting" stays present - it is real, load-bearing
+ * context per T29 Phase 1 - but visually secondary. Row order itself is
+ * untouched (`buildMetricRows`' ordering, not this component, owns that).
+ */
+function HeadlineGroup({ rows }: { rows: MetricRow[] }) {
+  const secondary = rows.filter((row) => !DOMINANT_ROW_KEYS.has(row.key))
+  const dominant = rows.filter((row) => DOMINANT_ROW_KEYS.has(row.key))
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div data-tour="comparison-headline" className="space-y-4">
+      {secondary.map((row) => (
+        <SecondaryHeadlineCard key={row.key} row={row} />
+      ))}
+      <div className="grid gap-6 sm:grid-cols-2">
+        {dominant.map((row) => (
+          <DominantHeadlineCard key={row.key} row={row} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** A real, defensible difference. These are the largest numbers on the page. */
+function DominantHeadlineCard({ row }: { row: MetricRow }) {
+  return (
+    <section className="rounded-2xl bg-white p-6 ring-1 ring-slate-100">
       <h3 className="text-sm font-semibold text-slate-900">{row.label}</h3>
-      <div className="mt-3 flex items-center gap-4">
-        <Side label="Baseline" value={row.baseline} tone="bad" />
-        <span className="text-xl text-slate-300" aria-hidden="true">
+      <div className="mt-4 flex items-center gap-5">
+        <Side label="Baseline" value={row.baseline} tone="bad" size="lg" />
+        <span className="text-2xl text-slate-300" aria-hidden="true">
           →
         </span>
-        <Side label="AI-optimised" value={row.optimized} tone="good" />
+        <Side label="AI-optimised" value={row.optimized} tone="good" size="lg" />
       </div>
-      <p className="mt-3 text-xs leading-relaxed text-slate-600">{row.note}</p>
+      <p className="mt-4 text-xs leading-relaxed text-slate-600">{row.note}</p>
+    </section>
+  )
+}
+
+/** Present, not competing - stays legible without pulling focus from the dominant pair above. */
+function SecondaryHeadlineCard({ row }: { row: MetricRow }) {
+  return (
+    <section className="rounded-xl bg-slate-50 p-4">
+      <h3 className="text-xs font-semibold text-slate-700">{row.label}</h3>
+      <div className="mt-2 flex items-center gap-3">
+        <Side label="Baseline" value={row.baseline} tone="bad" size="sm" />
+        <span className="text-sm text-slate-300" aria-hidden="true">
+          →
+        </span>
+        <Side label="AI-optimised" value={row.optimized} tone="good" size="sm" />
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-slate-500">{row.note}</p>
     </section>
   )
 }
@@ -245,12 +297,12 @@ function SupportingCard({ row }: { row: MetricRow }) {
 
   return (
     <section
-      className={`rounded-xl border p-5 shadow-sm ${
+      className={`rounded-xl p-5 ${
         misleading
-          ? 'border-amber-300 bg-amber-50'
+          ? 'bg-amber-50 ring-1 ring-amber-200'
           : fewerByDesign
-            ? 'border-sky-300 bg-sky-50'
-            : 'border-slate-200 bg-white'
+            ? 'bg-sky-50 ring-1 ring-sky-200'
+            : 'bg-white ring-1 ring-slate-100'
       }`}
     >
       <div className="flex items-baseline justify-between gap-2">
@@ -312,10 +364,13 @@ function Side({
   label,
   value,
   tone,
+  size = 'md',
 }: {
   label: string
   value: string
   tone: 'good' | 'bad' | 'warn' | 'neutral'
+  /** `lg` for the two dominant headline cards, `sm` for secondary ones. Default matches the old fixed size. */
+  size?: 'sm' | 'md' | 'lg'
 }) {
   const colour =
     tone === 'good'
@@ -325,10 +380,11 @@ function Side({
         : tone === 'warn'
           ? 'text-amber-800'
           : 'text-slate-900'
+  const valueSize = size === 'lg' ? 'text-5xl sm:text-6xl' : size === 'sm' ? 'text-xl' : 'text-3xl'
   return (
     <div>
       <p className="text-[11px] tracking-wide text-slate-500 uppercase">{label}</p>
-      <p className={`text-3xl leading-tight font-semibold tabular-nums ${colour}`}>{value}</p>
+      <p className={`${valueSize} leading-tight font-semibold tabular-nums ${colour}`}>{value}</p>
     </div>
   )
 }
@@ -361,6 +417,8 @@ function ConflictEvidence({
   /** T21: supplies the PRD 9.5 type name and resolution for each block. */
   conflictReport?: ConflictReport | null
 }) {
+  const [open, setOpen] = useState(false)
+
   if (doubleBookings.length === 0 && overSubscribed.length === 0) return null
 
   // Every group here is on the `baseline` layer by construction - these are the
@@ -371,11 +429,51 @@ function ConflictEvidence({
   const doubleBookingType = byType.get('CORRIDOR_DOUBLE_BOOKING')
   const overSubscriptionType = byType.get('WINDOW_OVER_SUBSCRIPTION')
 
+  // One line, drawn from the same data as the full table below - never a
+  // separate/invented figure, just the same conflicts summarised.
+  const uniqueDepartmentPairs = Array.from(
+    new Set(doubleBookings.map((conflict) => conflict.departments.join(' vs '))),
+  )
+  const shownPairs = uniqueDepartmentPairs.slice(0, 3)
+  const morePairs = uniqueDepartmentPairs.length - shownPairs.length
+
   return (
-    <section data-tour="comparison-conflict-evidence" className="mt-6">
+    <section data-tour="comparison-conflict-evidence" className="mt-10">
       <h2 className="mb-1 text-sm font-semibold text-slate-900">The conflicts themselves</h2>
       <p className="mb-3 max-w-3xl text-xs text-slate-500">{note}</p>
 
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-rose-50 px-4 py-3">
+        <p className="text-sm text-rose-900">
+          {doubleBookings.length > 0 && (
+            <>
+              <strong>
+                {doubleBookings.length} double-booked corridor pair
+                {doubleBookings.length === 1 ? '' : 's'}
+              </strong>{' '}
+              — {shownPairs.join(', ')}
+              {morePairs > 0 ? `, +${morePairs} more` : ''}
+            </>
+          )}
+          {doubleBookings.length > 0 && overSubscribed.length > 0 && ' · '}
+          {overSubscribed.length > 0 && (
+            <strong>
+              {overSubscribed.length} window{overSubscribed.length === 1 ? '' : 's'} booked beyond
+              capacity
+            </strong>
+          )}
+        </p>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          className="shrink-0 text-xs font-medium text-sky-700 hover:underline"
+        >
+          {open ? 'Hide details' : 'View details'}
+        </button>
+      </div>
+
+      {open && (
+        <div className="mt-4">
       <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <ConflictTypeBadge label={doubleBookingType?.label ?? 'Corridor double-booking'} />
         <span className="text-xs text-slate-500">
@@ -431,7 +529,7 @@ function ConflictEvidence({
       </TableShell>
 
       {overSubscribed.length > 0 && (
-        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mt-4 rounded-xl bg-white p-5 ring-1 ring-slate-100">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <ConflictTypeBadge
               label={overSubscriptionType?.label ?? 'Window over-subscription'}
@@ -466,6 +564,8 @@ function ConflictEvidence({
           </ul>
         </div>
       )}
+        </div>
+      )}
     </section>
   )
 }
@@ -478,20 +578,35 @@ function ConflictEvidence({
  * the screen was built to obey are legible to anyone checking it.
  */
 function Caveats({ caveats }: { caveats: string[] }) {
+  const [open, setOpen] = useState(false)
   return (
-    <section data-tour="comparison-caveats" className="mt-6 rounded-xl border border-slate-300 bg-slate-100 px-5 py-4">
-      <h2 className="text-sm font-semibold text-slate-900">How to read this comparison</h2>
-      <p className="mb-2 text-xs text-slate-500">
-        Stored with the comparison by the system that computed it, not written by this page.
-      </p>
-      <ol className="space-y-1.5">
-        {caveats.map((caveat, index) => (
-          <li key={caveat} className="flex gap-2 text-xs leading-relaxed text-slate-700">
-            <span className="font-semibold text-slate-400">{index + 1}.</span>
-            <span>{caveat}</span>
-          </li>
-        ))}
-      </ol>
+    <section data-tour="comparison-caveats" className="mt-10 border-t border-slate-100 pt-4">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-700"
+      >
+        <span aria-hidden="true" className={`inline-block transition-transform ${open ? 'rotate-90' : ''}`}>
+          ›
+        </span>
+        How to read this comparison
+      </button>
+      {open && (
+        <div className="mt-3">
+          <p className="mb-2 text-xs text-slate-500">
+            Stored with the comparison by the system that computed it, not written by this page.
+          </p>
+          <ol className="space-y-1.5">
+            {caveats.map((caveat, index) => (
+              <li key={caveat} className="flex gap-2 text-xs leading-relaxed text-slate-600">
+                <span className="font-semibold text-slate-400">{index + 1}.</span>
+                <span>{caveat}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
     </section>
   )
 }
