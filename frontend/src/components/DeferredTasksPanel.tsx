@@ -14,10 +14,17 @@
 import { useMemo, useState } from 'react'
 import type { DeferredTask } from '../api/apiSlice.ts'
 
+// Every REASON_LABEL/REASON_HINT key mirrors optimizer/app/core/scheduler.py's
+// DeferralReason codes (see apiSlice.ts's DeferredTask.reason doc comment) -
+// keeping this a Record over the full union means TypeScript itself refuses
+// to compile if the backend ever adds a code without a label added here too.
 const REASON_LABEL: Record<DeferredTask['reason'], string> = {
   EXCEEDS_LONGEST_WINDOW: 'No gap long enough on the corridor',
   NO_CAPACITY: 'Lost a capacity contest to higher-priority work',
   NO_WINDOW_ON_CORRIDOR: 'Corridor has no free window at all',
+  WINDOW_UNAVAILABLE: 'No window left after the disruption',
+  PREREQUISITE_UNSCHEDULABLE: "Depends on a task that can't itself be scheduled",
+  EXCEEDS_TOTAL_CAPACITY_EVEN_SPLIT: "Doesn't fit even split across every window",
 }
 
 const REASON_HINT: Record<DeferredTask['reason'], string> = {
@@ -25,6 +32,12 @@ const REASON_HINT: Record<DeferredTask['reason'], string> = {
     'Traffic leaves no window long enough. This work needs a traffic block that displaces trains — train-impact-aware planning (PRD 9.6).',
   NO_CAPACITY: 'A window could have held it, but higher-priority work used the time.',
   NO_WINDOW_ON_CORRIDOR: 'No free window exists on this corridor in the horizon.',
+  WINDOW_UNAVAILABLE:
+    'Every window that could have held this task was already used — by work already executed, or by the disruption itself. There was no contest to lose; there was nothing left to contest.',
+  PREREQUISITE_UNSCHEDULABLE:
+    "Its prerequisite task cannot be placed in this horizon, so precedence rules this one out too — found by walking the dependency chain before the solver runs, so a broken chain is deferred honestly rather than losing stage by stage.",
+  EXCEEDS_TOTAL_CAPACITY_EVEN_SPLIT:
+    'This defect type can be split across non-contiguous sessions, but summing every free window on the corridor across the whole horizon still falls short of its full duration.',
 }
 
 export function DeferredTasksPanel({ deferred }: { deferred: DeferredTask[] }) {

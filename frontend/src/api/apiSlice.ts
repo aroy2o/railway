@@ -259,7 +259,19 @@ export interface DisplacementOption {
 
 export interface DeferredTask {
   taskId: string
-  reason: 'EXCEEDS_LONGEST_WINDOW' | 'NO_CAPACITY' | 'NO_WINDOW_ON_CORRIDOR'
+  /**
+   * Mirrors optimizer/app/core/scheduler.py's `DeferralReason` codes. This
+   * union previously carried only the original 3 and silently rendered a
+   * blank title for any of the 3 added since (T24/T27/T29 Phase 1) — every
+   * code the backend can actually emit must be listed here.
+   */
+  reason:
+    | 'EXCEEDS_LONGEST_WINDOW'
+    | 'NO_CAPACITY'
+    | 'NO_WINDOW_ON_CORRIDOR'
+    | 'WINDOW_UNAVAILABLE'
+    | 'PREREQUISITE_UNSCHEDULABLE'
+    | 'EXCEEDS_TOTAL_CAPACITY_EVEN_SPLIT'
   /** Human-readable and already good; render it rather than re-wording it. */
   detail: string
   /** Absent when the corridor carried no occupancy data to cost against. */
