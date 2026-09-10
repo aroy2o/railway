@@ -44,7 +44,7 @@ export function buildKpiReportCsv(
   trend: { series: TrendSeries[]; hasEnoughHistory: boolean } | null,
 ): string {
   const lines: string[] = [
-    csvRow(['AI-Assisted Block Planning - DRM oversight report']),
+    csvRow(['Rex Planner - DRM oversight report']),
     csvRow(['Schedule', meta.scheduleId]),
     csvRow(['Generated at', meta.generatedAt]),
     csvRow(['Horizon', meta.horizon]),

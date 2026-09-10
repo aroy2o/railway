@@ -11,6 +11,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../store/hooks.ts'
 import { replayRequested } from '../store/slices/tourSlice.ts'
 import { loggedOut, type UserRole } from '../store/slices/authSlice.ts'
+import RexLogo from './RexLogo.tsx'
 
 interface NavItem {
   to: string
@@ -98,15 +99,10 @@ export function AppHeader() {
     <header className="border-b border-slate-200 bg-white">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 pt-4 sm:px-6">
         <div className="flex items-center gap-3">
-          <div
-            className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900 text-sm font-bold text-white"
-            aria-hidden="true"
-          >
-            BP
-          </div>
+          <RexLogo className="h-9 w-9 shrink-0" />
           <div>
             <h1 className="text-base leading-tight font-semibold text-slate-900">
-              AI-Assisted Block Planning
+              Rex Planner
             </h1>
             <p className="text-xs text-slate-500">
               Maintenance block planning &amp; decision support
@@ -137,7 +133,7 @@ export function AppHeader() {
             </>
           )}
           <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-            SIH 26027 &middot; Ministry of Railways
+            Rex &middot; SIH 26027 &middot; Ministry of Railways
           </span>
         </div>
       </div>

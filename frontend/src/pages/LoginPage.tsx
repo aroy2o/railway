@@ -13,6 +13,7 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { describeApiError, useLoginMutation } from '../api/apiSlice.ts'
 import { credentialsReceived, roleLandingRoute } from '../store/slices/authSlice.ts'
 import { useAppDispatch, useAppSelector } from '../store/hooks.ts'
+import RexLogo from '../components/RexLogo.tsx'
 
 export function LoginPage() {
   const dispatch = useAppDispatch()
@@ -48,13 +49,8 @@ export function LoginPage() {
   return (
     <div className="mx-auto mt-16 max-w-sm">
       <div className="mb-6 text-center">
-        <div
-          className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-slate-900 text-sm font-bold text-white"
-          aria-hidden="true"
-        >
-          BP
-        </div>
-        <h1 className="text-lg font-semibold text-slate-900">AI-Assisted Block Planning</h1>
+        <RexLogo className="mx-auto mb-3 h-10 w-10" />
+        <h1 className="text-lg font-semibold text-slate-900">Rex Planner</h1>
         <p className="mt-1 text-sm text-slate-500">Sign in to continue.</p>
       </div>
 
