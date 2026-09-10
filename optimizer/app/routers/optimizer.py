@@ -176,6 +176,24 @@ def _guard_size(scenario: ScenarioIn, settings: Settings) -> None:
         )
 
 
+def _solve_budget(horizon_days: int, requested_max_seconds: float | None, settings: Settings) -> float:
+    """The wall-clock ceiling for a solve, capped by horizon size.
+
+    A client may ask for less time than the service allows, never more - the
+    ceiling itself is horizon-aware rather than a single fixed value, since a
+    monthly horizon (28-31 days, same `scheduler.py` convention as D-070) is
+    the same exact-slot model over ~4x a weekly horizon's search space.
+    Reusing the weekly ceiling for monthly was found to make CP-SAT return
+    UNKNOWN (no feasible solution at all) against the real seeded corpus.
+    """
+    ceiling = (
+        settings.solver_max_seconds_monthly
+        if 28 <= horizon_days <= 31
+        else settings.solver_max_seconds
+    )
+    return min(requested_max_seconds or ceiling, ceiling)
+
+
 # --------------------------------------------------------------------------- #
 # Endpoints                                                                    #
 # --------------------------------------------------------------------------- #
@@ -235,8 +253,7 @@ def optimize(request: SolveRequest, settings: Settings = Depends(get_settings)) 
             detail=f"horizonDays {request.horizon_days} exceeds {settings.max_horizon_days}",
         )
 
-    # A client may ask for less time than the service allows, never more.
-    budget = min(request.max_seconds or settings.solver_max_seconds, settings.solver_max_seconds)
+    budget = _solve_budget(request.horizon_days, request.max_seconds, settings)
 
     # T23: an omitted term keeps its D-023 default. Built here rather than in
     # the pydantic model, because `ObjectiveWeights` is the solver's own type
@@ -366,7 +383,7 @@ def emergency_reoptimize(
             detail=f"horizonDays {request.horizon_days} exceeds {settings.max_horizon_days}",
         )
 
-    budget = min(request.max_seconds or settings.solver_max_seconds, settings.solver_max_seconds)
+    budget = _solve_budget(request.horizon_days, request.max_seconds, settings)
     weights = _resolve_weights(request.policy_weights)
 
     try:

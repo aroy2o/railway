@@ -59,6 +59,19 @@ class Settings(BaseSettings):
         default=4.0, gt=0, le=60, alias="WHATIF_SOLVER_MAX_SECONDS"
     )
 
+    # solver_max_seconds was sized for the weekly case only (PRD Section 7's
+    # <10s promise is explicitly "for ~50-100 tasks" over a week). A monthly
+    # horizon (28-31 days, D-070) is the same exact-slot model over ~4x the
+    # search space - real testing against the seeded corpus found CP-SAT
+    # returns UNKNOWN (no feasible solution found at all, not even a bad one)
+    # at the 10s ceiling, which the caller then honestly reports as
+    # everything deferred rather than fabricating a schedule. This gives
+    # monthly its own, longer budget instead of inflating every weekly solve
+    # to cover a problem size weekly never has.
+    solver_max_seconds_monthly: float = Field(
+        default=45.0, gt=0, le=600, alias="SOLVER_MAX_SECONDS_MONTHLY"
+    )
+
     # CP-SAT worker threads; 0 lets OR-Tools choose based on available cores.
     solver_num_workers: int = Field(default=0, ge=0, le=64, alias="SOLVER_NUM_WORKERS")
 
