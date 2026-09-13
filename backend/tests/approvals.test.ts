@@ -213,7 +213,24 @@ test('an over-filled window is caught, with both figures named', () => {
   assert.match(check.detail, /220\/200 min/);
 });
 
-test('a task placed in two windows at once is caught', () => {
+test('a task placed in the same block twice is caught', () => {
+  // D-089: `no-task-placed-twice` was narrowed to catch only a genuine
+  // duplicate - the identical corridor+date+window counted twice for one
+  // task - since T29 Phase 1 makes a task legitimately owning 2+ DIFFERENT
+  // windows a normal case (see the split-task tests below), not an error.
+  const result = validate({
+    blocks: [block(), block()],
+    deferredTaskIds: [],
+  });
+  assert.ok(failedChecks(result).includes('no-task-placed-twice'));
+});
+
+test('a task over-booked across two different windows is caught (not a legitimate split)', () => {
+  // Two DIFFERENT windows, unlike the duplicate-block test above - this is
+  // no longer `no-task-placed-twice`'s job post-D-089. It's still a real
+  // error, just a different one: T1's 120-minute duration is booked as
+  // 120 + 120 = 240 minutes total, which no legitimate split produces (a
+  // split's pieces sum to exactly the duration, never more).
   const result = validate({
     blocks: [
       block(),
@@ -221,7 +238,66 @@ test('a task placed in two windows at once is caught', () => {
     ],
     deferredTaskIds: [],
   });
-  assert.ok(failedChecks(result).includes('no-task-placed-twice'));
+  assert.ok(!failedChecks(result).includes('no-task-placed-twice'));
+  assert.ok(failedChecks(result).includes('booked-minutes-match-task-durations'));
+});
+
+test('D-089: a legitimately split task across two non-contiguous blocks passes approval', () => {
+  // T29 Phase 1's whole point: a splittable task's pieces, summed across
+  // however many blocks it owns, equal its full duration. T1's duration is
+  // 120 (the `validate()` default); split 70 + 50.
+  const result = validate({
+    blocks: [
+      block({ usedMinutes: 70 }),
+      block({ date: DATES[1]!, windowIndex: 1, start: '06:00', end: '07:00', capacityMinutes: 60, usedMinutes: 50 }),
+    ],
+    deferredTaskIds: [],
+  });
+  assert.equal(result.constraintsSatisfied, true);
+  assert.deepEqual(failedChecks(result), []);
+});
+
+test('D-089: a split task whose segments do NOT sum to its duration is still caught', () => {
+  // Same shape as the passing case above, but the pieces (70 + 40) fall
+  // short of T1's 120-minute duration - still a real error, still caught,
+  // just correctly attributed to the reconciliation check rather than to
+  // "placed twice".
+  const result = validate({
+    blocks: [
+      block({ usedMinutes: 70 }),
+      block({ date: DATES[1]!, windowIndex: 1, start: '06:00', end: '07:00', capacityMinutes: 60, usedMinutes: 40 }),
+    ],
+    deferredTaskIds: [],
+  });
+  assert.ok(!failedChecks(result).includes('no-task-placed-twice'));
+  assert.ok(failedChecks(result).includes('booked-minutes-match-task-durations'));
+});
+
+test('D-089: a split task segment sharing a window with a whole non-split task still reconciles', () => {
+  // Confirmed live against the real corpus: a batch window can legitimately
+  // hold one splittable task's segment alongside a whole (non-split) task.
+  // T1 (duration 120) is split 70 (alone) + 50 (sharing a window with T2,
+  // duration 100) - the shared block's usedMinutes is 150 (T1's 50 + T2's
+  // full 100), and T1's share must be derived as the leftover after T2's
+  // own exact duration, not mistaken for an extra 150 minutes of T1.
+  const result = validate({
+    blocks: [
+      block({ usedMinutes: 70 }),
+      block({
+        date: DATES[1]!,
+        windowIndex: 1,
+        start: '06:00',
+        end: '07:00',
+        capacityMinutes: 150,
+        usedMinutes: 150,
+        taskIds: ['T1', 'T2'],
+        departments: ['Engineering', 'S&T'],
+      }),
+    ],
+    deferredTaskIds: [],
+  });
+  assert.equal(result.constraintsSatisfied, true);
+  assert.deepEqual(failedChecks(result), []);
 });
 
 test('a task that is both placed and deferred is caught - a replay bug, not a solver bug', () => {

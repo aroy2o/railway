@@ -4945,3 +4945,99 @@ by committing, live-verifying, and logging it here — the frontend test
 count is still 145/145 by design, per this project's stated convention of
 either adding tests or explicitly stating "verified live instead" for
 UI-only structural changes (matching D-072, D-080, D-081).
+
+## D-089 — `approve` was unconditionally broken for every real plan since
+T29 Phase 1 shipped; fixed in `approvalEngine.ts`'s whole-plan
+re-validation
+
+**Date:** 2026-09-02 · **Task:** not T-numbered — found live during a
+presentation-readiness audit (`docs/PRESENTATION_READINESS.md`, decision
+#1) walking `submit → approve → publish` against a real solver-generated
+plan for the first time since T29 Phase 1 (D-082) shipped, fixed the same
+night on the owner's explicit go-ahead.
+
+**What broke, and why nobody caught it.** `validatePlan()`'s guard on
+`approve` (FR6.1) had two checks written before task splitting existed and
+never revisited after: `no-task-placed-twice` flagged *any* task appearing
+in 2+ blocks as an error, and `booked-minutes-match-task-durations`
+compared each individual block's `usedMinutes` against a task's *full*
+duration rather than summing across all the blocks that carry it. Both are
+correct for the pre-splitting world, where a task owns exactly one block.
+T29 Phase 1 makes a splittable task legitimately own 2+ non-contiguous
+blocks by design — so every real generation on this corpus (~29 split
+tasks, every time) produced a plan that could `submit` but never `approve`,
+409ing with "Placed in more than one block" and "103 block(s) book minutes
+that do not sum to their tasks' durations." `backend/tests/
+approvals.test.ts`'s `approve` test used (and still uses, for its simple
+cases) a hand-built single-block fixture with no split tasks — zero
+coverage ever connected the two features, so 135/135 backend tests stayed
+green while the real workflow was silently unusable end to end.
+
+**The fix, confined to `validatePlan()` in `approvalEngine.ts` — no
+solver, scoring, schema, or other-check change:**
+
+- `booked-minutes-match-task-durations` now sums a task's booked minutes
+  across *every* block it appears in and compares that total to its full
+  duration — which is exactly the old single-block comparison when a task
+  owns one block (N=1), and correctly validates a split task's pieces
+  against its whole. A genuine complication, confirmed against the real
+  corpus rather than assumed away: a block can legitimately mix one split
+  task's segment with a whole, non-split task sharing the same window (2
+  such blocks existed on the corpus checked). The per-task split of a
+  shared block's minutes isn't stored on the block (`optimizer/app/core/
+  scheduler.py`'s `segment_minutes`/`taskSegmentMinutes` computes it but
+  the Node backend's `Schedule` model never persists it — extending that
+  schema was out of this fix's explicitly agreed scope), so a split
+  occupant's share of a shared block is derived as the leftover after
+  subtracting every non-split occupant's own exact duration — unambiguous
+  whenever a block holds at most one split occupant, which is every case
+  observed on the real corpus (confirmed by direct query before writing
+  the fix, not assumed). Two different split tasks sharing one block would
+  make that leftover unattributable; not observed anywhere on the real
+  corpus, and handled conservatively as a mismatch rather than guessed at.
+- `no-task-placed-twice` is **narrowed, not retired** (the owner's choice
+  between the two, given both a real, distinct failure mode it still needs
+  to catch): it now flags only the same task listed against the exact same
+  corridor+date+window more than once — a genuine replay/duplication bug,
+  never a legitimate placement, and never something splitting produces
+  (a split task's segments always occupy different windows). A task
+  legitimately owning 2+ *different* blocks is no longer, by itself, an
+  error; whether its pieces actually add up is `booked-minutes-match-
+  task-durations`'s job now.
+
+**What real data backs it.** Verified live against the running dev stack,
+not just unit tests: generated a fresh real plan (`SCH-20260902150231211`,
+64 tasks scheduled, 29 split, 137 blocks) and walked the full
+`submit → approve → publish` chain over the real API — `approve` returned
+**201** with `constraintsSatisfied: true` and all 6 checks passing,
+including the two that were broken; `publish` returned **201**, version 1,
+a real digest, `workflowState: published`; the audit trail read
+`generated → submit → approve → publish`, one clean narrative. A separate
+fresh plan confirmed T15's manual override (a different code path,
+`overrideEngine.ts`, untouched by this fix) still works unchanged — 201,
+all 6 of its own checks green. `backend/tests/approvals.test.ts` gained 4
+regression tests (not the 1 originally scoped, expanded because the
+narrowed-vs-retired judgment call and the shared-block edge case each
+needed their own coverage to be trustworthy rather than asserted): a
+legitimately split task passes; a split task whose pieces don't sum to its
+duration is still caught, now correctly attributed to the duration check
+rather than the placement check; a split task sharing a window with a
+whole non-split task still reconciles; and the narrowed duplicate check's
+new, narrower trigger (the same block twice) is exercised directly. Full
+backend suite: **139/139 passing, 0 failures** (135 previously + 4 new).
+
+**Known limitations.** The shared-block leftover-attribution approach
+trusts that every *non-split* occupant of a mixed block is itself exactly
+correct when computing a split occupant's residual share — if a non-split
+occupant's own duration were independently wrong in a way that happened to
+net out, the error could misattribute to the split task instead. Not a
+soundness gap in the checked invariant (the plan-wide truth that booked
+minutes must equal owed minutes still holds and is still what fails), only
+in which specific task a diagnostic message would point to in that
+specific, doubly-corrupted, unobserved-on-the-real-corpus scenario. Closing
+it exactly would mean persisting the optimizer's already-computed
+`taskSegmentMinutes` through the Node backend's `Schedule` model — sized
+correctly as its own follow-up, deliberately left out of this fix's scope
+per the owner's explicit instruction not to touch anything beyond
+`validatePlan()`.
+
