@@ -5158,3 +5158,258 @@ if real per-corridor goods data for these specific corridors is ever
 obtained, D-026's measured spread/ties/rho comparison should be re-run
 against it rather than trusting this reasoned placeholder indefinitely.
 
+## D-091 — Production deployment split across Vercel (frontend) and Azure
+Container Apps (backend + optimizer), targeting Rs.0/month at demo scale
+
+**Date:** 2026-09-10 · **Task:** owner-directed - needed a live link for
+the SIH final-round PPT submission, AWS account not activated
+
+**Decision.** Frontend deploys to Vercel (free Hobby plan, static Vite
+build). Backend and optimizer deploy to Azure Container Apps
+(consumption plan, `min-replicas: 0` on both), images pushed to GitHub
+Container Registry, database on MongoDB Atlas M0. GitHub Actions
+(`.github/workflows/deploy-backend.yml`, `deploy-optimizer.yml`) builds
+and rolls out on every push to `main` touching the respective service,
+authenticating to Azure via OIDC federated login - no client secret
+stored in GitHub. One-time resource provisioning is
+`docs/deploy/azure-setup.sh`; the full run order (including MongoDB Atlas
+setup, GitHub secrets/variables, Vercel project settings, CORS, and
+seeding) is `docs/deploy/README.md`.
+
+**Flagged, not silently decided - this is a judgement call on several
+axes the owner didn't fully specify:**
+- **Vercel is frontend-only, not the whole stack.** The owner initially
+  asked about deploying backend + optimizer to Vercel too. Declined and
+  flagged before building anything: the optimizer's own config
+  (`SOLVER_MAX_SECONDS=10`) assumes CP-SAT solves can legitimately run
+  right up to 10 seconds, which collides with Vercel Hobby's 10-second
+  serverless function timeout - a real solve could be killed by the
+  *platform*, not the code, exactly on this project's highest-risk
+  component (CLAUDE.md testing priority #1). The backend would also need
+  a real rewrite from its current long-running `node dist/server.js`
+  process into stateless serverless handlers. Owner confirmed the
+  Vercel-frontend/Azure-backend split after this was raised.
+- **AWS was the original plan** (tech stack doesn't mandate a cloud
+  provider) but the owner's AWS account isn't activated; Azure was
+  chosen as the available alternative, not for any technical advantage
+  over AWS.
+- **GHCR over Azure Container Registry**: ACR Basic tier has no free
+  option (~$5/mo); ghcr.io is free for private images at this repo's
+  scale and integrates with GitHub Actions via the built-in
+  `GITHUB_TOKEN` for pushes (a separate read-only PAT is still needed
+  for Container Apps to *pull* private images - documented in the
+  README, not automatable without the owner creating it in GitHub's UI).
+- **MongoDB Atlas M0 over Azure Cosmos DB (Mongo API) or a self-hosted
+  Mongo container**: Atlas is genuinely free with no Azure resource to
+  manage; Cosmos DB's Mongo API has known compatibility gaps with real
+  Mongoose/driver behavior that risk surfacing right before a demo, and
+  self-hosting Mongo on Container Apps needs an Azure Files-backed
+  volume for persistence - more moving parts than a hackathon deadline
+  can absorb for no real benefit.
+- **Optimizer given `--ingress internal` only**, not publicly reachable -
+  extends CLAUDE.md's "Node calls the Python service over internal REST;
+  never call OR-Tools directly from Node" rule to mean the browser must
+  never reach it directly either, matching the existing local/Docker
+  topology where only the backend talks to the optimizer.
+
+**Cost basis, not asserted without arithmetic.** At an estimated worst
+case of 200 demo users: ~10,000 requests (~200x under Container Apps'
+2M/month free grant), ~2,000-4,000 vCPU-seconds (~45-90x under the
+180k/month grant), ~2-4GB Vercel bandwidth (~25-50x under its 100GB/month
+Hobby allotment) - the tightest margin of any resource checked. Cost
+changes materially only if `min-replicas` is raised above 0 on either
+Container App (continuous run burns the free grant in ~8 days, then
+roughly $8-12/month combined at these sizes) - not done here.
+
+**Not yet verified end to end - unlike this file's other entries.** Every
+other decision in this document was confirmed by actually running the
+thing. This one could not be: it requires the owner's own Azure and
+Vercel account access, which this session does not have (no `az` CLI
+installed locally, no cloud credentials available). `docs/deploy/`
+contains the workflow files, the one-time provisioning script, and the
+full run order, but none of it has been executed. The owner needs to run
+`docs/deploy/azure-setup.sh` and walk the Vercel steps in
+`docs/deploy/README.md` personally, then the verification checklist at
+the bottom of that README (health endpoint, banner visible, real login,
+a real `/schedules/generate` round trip, optimizer confirmed unreachable
+from the browser) before trusting the live link in front of judges.
+**Known gap already flagged in the README, not discovered by testing**:
+Container Apps has no equivalent of docker-compose's
+`./data/processed:/data/processed:ro` host mount (D-087's fix for the
+same problem locally), so seeding the deployed backend may need the
+pipeline output baked into the image or mounted via Azure Files - flagged
+to do early, not the night before the demo.
+
+## D-092 — Production and local give different, both-real, both-reproducible
+weekly-solve figures - root cause confirmed as the CPU allocation under a
+wall-clock time budget, not data, code, or worker count
+
+**Date:** 2026-09-13 · **Task:** owner-directed investigation, triggered by
+PITCH_NUMBERS.md quoting a figure (`blockUtilisationPct: 59.92`/`61.42`)
+that did not match a live generation against the production link
+(`blockUtilisationPct: 60.15`, `tasksScheduled: 63`, `tasksSplit: 28`,
+`objectiveValue: 33,799,080`) on the same date, after D-089's fix was
+already confirmed live in production.
+
+**The divergence, stated first.** On the identical 89-task corpus, same
+calendar date:
+
+| | Local (dev machine, unthrottled) | Production (Azure Container App) |
+|---|---:|---:|
+| tasksScheduled / tasksSplit | 64 / 29 | 63 / 28 |
+| blockUtilisationPct | 61.42% | 60.15% |
+| objectiveValue | 34,370,727 | 33,799,080 |
+| status / solveSeconds | FEASIBLE / ~10.0s | FEASIBLE / ~10.0s |
+
+Both sides had already been shown internally reproducible before the cause
+was known: three consecutive production generations (`SCH-...095228743`,
+`SCH-...100914243`, `SCH-...100929641`) returned byte-identical
+`objectiveValue`, `metrics`, and full `blocks`; two consecutive local
+generations did the same. So this was never noise - a genuine, stable,
+environment-specific divergence, which made it tractable to root-cause
+rather than a flake to shrug off.
+
+**Ruled out, each with direct evidence, not assumption:**
+
+- **Different seeded data.** Read production through the existing read-only
+  API routes (`GET /api/tasks`, `/api/assets`, `/api/corridors`,
+  `/api/corridors/:id` for `maxDailyBlockWindows`/`occupiedWindows`) and
+  diffed every raw field against local's: 89/89 tasks, 55/55 assets, 30/30
+  demand corridors, 10,149/10,149 total corridors - **zero field-level
+  differences** on `dateRaised`, `slaDueDate`, `severity`,
+  `estBlockDurationMins`, `defectType`, `corridorId`, `assetId`,
+  `dependsOnTaskId`, `requiredResourceIds`, `criticalityScore`, and every
+  corridor's free/occupied windows. No credential to the production
+  database was used or needed - every figure came from authenticated reads
+  through routes that already existed.
+- **Different optimizer code.** `gh run view` on the last successful
+  `deploy-optimizer.yml` run confirms the deployed commit is `8ca54f6` -
+  the same commit `deploy-backend.yml`'s last successful run deployed, and
+  an ancestor-confirmed superset of `2519c38` (the monthly-horizon solver
+  budget fix, itself irrelevant here - it only touches the monthly code
+  path, never weekly). Local HEAD at the time of this investigation
+  (`a86057f`, D-089's own commit) touches zero optimizer files. The only
+  optimizer-code difference between deployed and local-as-running was the
+  still-uncommitted `trains.py` diff (D-090's goods tier), confirmed inert
+  on this real corpus (`TRAIN_TIERS["goods"]` is an empty set; T3's real
+  timetable data contains zero freight class codes, so `classify()` can
+  never route through it).
+- **Different OR-Tools version.** The unpinned `ortools>=9.11,<10.0` range
+  in `requirements.txt` was a real, concrete concern - unpinned ranges can
+  resolve differently at different build times. Checked directly by reading
+  the actual `deploy-optimizer` build log
+  (`gh api repos/.../actions/jobs/{id}/logs`, no extra credential needed):
+  the deployed image installed `ortools-9.15.6755`, identical to local's
+  installed `9.15.6755`. Ruled out.
+- **`random_seed`.** Hardcoded `20260822` in `scheduler.py`'s function
+  signature, never read from config or overridden by the router call site
+  in either environment. Ruled out by inspection, consistent with every
+  other finding.
+
+**A hypothesis proposed, tested, and rejected - recorded here rather than
+quietly dropped.** The first candidate raised was that OR-Tools' worker
+count auto-adapts to available cores (16 local vs the Container App's
+provisioned 0.5 vCPU), and that CP-SAT's parallel portfolio search - which
+D-022 already documented as capable of returning different, equally-good
+solutions across worker counts - was responding to that difference.
+**Wrong, and disproved empirically rather than defended:** the actual call
+site (`app/routers/optimizer.py`) passes `num_workers=1` **hardcoded** to
+`solve_schedule`, exactly matching D-022's deliberate reproducibility
+choice; `Settings.solver_num_workers` (`SOLVER_NUM_WORKERS` env var) is
+defined in `config.py` but is **never read by any caller** - dead
+configuration. Confirmed by direct test, not just by reading the code:
+restarted the local optimizer twice, once with `SOLVER_NUM_WORKERS=1` and
+once with `SOLVER_NUM_WORKERS=2`, regenerating a weekly schedule each time.
+**Zero movement** - `64/29/61.42%/34,370,727` both times, identical to the
+original run. The worker-count/parallelism theory is rejected. See "known
+gap" below - the dead config this exposed is a separate, real issue worth
+fixing regardless of this investigation's outcome.
+
+**The confirmed cause: the 10-second ceiling is wall-clock, not a fixed
+amount of search work, and CPU throughput under a wall-clock deadline is
+genuinely different between the two environments.** `max_time_in_seconds`
+is a real-time deadline; a single-threaded (`num_workers=1`), deterministic
+search (fixed seed) run on a slower or CPU-throttled machine simply
+completes less of the identical search tree before the same 10 real
+seconds elapse, and reports whichever incumbent solution it holds at that
+moment - different, but equally FEASIBLE. Confirmed directly, reversibly,
+not inferred: restarted the local optimizer inside a real cgroup
+(`systemd-run --user --scope -p CPUQuota=50%`, verified via
+`/proc/<pid>/cgroup` and `CPUQuotaPerSecUSec=500ms` - the same 0.5 vCPU
+`docs/deploy/azure-setup.sh` provisions for the optimizer Container App)
+and generated twice: **`63/28/60.15%/33,799,080` both times - an exact
+match to production**, not a partial shift toward it. Removed the throttle
+and regenerated: local returned to its own `64/29/61.42%/34,370,727`
+immediately. The lever runs both directions on demand, which is what makes
+this a confirmed cause rather than a correlation.
+
+**Measured, not estimated: the deterministic budget behind the current 10s
+weekly solve, and its cost under the throttle.** CP-SAT exposes
+`solver.deterministic_time` (machine-independent search-progress units)
+alongside `solver.wall_time`. Temporarily instrumented `scheduler.py` to
+log both plus `num_branches`/`num_conflicts` after `solver.solve()`
+(reverted after measurement - `git diff` confirmed clean, no residual
+change beyond what already existed before this session):
+
+| | Unthrottled | 0.5 vCPU throttle |
+|---|---:|---:|
+| `deterministic_time` | 10.980336 | 10.980401 (pinned via `max_deterministic_time`) |
+| `wall_time` | 10.001823s | 24.087368s |
+| `num_branches` | 216,709 | 216,709 (identical) |
+| `num_conflicts` | 19,695 | 19,695 (identical) |
+| Result | 64/29/61.42%/34,370,727 | 64/29/61.42%/34,370,727 (identical) |
+
+Pinning `max_deterministic_time` instead of `max_time_in_seconds` makes the
+throttled machine walk the *exact same search path* to the *exact same
+plan* as the unthrottled one - it just takes 24.087s of real time instead
+of 10.002s to get there (~2.19x, not the naive 2x "half the CPU" guess,
+plausibly cgroup quota/scheduling overhead on top of the raw compute cut).
+This is the real fix for cross-machine determinism, confirmed to work, not
+merely proposed.
+
+**Decision: NOT adopting `max_deterministic_time` before this demo.** The
+optimizer Container App runs `min-replicas: 0` (D-091), so a cold start
+already costs roughly 30s (see commit `2edca83`'s cold-start loading hint,
+built for exactly this). Stacking a 24.1s deterministic solve on a cold
+first request puts a judge's first "Generate schedule" click at roughly
+54s of blank screen before anything appears. That fits inside the 75s
+`OPTIMIZER_TIMEOUT_MS` and 90s frontend timeout with real margin (~51s and
+~66s respectively, at the measured 0.5 vCPU throttle - the live Container
+App's exact current allocation was not independently confirmed via Azure
+CLI, see the gap below, so a lower real allocation would erode this
+margin, though there is enough headroom that it would take a substantial
+further reduction to actually breach either ceiling), but it is a
+materially worse demo experience than the current guaranteed ~10s
+response. The property that actually matters for a live demo - production
+being deterministic *with itself* - is already true, proven by three
+byte-identical runs, without this change. Cross-machine determinism (local
+and production agreeing with each other) is a real, worthwhile property,
+but it is explicitly deferred as post-demo work, not pre-demo work.
+
+**A known, real gap this investigation surfaced and is explicitly not
+fixing now:** `Settings.solver_num_workers`/`SOLVER_NUM_WORKERS` is dead
+configuration - defined, validated (`ge=0, le=64`), documented in its own
+comment as "lets OR-Tools choose based on available cores," and never
+wired to anything. It should either be threaded through to
+`solve_schedule`'s `num_workers` parameter (if the intent is ever to make
+worker count configurable) or removed outright (if `num_workers=1` is
+meant to stay hardcoded per D-022 indefinitely, which the evidence in this
+entry supports). Left as-is per this session's scope - flagged, not
+silently fixed.
+
+**What was not verified, and why, stated plainly rather than assumed:** the
+Azure Container App's *currently running* CPU/memory allocation was not
+independently confirmed against Azure itself - this environment has no
+`az` CLI and no Azure credentials, and a second attempt to pull the exact
+deployed image from GHCR to inspect it directly (`podman pull
+ghcr.io/aroy2o/railway-optimizer:8ca54f6...`) was refused because the
+available `gh` token lacks `read:packages` scope. `azure-setup.sh`
+specifying `--cpu 0.5` is what was provisioned once, not proof of what is
+running now. The 0.5 vCPU throttle figure used throughout this entry is
+justified by the fact that it exactly reproduces production's real output
+- strong indirect evidence - not by a direct read of the live resource.
+
+**Tests:** none added - this was a live-system investigation and a
+reversible local reproduction, not a code change. `optimizer/app/core/
+scheduler.py` carries no diff from this entry; the temporary diagnostic
+logging was removed before this entry was written.
