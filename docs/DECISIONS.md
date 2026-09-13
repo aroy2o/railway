@@ -5041,3 +5041,120 @@ correctly as its own follow-up, deliberately left out of this fix's scope
 per the owner's explicit instruction not to touch anything beyond
 `validatePlan()`.
 
+## D-090 — A real goods-train freight log has zero overlap with this
+demo's 30 corridors; the new `goods` train-impact tier is grounded
+nationally, not per-corridor
+
+**Date:** 2026-09-10 · **Task:** not T-numbered — owner-directed scoping
+following a judge-mode audit that found PRD's "goods trains forecast"
+Expected-Solution line item genuinely unbuilt (`optimizer/app/core/
+trains.py`'s `TRAIN_TIERS` had no freight tier at all, confirmed by
+enumerating the taxonomy directly, not assumed from a doc).
+
+**What the freight log is.** `WAT_GOODS_TRAIN_AUG25_01082025_27082025.csv`
+— a real Indian Railways goods-train movement log, 01–27 Aug 2025, 95,219
+block-section-level rows, 5,548 distinct real train movements (by
+`LoadId`), covering real commodity data (`Commodity`/`Load Type` columns —
+top commodities include iron ore, minerals, and containers) and a
+`Block Section` column identifying the real station pair each leg
+transited. Supplied by the owner as a real dataset to check for corridor
+overlap before building anything, following this project's own standing
+"verify before integrating" discipline (D-013/D-014/D-068/D-085 all did
+the same before their respective features).
+
+**A real unit bug caught before it could ground anything.** The `Block
+Hrs` column is **not** literal hours — it is a day-fraction (Excel
+time-serial format). Verified directly, not assumed: `Block Km / (Block
+Hrs × 24)` reproduces the row's own `Speed` column almost exactly across
+every sampled row (e.g. 4.77 km / (0.0993 × 24) h = 2.00, matching a
+stated speed of 2.0). Read literally, the raw column implies an average
+block-occupation time of ~1.5 minutes per movement — physically
+implausible for real block sections of several km. Corrected
+(`raw_value × 24`), the real average is **~35 minutes** per movement
+(median ~19 minutes, over 87,690 of 95,219 rows carrying a nonzero value).
+Any future code that reads this column, or a similar IR MIS export, must
+apply the same ×24 conversion — noted here and in `trains.py`'s own
+comment so it is not silently wrong again if someone touches this later.
+
+**The zero-overlap finding, and why it is geographic, not a matching
+bug.** Every one of the CSV's 1,573 valid `Block Section` values was
+normalised to an undirected station-code pair (sorted, so `A-B` and `B-A`
+collapse to the same key — corridors in this project are already stored
+this way, per T2's own derivation) and compared against both the full
+10,149-corridor list and the 30 corridors T4 actually selected for the
+synthetic demand data. Result: **88 of 10,149 real corridors match**
+something in the freight log; **0 of the 30 demo corridors** do. Checked
+why, not just accepted: the freight log is 60% one division (`WAT`,
+Waltair — East Coast Railway's heavy iron-ore/coal freight territory,
+`ECOR` zone), and the 88 matches cluster there. T4's 30 demo corridors
+span an entirely different national footprint (`SCR`, `SR`, `SECR`,
+`WCR`, `NFR`, `NR`, `NWR`, `ECR` — no `ECOR` corridor at all). This is a
+genuine geographic mismatch between two independently-selected real
+datasets, not a bug in the station-pair comparison.
+
+**The decision.** Faking a per-corridor goods-train figure for any of the
+30 demo corridors from this log would be dishonest by this project's own
+established standard (D-013/D-014/D-055/D-068's "state the real gap, never
+pad it" discipline) — there is no real observation to attribute to any of
+them. Instead:
+
+- `TRAIN_TIERS["goods"]` is added as a deliberately **empty** code set.
+  T3's own timetable source (`datameet/railways`) is a real *passenger*
+  timetable — every one of the 17 real class codes it contains (verified
+  by enumerating `trainClassMix` across all 10,149 real corridors) is a
+  passenger service type, none freight. So `classify()` can never return
+  `"goods"` for a real T3 observation, by construction, matching the
+  freight log's own finding that this demo's real timetable data has no
+  freight signal to classify in the first place.
+- `TIER_WEIGHTS["goods"] = 0.5` is **reasoned, not measured** — the
+  spread/ties/rho comparison D-026/the existing tier weights used is
+  impossible here (zero real per-corridor goods observations exist to
+  measure against). The value instead follows Indian Railways' own real
+  operational precedence doctrine (freight is the lowest-precedence
+  traffic class at a Section Controller's discretion — a goods rake can
+  be held in a loop line where a suburban service directly inconveniences
+  waiting passengers), placed below `suburban` (0.7) but well above zero,
+  because the freight log is real evidence that goods traffic is not
+  negligible (5,548 real movements, real commodity tonnage, ~35 real
+  minutes of block occupation each) and scoring it near-zero would
+  misrepresent real displaced freight capacity as free — the same failure
+  mode `unknown`'s 1.0 already guards against for unidentified passenger
+  traffic.
+- `trains.py`'s `FRAMING` constant states this boundary plainly wherever a
+  train-impact figure surfaces (including through `grounding.py`'s
+  `framing:trainImpact` fact, so "Ask the Planner" inherits the same
+  honesty): the goods tier's *weight* is grounded in real evidence; its
+  *application* to any specific corridor in this system is not, and this
+  system never does that.
+
+**What real data backs it.** `tests/test_trains.py` gained 3 tests:
+`TIER_WEIGHTS["goods"]` sits strictly between 0 and `suburban`'s weight;
+every real T3 passenger class code is confirmed to never classify as
+`"goods"` (pinned so a future data refresh that changed this would fail
+loudly); and the weighting arithmetic itself is proven correct end-to-end
+via `monkeypatch` temporarily populating the tier with a fake code (since
+no real code can reach it by design) — `classify()`, `tier_mix()`, and
+`mean_tier_weight()` are all genuinely exercised, not just asserted to
+exist. Full optimizer suite: **346/346 passing, 9 deselected by design**
+(343 previously + 3 new). Verified live end to end: restarted the running
+optimizer service to load the change, triggered a real
+`POST /api/schedules/generate` against the live backend, and confirmed
+the only occurrences of "goods" anywhere in the real response are the
+static `FRAMING` disclaimer text echoed into each deferred task's
+`displacementOption` — never a computed number. Also grepped
+`frontend/src` for `flagship`/`suburban` (the tier names) and found zero
+matches, confirming no UI component enumerates tiers at all (unlike the
+`DeferredTasksPanel` `REASON_LABEL` gap this same session found and fixed)
+— there is nothing in the frontend that could silently drop the new tier.
+
+**Known limitations.** The `goods` tier is entirely inert on this
+project's real demo data — by design, not as a bug to fix later. If a
+future real integration ever supplies genuine freight-class codes for
+this project's own 30 (or any) corridors, `TRAIN_TIERS["goods"]` is where
+they would be added; until then, no corridor, schedule, KPI, or UI element
+in this system reports a goods-train number of any kind, and none should.
+The `0.5` weight is a documented judgement call, not a measured value —
+if real per-corridor goods data for these specific corridors is ever
+obtained, D-026's measured spread/ties/rho comparison should be re-run
+against it rather than trusting this reasoned placeholder indefinitely.
+

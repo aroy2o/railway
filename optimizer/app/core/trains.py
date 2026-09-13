@@ -37,17 +37,33 @@ from typing import Any, Iterable, Sequence
 #: Operational priority tiers, by the class codes T3 observed in the real
 #: timetable. Ordering follows Indian Railways' own precedence: the flagship
 #: services are the ones a Section Controller may not casually delay.
+#:
+#: `goods` is deliberately an EMPTY code set, not a guess at what a freight
+#: class code might look like. T3's source (`datameet/railways`) is a real
+#: PASSENGER timetable - every one of the 17 class codes it actually contains
+#: (checked by enumerating `trainClassMix` across all 10,149 real corridors,
+#: not assumed) is a passenger service type (Exp, SF, Pass, Raj, Drnt, GR,
+#: SKr, MEMU, Mail, JShtb, Hyd, Shtb, Del, Klkt, DEMU, Toy, plus an
+#: already-existing 2.8% `unknown` bucket of unidentified passenger codes).
+#: Zero of them are freight. So `classify()` can never return "goods" for a
+#: real T3 observation, and that is correct, not a gap: this tier exists so
+#: `TIER_WEIGHTS["goods"]` has somewhere to be looked up from if a future
+#: real integration point ever supplies a genuine freight/goods class code -
+#: see D-090 for the freight-log evidence behind the weight below, and why
+#: no corridor in this demo can be scored against it today.
 TRAIN_TIERS: dict[str, set[str]] = {
     "flagship": {"Raj", "Shtb", "JShtb", "Drnt"},
     "express": {"SF", "Mail", "Exp", "GR", "SKr", "Hyd", "Del", "Klkt"},
     "passenger": {"Pass"},
     "suburban": {"MEMU", "DEMU", "Toy"},
+    "goods": set(),
 }
 
 #: Relative cost of delaying one train of each tier.
 #:
-#: Measured against the alternatives across the 26 demand-carrying corridors,
-#: the same way D-026 fixed the priority weights:
+#: flagship/express/passenger/suburban/unknown were measured against the
+#: alternatives across the 26 demand-carrying corridors, the same way D-026
+#: fixed the priority weights:
 #:
 #: | weighting | spread | ties | rho vs utilisation |
 #: |---|---:|---:|---:|
@@ -64,11 +80,30 @@ TRAIN_TIERS: dict[str, set[str]] = {
 #: `unknown` sits at 1.0 - neutral rather than free. A class T3 could not
 #: identify is 2.8% of observations, and scoring it zero would quietly make
 #: unidentified traffic costless to displace.
+#:
+#: `goods` is **reasoned, not measured** - the same spread/ties/rho comparison
+#: above is impossible here because zero real per-corridor goods observations
+#: exist anywhere in this project's data (D-090: the one real freight dataset
+#: available, WAT_GOODS_TRAIN_AUG25, has zero station-pair overlap with the 30
+#: demo corridors). The weight instead follows Indian Railways' own real
+#: operational precedence doctrine: freight is the lowest-precedence traffic
+#: class at a Section Controller's discretion, below even suburban EMU/DEMU
+#: services, because a suburban service still displaces waiting passengers
+#: directly while a goods rake can typically be held in a loop line. Placed
+#: below `suburban` (0.7) but well above zero: D-090's freight log is real
+#: evidence that goods traffic is not negligible - 5,548 real train movements
+#: in Aug 2025 alone, carrying genuine bulk-commodity tonnage (iron ore,
+#: minerals, containers among the top commodities), each occupying a block
+#: section for real time (~35 minutes average, see D-090's day-fraction
+#: correction) - so scoring it at or near 0 would misrepresent real displaced
+#: freight capacity as free, the same failure mode `unknown`'s 1.0 already
+#: guards against for unidentified passenger traffic.
 TIER_WEIGHTS: dict[str, float] = {
     "flagship": 4.0,
     "express": 2.0,
     "passenger": 1.0,
     "suburban": 0.7,
+    "goods": 0.5,
     "unknown": 1.0,
 }
 
@@ -82,7 +117,10 @@ FRAMING = (
     "displaced services and the minutes of overlap are measured. The CLASS SPLIT is "
     "estimated - it is apportioned from the corridor's overall train-class mix, because "
     "the per-service class was not retained alongside the occupied windows. Delay minutes "
-    "are displacement time, not a modelled propagation of delay through the timetable."
+    "are displacement time, not a modelled propagation of delay through the timetable. "
+    "A GOODS tier exists in this weighting, grounded in a real IR freight log (D-090) - "
+    "but that log has zero overlap with this demo's 30 corridors, so no corridor or "
+    "schedule here ever reports a per-corridor goods-train figure."
 )
 
 

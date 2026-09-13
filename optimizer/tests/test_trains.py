@@ -55,6 +55,62 @@ def test_an_unrecognised_class_is_neutral_not_free():
 
 
 # --------------------------------------------------------------------------- #
+# Goods/freight tier (D-090) - reasoned from real IR precedence + a real     #
+# freight log, but structurally never classified from T3's own (passenger)  #
+# timetable data.                                                            #
+# --------------------------------------------------------------------------- #
+
+def test_goods_tier_exists_with_a_nonzero_weight_below_suburban():
+    """Pins D-090's reasoning: goods sits below every passenger-carrying tier
+    (IR's own real precedence - freight yields to passengers) but strictly
+    above zero (the freight log's real tonnage/commodity evidence means
+    displacing it is not costless)."""
+    assert 0 < TIER_WEIGHTS["goods"] < TIER_WEIGHTS["suburban"]
+
+
+def test_no_real_timetable_class_code_is_ever_classified_as_goods():
+    """T3's source is a real PASSENGER timetable (datameet/railways) - every
+    class code it contains was enumerated against `trainClassMix` across all
+    10,149 real corridors (D-090) and none are freight. This pins that finding
+    so it fails loudly if a future data refresh ever changes it, rather than
+    silently starting to (mis)classify a passenger code as goods."""
+    from app.core.trains import TRAIN_TIERS
+
+    assert TRAIN_TIERS["goods"] == set()
+    real_passenger_codes = {
+        "Exp", "SF", "Pass", "Raj", "Drnt", "GR", "SKr", "MEMU", "Mail",
+        "JShtb", "Hyd", "Shtb", "Del", "Klkt", "DEMU", "Toy",
+    }
+    for code in real_passenger_codes:
+        assert classify(code) != "goods"
+
+
+def test_the_goods_weight_is_still_applied_correctly_if_a_class_mix_ever_carries_it(
+    monkeypatch,
+):
+    """The tier is inert on this project's real data (previous test: no real
+    code routes through `classify()` into `goods`, by design, since
+    `TRAIN_TIERS["goods"]` is empty). That must not be confused with the
+    WEIGHTING mechanism being untested - `monkeypatch` populates the tier with
+    a fake code just for this test (auto-reverted after), so `classify()`,
+    `tier_mix()` and `mean_tier_weight()` are all genuinely exercised end to
+    end, proving the wiring works the moment a real integration ever supplies
+    a real freight class code, without permanently changing the intentionally
+    empty production set."""
+    from app.core.trains import TRAIN_TIERS
+
+    monkeypatch.setitem(TRAIN_TIERS, "goods", {"TESTGOODS"})
+
+    assert classify("TESTGOODS") == "goods"
+    assert mean_tier_weight({"TESTGOODS": 10}) == TIER_WEIGHTS["goods"]
+    # A mix of goods and flagship lands strictly between the two weights,
+    # exactly as the existing mixed-corridor test already proves for the
+    # other tiers.
+    mixed = mean_tier_weight({"TESTGOODS": 5, "Raj": 5})
+    assert TIER_WEIGHTS["goods"] < mixed < TIER_WEIGHTS["flagship"]
+
+
+# --------------------------------------------------------------------------- #
 # The score really uses train class                                            #
 # --------------------------------------------------------------------------- #
 
