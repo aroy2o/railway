@@ -74,10 +74,10 @@ Repo -> Settings -> Secrets and variables -> Actions.
 | `AZURE_BACKEND_APP_NAME` | `railway-backend` |
 | `AZURE_OPTIMIZER_APP_NAME` | `railway-optimizer` |
 
-Push to `main` (or run `.github/workflows/deploy-backend.yml` /
-`deploy-optimizer.yml` manually via Actions -> Run workflow) to replace the
-placeholder image with your real one. The backend is now live at the FQDN
-the setup script printed.
+Push to `main` or `fulldata-ktv-psa` (or run the deploy workflows manually via
+Actions -> Run workflow) to replace the
+placeholder image with your real one. The backend is now live at the FQDN the
+setup script printed.
 
 ### 4. Vercel: frontend
 

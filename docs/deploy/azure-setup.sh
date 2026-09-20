@@ -63,6 +63,17 @@ az ad app federated-credential create \
     \"audiences\": [\"api://AzureADTokenExchange\"]
   }"
 
+# GitHub's OIDC subject includes the exact branch ref, so the current demo
+# branch needs its own federated credential as well as main.
+az ad app federated-credential create \
+  --id "$APP_ID" \
+  --parameters "{
+    \"name\": \"github-fulldata-branch\",
+    \"issuer\": \"https://token.actions.githubusercontent.com\",
+    \"subject\": \"repo:${GITHUB_ORG}/${GITHUB_REPO}:ref:refs/heads/fulldata-ktv-psa\",
+    \"audiences\": [\"api://AzureADTokenExchange\"]
+  }"
+
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 TENANT_ID=$(az account show --query tenantId -o tsv)
 
