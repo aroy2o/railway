@@ -12,6 +12,7 @@
  * It also covers the whole backlog rather than only the tasks that made it into
  * a plan, which is what a priority queue is for. See docs/DECISIONS.md D-038.
  */
+import { ListOrdered } from 'lucide-react'
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import type { Schedule, Task } from '../api/apiSlice.ts'
@@ -57,13 +58,21 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
       data-tour="dashboard-priority-queue"
       className="rounded-xl border border-slate-200 bg-white shadow-sm"
     >
-      <header className="border-b border-slate-100 px-5 py-3">
-        <h2 className="text-sm font-semibold text-slate-900">Priority queue</h2>
-        <p className="text-xs text-slate-500">
-          Ranked by severity, asset criticality, predicted risk and SLA pressure. Top{' '}
-          {ranked.length} of{' '}
-          {tasks.length}.
-        </p>
+      <header className="flex items-start gap-2.5 border-b border-slate-100 px-5 py-3">
+        <span
+          className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600"
+          aria-hidden="true"
+        >
+          <ListOrdered className="h-3.5 w-3.5" />
+        </span>
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">Priority queue</h2>
+          <p className="text-xs text-slate-500">
+            Ranked by severity, asset criticality, predicted risk and SLA pressure. Top{' '}
+            {ranked.length} of{' '}
+            {tasks.length}.
+          </p>
+        </div>
       </header>
 
       {ranked.length === 0 ? (
@@ -82,7 +91,7 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
               <li key={task._id} className={`px-5 py-2.5 ${isGroupEnd ? 'mb-2' : ''}`}>
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="flex items-baseline gap-2">
-                    <span className="w-4 text-right text-[11px] tabular-nums text-slate-400">
+                    <span className="w-4 text-right text-2xs tabular-nums text-slate-500">
                       {index + 1}
                     </span>
                     <Link
@@ -98,7 +107,7 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
                   </span>
                 </div>
                 <div className="mt-0.5 flex items-center justify-between gap-2 pl-6">
-                  <span className="truncate text-[11px] text-slate-500">
+                  <span className="truncate text-2xs text-slate-500">
                     {task.defectType} · driven by{' '}
                     <span className="font-medium text-slate-700">
                       {FACTOR_LABEL[task.dominantPriorityFactor ?? ''] ??
@@ -107,7 +116,7 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
                     {task.failureRiskScore !== null &&
                       task.failureRiskScore !== undefined && (
                         <span
-                          className="rounded bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-800 ring-1 ring-violet-200 ring-inset"
+                          className="rounded bg-violet-50 px-1.5 py-0.5 text-3xs text-violet-800 ring-1 ring-violet-200 ring-inset"
                           title={RISK_FRAMING}
                         >
                           risk {Math.round(task.failureRiskScore)}
@@ -120,7 +129,7 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
                   <span className="flex shrink-0 items-center gap-1">
                     {schedule && (
                       <span
-                        className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                        className={`rounded px-1.5 py-0.5 text-3xs font-medium ${
                           isScheduled
                             ? 'bg-emerald-50 text-emerald-700'
                             : 'bg-slate-100 text-slate-500'
@@ -134,7 +143,7 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
                         type="button"
                         data-tour={index === 0 ? 'dashboard-whatif-trigger' : undefined}
                         onClick={() => onWhatIf(task._id)}
-                        className="rounded px-1.5 py-0.5 text-[10px] font-medium text-violet-700 ring-1 ring-violet-200 ring-inset hover:bg-violet-50"
+                        className="rounded px-1.5 py-0.5 text-3xs font-medium text-violet-700 ring-1 ring-violet-200 ring-inset hover:bg-violet-50"
                       >
                         What if?
                       </button>
@@ -148,14 +157,14 @@ export function PriorityQueue({ tasks, schedule, limit = 12, onWhatIf }: Priorit
       )}
 
       {unscored > 0 && (
-        <p className="border-t border-slate-100 px-5 py-2 text-[11px] text-slate-400">
+        <p className="border-t border-slate-100 px-5 py-2 text-2xs text-slate-500">
           {unscored} task{unscored > 1 ? 's' : ''} not yet scored — generate a schedule to rank
           them.
         </p>
       )}
 
       {showsRisk && (
-        <p className="border-t border-slate-100 px-5 py-2 text-[11px] text-slate-500">
+        <p className="border-t border-slate-100 px-5 py-2 text-2xs text-slate-500">
           <span className="font-medium text-slate-600">Predicted risk:</span> {RISK_FRAMING}
         </p>
       )}

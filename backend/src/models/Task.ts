@@ -63,6 +63,13 @@ export interface ITask {
 
   status: TaskStatus;
   synthetic: boolean;
+
+  // --- fulldata-ktv-psa branch extensions ---------------------------------
+  // Denormalised from the asset, same pattern as corridorId. Optional:
+  // absent/undefined on tasks seeded by the original datameet/data.gov.in
+  // pipeline.
+  blockSection?: string;
+  lineNumber?: number;
 }
 
 export type TaskDocument = HydratedDocument<ITask>;
@@ -113,6 +120,9 @@ const taskSchema = new Schema<ITask>(
       index: true,
     },
     synthetic: { type: Boolean, default: true },
+
+    blockSection: { type: String, index: true },
+    lineNumber: { type: Number },
   },
   { versionKey: false, _id: false },
 );

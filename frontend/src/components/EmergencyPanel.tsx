@@ -8,6 +8,7 @@
  * exactly fixed. Unlike the What-if panel (T20), this COMMITS: submitting
  * creates a real NEW schedule (D-034), not a disposable hypothetical.
  */
+import { AlertTriangle, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
 import { describeApiError, useRunEmergencyReoptimizeMutation } from '../api/apiSlice.ts'
@@ -104,20 +105,29 @@ export function EmergencyPanel({
   return (
     <section className="rounded-xl border-2 border-rose-300 bg-white shadow-sm">
       <header className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-3">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900">Simulate an emergency</h3>
-          <p className="text-xs text-slate-500">
-            Re-solves ONE corridor&rsquo;s remaining time around a disruption, holding every other
-            corridor and everything already executed fixed (FR3.5, PRD 9.10). This commits a new
-            schedule — unlike What-if, it is not disposable.
-          </p>
+        <div className="flex items-start gap-2.5">
+          <span
+            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-rose-100 text-rose-700"
+            aria-hidden="true"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+          </span>
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">Simulate an emergency</h3>
+            <p className="text-xs text-slate-500">
+              Re-solves ONE corridor&rsquo;s remaining time around a disruption, holding every
+              other corridor and everything already executed fixed (FR3.5, PRD 9.10). This commits
+              a new schedule — unlike What-if, it is not disposable.
+            </p>
+          </div>
         </div>
         <button
           type="button"
           onClick={onClose}
-          className="rounded px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
+          aria-label="Close emergency simulation panel"
+          className="rounded px-2 py-1 text-slate-500 hover:bg-slate-100"
         >
-          ✕
+          <X className="h-4 w-4" aria-hidden="true" />
         </button>
       </header>
 
@@ -202,7 +212,7 @@ export function EmergencyPanel({
                 ))}
               </ul>
             )}
-            <p className="mt-1.5 text-[11px] text-emerald-800">
+            <p className="mt-1.5 text-2xs text-emerald-800">
               Every other corridor, and everything already executed on this one, is unchanged
               ({newSchedule.emergencyContext?.pinnedTaskCount ?? 0} tasks held fixed).
             </p>

@@ -357,23 +357,33 @@ class PrioritizeRequest(ApiModel):
         return self
 
 
-class DegradationPointIn(ApiModel):
-    """One simulated asset-health observation (T4)."""
-
-    #: Accepted for contract fidelity with T4's stored shape and then ignored:
-    #: observations are evenly spaced by construction, and reading the dates
-    #: would invite a precision the generator does not support. Typed as a
-    #: string rather than a date because the field name shadows the `date` type
-    #: imported above - and a parsed value nothing reads is dead weight anyway.
-    date: str | None = None
-    health_metric: float = Field(ge=0, le=1)
-
-
 class AssetRiskIn(ApiModel):
-    """An asset and its simulated degradation history (FR2.2, PRD 9.1)."""
+    """An asset's calibrated-LightGBM risk-model feature set (FR2.2, PRD 9.1).
+
+    fulldata-ktv-psa branch: replaces the original `degradation_history`-based
+    contract - see app/core/risk.py for what changed and why. All feature
+    fields are optional here (not `...`/required) rather than rejecting the
+    request outright when one is missing: app.core.risk.assess_assets reports
+    a per-asset "not scored, missing X" reason instead, which is more useful
+    to a caller batching many assets than an all-or-nothing 422.
+    """
 
     asset_id: str = Field(min_length=1, max_length=64)
-    degradation_history: list[DegradationPointIn] = Field(default_factory=list)
+    department: Literal["Engineering", "S&T", "TRD"] | None = None
+    block_section: str | None = None
+    line_number: int | None = Field(default=None, ge=1)
+    age_years: float | None = Field(default=None, ge=0)
+    condition: float | None = Field(default=None, ge=0, le=1)
+    open_defects_count: int | None = Field(default=None, ge=0)
+    open_defects_sev0: int | None = Field(default=None, ge=0)
+    open_defects_sev1: int | None = Field(default=None, ge=0)
+    open_defects_sev2: int | None = Field(default=None, ge=0)
+    open_defects_sev3: int | None = Field(default=None, ge=0)
+    days_since_maintenance: float | None = Field(default=None, ge=0)
+    tonnage_stress: float | None = Field(default=None, ge=0)
+    #: Static snapshot (1-24), not a live-advancing calendar month - see
+    #: build_synthetic_fulldata.py and app/core/risk.py module docstrings.
+    month: int | None = Field(default=None, ge=1, le=24)
 
 
 class RiskRequest(ApiModel):

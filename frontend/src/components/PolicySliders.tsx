@@ -10,6 +10,7 @@
  * only WHEN, and how tightly packed. Letting a Controller believe otherwise
  * would be the exact overclaim this project has refused at every other layer.
  */
+import { SlidersHorizontal } from 'lucide-react'
 import { useState } from 'react'
 
 import {
@@ -35,9 +36,17 @@ export function PolicySliders({
       data-tour="dashboard-policy-sliders"
       className="rounded-lg border border-slate-100 bg-white p-4"
     >
-      <h2 className="text-xs font-semibold tracking-wide text-slate-600 uppercase">
-        Policy weights
-      </h2>
+      <div className="flex items-center gap-2">
+        <span
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600"
+          aria-hidden="true"
+        >
+          <SlidersHorizontal className="h-3 w-3" />
+        </span>
+        <h2 className="text-xs font-semibold tracking-wide text-slate-600 uppercase">
+          Policy weights
+        </h2>
+      </div>
       <p className="mt-1 text-xs text-slate-500">
         These change <span className="font-medium text-slate-700">when</span> work happens and
         how it is grouped. On this week&apos;s backlog every deferral is structural (see Deferred
@@ -46,37 +55,50 @@ export function PolicySliders({
       </p>
 
       <div className="mt-4 space-y-4">
-        {WEIGHT_SPECS.map((spec) => (
-          <div key={spec.key}>
-            <div className="flex items-baseline justify-between gap-2">
-              <label htmlFor={`weight-${spec.key}`} className="text-xs font-medium text-slate-700">
-                {spec.label}
-              </label>
-              <span className="font-mono text-[11px] text-slate-500">
-                {values[spec.key].toLocaleString()}
-                {values[spec.key] !== spec.default && (
-                  <span className="ml-1 text-sky-600">
-                    ({values[spec.key] > spec.default ? '+' : ''}
-                    {Math.round(((values[spec.key] - spec.default) / spec.default) * 100)}%)
-                  </span>
-                )}
-              </span>
+        {WEIGHT_SPECS.map((spec) => {
+          const percent = ((values[spec.key] - spec.min) / (spec.max - spec.min)) * 100
+          return (
+            <div key={spec.key}>
+              <div className="flex items-baseline justify-between gap-2">
+                <label htmlFor={`weight-${spec.key}`} className="text-xs font-medium text-slate-700">
+                  {spec.label}
+                </label>
+                <span className="font-mono text-2xs text-slate-500">
+                  {values[spec.key].toLocaleString()}
+                  {values[spec.key] !== spec.default && (
+                    <span className="ml-1 text-sky-600">
+                      ({values[spec.key] > spec.default ? '+' : ''}
+                      {Math.round(((values[spec.key] - spec.default) / spec.default) * 100)}%)
+                    </span>
+                  )}
+                </span>
+              </div>
+              {/* Read-only echo of the slider's position - the native input
+                  below carries the real interaction; this is purely the
+                  numeric-hierarchy polish, neutral-toned per the icon rule
+                  (no colour meaning is being introduced here). */}
+              <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
+                <div
+                  className="h-full rounded-full bg-slate-900"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+              <input
+                id={`weight-${spec.key}`}
+                type="range"
+                min={spec.min}
+                max={spec.max}
+                step={spec.step}
+                value={values[spec.key]}
+                onChange={(event) =>
+                  setValues((prev) => ({ ...prev, [spec.key]: Number(event.target.value) }))
+                }
+                className="mt-1 w-full accent-slate-900"
+              />
+              <p className="mt-0.5 text-2xs text-slate-500">{spec.description}</p>
             </div>
-            <input
-              id={`weight-${spec.key}`}
-              type="range"
-              min={spec.min}
-              max={spec.max}
-              step={spec.step}
-              value={values[spec.key]}
-              onChange={(event) =>
-                setValues((prev) => ({ ...prev, [spec.key]: Number(event.target.value) }))
-              }
-              className="mt-1 w-full accent-slate-900"
-            />
-            <p className="mt-0.5 text-[11px] text-slate-400">{spec.description}</p>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       <div className="mt-4 flex items-center gap-2">

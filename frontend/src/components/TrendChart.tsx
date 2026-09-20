@@ -41,7 +41,7 @@ export function TrendChart({ series }: { series: TrendSeries }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3.5 py-3">
       <div className="flex items-baseline justify-between">
-        <p className="text-[11px] font-medium tracking-wide text-slate-500 uppercase">
+        <p className="text-2xs font-medium tracking-wide text-slate-500 uppercase">
           {series.label}
         </p>
         {latest && (
@@ -67,7 +67,7 @@ export function TrendChart({ series }: { series: TrendSeries }) {
           className="stroke-slate-200"
           strokeWidth={1}
         />
-        <text x={4} y={y(min) + 3} className="fill-slate-400 text-[9px]">
+        <text x={4} y={y(min) + 3} className="fill-slate-500 text-3xs">
           {min.toFixed(0)}
         </text>
         <line
@@ -78,7 +78,7 @@ export function TrendChart({ series }: { series: TrendSeries }) {
           className="stroke-slate-100"
           strokeWidth={1}
         />
-        <text x={4} y={y(max) + 3} className="fill-slate-400 text-[9px]">
+        <text x={4} y={y(max) + 3} className="fill-slate-500 text-3xs">
           {max.toFixed(0)}
         </text>
 
@@ -108,13 +108,13 @@ export function TrendChart({ series }: { series: TrendSeries }) {
             x={x(i)}
             y={HEIGHT - 6}
             textAnchor="middle"
-            className="fill-slate-400 text-[9px]"
+            className="fill-slate-500 text-3xs"
           >
             {formatDate(points[i]!.generatedAt)}
           </text>
         ))}
       </svg>
-      <p className="mt-1 text-[11px] text-slate-500">{series.detail}</p>
+      <p className="mt-1 text-2xs text-slate-500">{series.detail}</p>
     </div>
   )
 }

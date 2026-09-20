@@ -107,6 +107,14 @@ export interface Corridor {
    * joined at seed time. `null` when neither station has a known state -
    * never guessed as "not at risk". */
   seasonalRiskFlag: 'monsoon-risk' | 'none' | 'flood-prone' | null
+  /**
+   * fulldata-ktv-psa branch only: this Corridor doc is one physical LINE of
+   * a real KTV-PSA block section (`_id` = "<blockSection>#L<lineNumber>").
+   * Absent/undefined on corridors seeded by the original datameet/data.gov.in
+   * pipeline.
+   */
+  blockSection?: string
+  lineNumber?: number
 }
 
 export interface CorridorDetail extends Corridor {
@@ -144,6 +152,18 @@ export interface Asset {
   criticalityBreakdown: Record<string, number>
   dominantCriticalityFactor: string | null
   synthetic: boolean
+  /**
+   * fulldata-ktv-psa branch only: the calibrated LightGBM risk model's
+   * feature set (see optimizer/app/core/risk.py). Absent/undefined on assets
+   * seeded by the original pipeline.
+   */
+  blockSection?: string
+  lineNumber?: number
+  ageYears?: number
+  condition?: number
+  openDefectsCount?: number
+  daysSinceMaintenance?: number
+  tonnageStress?: number
 }
 
 export interface Task {
@@ -181,6 +201,9 @@ export interface Task {
   failureRiskScore: number | null
   status: 'pending' | 'scheduled' | 'deferred'
   synthetic: boolean
+  /** fulldata-ktv-psa branch only: denormalised from the asset. */
+  blockSection?: string
+  lineNumber?: number
 }
 
 /* -------------------------------------------------------------------------- */
@@ -287,6 +310,26 @@ export interface ScheduleMetrics {
   blockMinutesCapacity: number
   blockUtilisationPct: number
   unusedBlockMinutes: number
+}
+
+/**
+ * fulldata-ktv-psa branch only: SIH problem statement 26027's headline
+ * "maximize asset availability" metric - see scheduleOrchestrator.ts's
+ * computeAssetAvailability for how this is derived. `worstAssets` is capped
+ * (lowest-availability assets, not every asset touched by the plan).
+ */
+export interface AssetAvailability {
+  overallPct: number
+  corridorMinutesCapacity: number
+  assetsTouched: number
+  worstAssets: Array<{
+    assetId: string
+    corridorId: string
+    department: string | null
+    blockSection: string | null
+    scheduledMinutes: number
+    availabilityPct: number
+  }>
 }
 
 /** PRD 9.5 typed taxonomy, derived by the optimizer (see lib/conflicts.ts). */
@@ -422,6 +465,14 @@ export interface Schedule {
   comparisonToBaseline: ComparisonToBaseline | null
   /** The full baseline result, including its real conflict report. */
   baseline: BaselineResult | null
+  /**
+   * fulldata-ktv-psa branch only: SIH problem statement 26027's own headline
+   * goal ("maximize asset availability"), distinct from `metrics.
+   * blockUtilisationPct` (how much of the ALLOCATED window got used vs. how
+   * much of the day an asset stayed available). `null` on a plan where this
+   * was not computed (e.g. an emergency re-solve - see emergencyService.ts).
+   */
+  assetAvailability: AssetAvailability | null
   inputSummary: { taskCount: number; corridorCount: number; prioritySource: string }
   /** Best-effort optimizer calls that failed (D-036). Surfaced, not swallowed. */
   generationErrors: Array<{ call: string; message: string; code: string }>
@@ -653,9 +704,20 @@ export const api = createApi({
       providesTags: ['Schedule', 'Approval'],
     }),
 
-    /** The most recently generated plan. 404s until one has been generated. */
-    getLatestSchedule: builder.query<{ data: Schedule }, void>({
-      query: () => '/schedules/latest',
+    /**
+     * The most recently generated plan. 404s until one has been generated.
+     *
+     * `horizonDays`, when given, scopes this to the latest plan generated AT
+     * that horizon - so weekly (7) and monthly (30) each have their own RTK
+     * Query cache entry and their own independent "current plan" server-side
+     * (backend/src/services/scheduleOrchestrator.ts's findLatestSchedule).
+     * That is what lets the dashboard pre-solve the other horizon in the
+     * background without it silently stealing "latest" out from under
+     * whichever horizon is currently on screen (dashboard UX fix).
+     */
+    getLatestSchedule: builder.query<{ data: Schedule }, { horizonDays?: 7 | 30 } | void>({
+      query: (args) =>
+        args?.horizonDays ? `/schedules/latest?horizonDays=${args.horizonDays}` : '/schedules/latest',
       providesTags: ['Schedule'],
     }),
 

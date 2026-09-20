@@ -1,6 +1,6 @@
 /**
  * Wires one page's tour into the guided-walkthrough mechanism: auto-start on
- * a first-ever visit, or on-demand via "Replay walkthrough" (`AppHeader`),
+ * a first-ever visit, or on-demand via "Replay walkthrough" (`Sidebar`),
  * whichever comes first. Extracted once the walkthrough grew from covering
  * just the Controller Dashboard to every route (see docs/DECISIONS.md D-072
  * addendum) - the same ~15 lines were about to be pasted into nine page

@@ -2,7 +2,7 @@
  * Guided-walkthrough state - the one piece of tour state that genuinely
  * crosses component boundaries.
  *
- * `AppHeader` (the "Replay walkthrough" button) and the page that owns the
+ * `Sidebar` (the "Replay walkthrough" button) and the page that owns the
  * steps (e.g. `ControllerDashboard`) are SIBLINGS under `<App>`, not
  * parent/child (`App.tsx` renders them side by side inside `<Routes>`), so
  * this cannot be local `useState` on either one - it is exactly the kind of
@@ -25,7 +25,7 @@ export interface TourState {
   steps: TourStep[]
   stepIndex: number
   /** Set by "Replay walkthrough"; the target page consumes it (starts its
-   * own tour, then clears this) rather than the header knowing tour content
+   * own tour, then clears this) rather than the sidebar knowing tour content
    * for a page it did not render. */
   replayRequested: boolean
 }

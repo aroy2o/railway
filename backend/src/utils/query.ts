@@ -2,13 +2,25 @@
  * Shared query-parameter schemas and the list-response envelope.
  *
  * Every list endpoint validates through these, so pagination behaves the same
- * everywhere and no route can accidentally ship an unbounded result set - the
- * corridors collection has 10,149 documents, and returning all of them because
- * a limit was forgotten is exactly the failure mode to design out.
+ * everywhere and no route can accidentally ship an unbounded result set - a
+ * full national corridor ingestion (PRD Section 5.1's "not the national
+ * dataset" disclaimer implies one exists) could run to five figures of
+ * documents, and returning all of them because a limit was forgotten is
+ * exactly the failure mode to design out.
+ *
+ * 3000 (raised from 200 on the fulldata-ktv-psa branch): the largest
+ * single-corridor-scope collection today is assets at ~2,300 - the old 200
+ * cap silently dropped most of the backlog's assets/tasks out of every
+ * dashboard lookup once this branch's real dataset replaced the ~89-task
+ * demo corpus the original limit was sized for, which surfaced as
+ * BlockDetailPanel's "not in the currently loaded backlog" gap notice for
+ * any task past the first 200 by severity. Still well under a future
+ * national-scope corridors collection, so a forgotten limit there still
+ * can't ship the whole thing.
  */
 import { z } from 'zod';
 
-export const MAX_LIMIT = 200;
+export const MAX_LIMIT = 3000;
 export const DEFAULT_LIMIT = 50;
 
 /**

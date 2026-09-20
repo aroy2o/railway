@@ -45,7 +45,7 @@ export const DASHBOARD_TOUR_STEPS: TourStep[] = [
       'This is the primary screen for planning maintenance blocks. Everything on it comes from ' +
       'one schedule document produced by a real constraint solver run — nothing is invented in ' +
       'the browser. This short tour points out what each panel is and, just as importantly, what ' +
-      'it is honestly NOT claiming. You can replay it any time from "Replay walkthrough" in the header.',
+      'it is honestly NOT claiming. You can replay it any time from "Replay walkthrough" in the sidebar.',
   },
   {
     id: 'generate',
@@ -166,7 +166,7 @@ export const DASHBOARD_TOUR_STEPS: TourStep[] = [
     body:
       'Every other screen — Baseline vs AI, Approvals & audit, DRM oversight, and the read-only ' +
       'reference pages — has its own short walkthrough too, shown automatically the first time ' +
-      'you open it. Come back to "Replay walkthrough" in the header any time — it always replays ' +
+      'you open it. Come back to "Replay walkthrough" in the sidebar any time — it always replays ' +
       'whichever page you are currently looking at.',
   },
 ]

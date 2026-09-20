@@ -18,6 +18,7 @@
  * published plan" - genuinely useful ("when is my crew working"), and still
  * literally read-only.
  */
+import { CalendarCheck, ClipboardPlus, ListChecks, Send } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 
 import {
@@ -46,6 +47,22 @@ const DURATION_HINT: Record<Department, [number, number]> = {
   Engineering: [120, 240],
   'S&T': [60, 120],
   TRD: [90, 180],
+}
+
+/**
+ * Mirrors `backend/src/routes/tasks.ts`'s own `SLA_DAYS_BY_SEVERITY` exactly
+ * (itself a duplicate of `data/generators/config.py`'s constant, PRD 5.2) -
+ * this is the REAL rule the server applies to whatever severity is submitted
+ * here, not a UI-only estimate, so showing it beside the picker is honest,
+ * not decorative: an engineer choosing severity is choosing the SLA clock.
+ */
+const SLA_DAYS_BY_SEVERITY: Record<number, number> = { 5: 30, 4: 30, 3: 60, 2: 90, 1: 90 }
+const SEVERITY_LABEL: Record<number, string> = {
+  5: 'Critical',
+  4: 'High',
+  3: 'Moderate',
+  2: 'Low',
+  1: 'Minimal',
 }
 
 export function DeptEngineerPortal() {
@@ -129,7 +146,15 @@ export function DeptEngineerPortal() {
       />
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-4 text-sm font-semibold text-slate-900">Log a new request (FR1.1)</h2>
+        <div className="mb-4 flex items-center gap-2.5">
+          <span
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600"
+            aria-hidden="true"
+          >
+            <ClipboardPlus className="h-3.5 w-3.5" />
+          </span>
+          <h2 className="text-sm font-semibold text-slate-900">Log a new request (FR1.1)</h2>
+        </div>
 
         <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -201,12 +226,16 @@ export function DeptEngineerPortal() {
               onChange={(event) => setSeverity(Number(event.target.value))}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
             >
-              {[1, 2, 3, 4, 5].map((value) => (
+              {[5, 4, 3, 2, 1].map((value) => (
                 <option key={value} value={value}>
-                  {value}
+                  {value} — {SEVERITY_LABEL[value]} ({SLA_DAYS_BY_SEVERITY[value]}-day SLA)
                 </option>
               ))}
             </select>
+            <p className="mt-1 text-2xs text-slate-500">
+              Sets the real SLA due date the scheduler prioritises against — higher severity, tighter
+              deadline.
+            </p>
           </div>
 
           <div>
@@ -222,7 +251,7 @@ export function DeptEngineerPortal() {
               onChange={(event) => setDuration(Number(event.target.value))}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
             />
-            <p className="mt-1 text-[11px] text-slate-400">
+            <p className="mt-1 text-2xs text-slate-500">
               Typical {department} range: {DURATION_HINT[department][0]}–{DURATION_HINT[department][1]} min
             </p>
           </div>
@@ -251,7 +280,7 @@ export function DeptEngineerPortal() {
               Required resources (optional)
             </label>
             <div className="flex flex-wrap gap-2">
-              {!corridorId && <span className="text-xs text-slate-400">Pick a corridor first</span>}
+              {!corridorId && <span className="text-xs text-slate-500">Pick a corridor first</span>}
               {resources.data?.data.map((resource) => {
                 const checked = resourceIds.includes(resource._id)
                 return (
@@ -296,8 +325,9 @@ export function DeptEngineerPortal() {
             <button
               type="submit"
               disabled={createState.isLoading || !corridorId || !assetId}
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
             >
+              <Send className="h-3.5 w-3.5" aria-hidden="true" />
               {createState.isLoading ? 'Submitting…' : 'Submit request'}
             </button>
           </div>
@@ -305,7 +335,15 @@ export function DeptEngineerPortal() {
       </section>
 
       <section>
-        <h2 className="mb-3 text-sm font-semibold text-slate-900">My submitted requests</h2>
+        <div className="mb-3 flex items-center gap-2.5">
+          <span
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600"
+            aria-hidden="true"
+          >
+            <ListChecks className="h-3.5 w-3.5" />
+          </span>
+          <h2 className="text-sm font-semibold text-slate-900">My submitted requests</h2>
+        </div>
         <QueryState
           isLoading={myRequests.isLoading}
           error={myRequests.error}
@@ -346,9 +384,17 @@ export function DeptEngineerPortal() {
       </section>
 
       <section>
-        <h2 className="mb-3 text-sm font-semibold text-slate-900">
-          Published plan — {department} blocks
-        </h2>
+        <div className="mb-3 flex items-center gap-2.5">
+          <span
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600"
+            aria-hidden="true"
+          >
+            <CalendarCheck className="h-3.5 w-3.5" />
+          </span>
+          <h2 className="text-sm font-semibold text-slate-900">
+            Published plan — {department} blocks
+          </h2>
+        </div>
         <p className="mb-3 text-xs text-slate-500">Read-only. Ask your Controller for changes.</p>
         {publishedNotFound ? (
           <p className="px-1 text-sm text-slate-500">No plan has been published yet.</p>

@@ -37,10 +37,27 @@ export interface GatherOptions {
   horizonDays?: number;
 }
 
-/** One asset's simulated degradation series, for the FR2.2 risk model (T16). */
+/**
+ * One asset's calibrated-LightGBM risk-model feature set (FR2.2, PRD 9.1).
+ *
+ * fulldata-ktv-psa branch: replaces the original degradation-history shape -
+ * see optimizer/app/core/risk.py for the full explanation of the model swap.
+ */
 export interface AssetHistory {
   assetId: string;
-  degradationHistory: Array<{ healthMetric: number }>;
+  department?: 'Engineering' | 'S&T' | 'TRD';
+  blockSection?: string;
+  lineNumber?: number;
+  ageYears?: number;
+  condition?: number;
+  openDefectsCount?: number;
+  openDefectsSev0?: number;
+  openDefectsSev1?: number;
+  openDefectsSev2?: number;
+  openDefectsSev3?: number;
+  daysSinceMaintenance?: number;
+  tonnageStress?: number;
+  month?: number;
 }
 
 export interface GatheredScenario {
@@ -81,11 +98,16 @@ export async function gatherScenario({
 
   // The FR2.1 criticality score is real measured-anchored data and only Node
   // can reach it, so the join happens here (D-032).
-  // `degradationHistory` comes along for T16's FR2.2 risk model. It is the one
-  // heavy field on an asset, so it is fetched here once for the assets this
-  // plan actually touches rather than on every asset read.
+  // The risk-model feature fields come along for T16's FR2.2 risk model
+  // (fulldata-ktv-psa branch: calibrated LightGBM, see optimizer/app/core/
+  // risk.py). Fetched here once for the assets this plan actually touches
+  // rather than on every asset read.
   const assets = await Asset.find({ _id: { $in: tasks.map((task) => task.assetId) } })
-    .select('_id criticalityScore degradationHistory')
+    .select(
+      '_id criticalityScore department blockSection lineNumber ageYears condition ' +
+        'openDefectsCount openDefectsSev0 openDefectsSev1 openDefectsSev2 openDefectsSev3 ' +
+        'daysSinceMaintenance tonnageStress month',
+    )
     .lean();
   const criticalityByAsset = new Map(assets.map((asset) => [asset._id, asset.criticalityScore]));
 
@@ -114,11 +136,21 @@ export async function gatherScenario({
     };
   });
 
-  const assetHistories = assets.map((asset) => ({
+  const assetHistories: AssetHistory[] = assets.map((asset) => ({
     assetId: asset._id,
-    degradationHistory: (asset.degradationHistory ?? []).map((point) => ({
-      healthMetric: point.healthMetric,
-    })),
+    department: asset.department,
+    blockSection: asset.blockSection,
+    lineNumber: asset.lineNumber,
+    ageYears: asset.ageYears,
+    condition: asset.condition,
+    openDefectsCount: asset.openDefectsCount,
+    openDefectsSev0: asset.openDefectsSev0,
+    openDefectsSev1: asset.openDefectsSev1,
+    openDefectsSev2: asset.openDefectsSev2,
+    openDefectsSev3: asset.openDefectsSev3,
+    daysSinceMaintenance: asset.daysSinceMaintenance,
+    tonnageStress: asset.tonnageStress,
+    month: asset.month,
   }));
 
   const missingCriticality: string[] = [];

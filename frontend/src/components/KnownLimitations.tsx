@@ -24,6 +24,7 @@
  * Deliberately understated rather than alarming: these are known, scoped gaps,
  * not defects. But they are visible.
  */
+import { AlertOctagon, ChevronRight } from 'lucide-react'
 import { useState } from 'react'
 
 import type { KnownGaps, Schedule } from '../api/apiSlice.ts'
@@ -83,17 +84,26 @@ export function KnownLimitations({
         className="flex w-full items-center justify-between gap-3 text-left"
         aria-expanded={expanded}
       >
-        <h2 className="text-sm font-semibold text-slate-900">
-          Known limitations of this plan
-          {!expanded && (
-            <span className="ml-2 font-normal text-slate-500">
-              — {totalFlags === 0 ? 'none flagged' : `${totalFlags} flagged`}
-            </span>
-          )}
-        </h2>
-        <span className="shrink-0 text-xs text-slate-400" aria-hidden="true">
-          {expanded ? '▾' : '▸'}
+        <span className="flex items-center gap-2.5">
+          <span
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-200 text-slate-600"
+            aria-hidden="true"
+          >
+            <AlertOctagon className="h-3.5 w-3.5" />
+          </span>
+          <h2 className="text-sm font-semibold text-slate-900">
+            Known limitations of this plan
+            {!expanded && (
+              <span className="ml-2 font-normal text-slate-500">
+                — {totalFlags === 0 ? 'none flagged' : `${totalFlags} flagged`}
+              </span>
+            )}
+          </h2>
         </span>
+        <ChevronRight
+          className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${expanded ? 'rotate-90' : ''}`}
+          aria-hidden="true"
+        />
       </button>
 
       {expanded && (
@@ -118,13 +128,13 @@ export function KnownLimitations({
                       </span>
                       <span className="text-xs font-medium text-slate-800">{group.label}</span>
                       {group.enforcedBy.length > 0 && (
-                        <span className="ml-auto text-[10px] text-slate-400">
+                        <span className="ml-auto text-3xs text-slate-500">
                           would be enforced by {group.enforcedBy.join(', ')}
                         </span>
                       )}
                     </div>
 
-                    <p className="mt-1 text-[11px] text-slate-600">
+                    <p className="mt-1 text-2xs text-slate-600">
                       <span className="font-medium text-slate-700">Resolution: </span>
                       {group.strategies.join(' / ')}
                     </p>
@@ -133,16 +143,16 @@ export function KnownLimitations({
                       {group.conflicts.map((conflict, index) => (
                         <li
                           key={`${conflict.type}-${conflict.taskIds.join('-')}-${index}`}
-                          className="text-[11px] text-slate-500"
+                          className="text-2xs text-slate-500"
                         >
-                          <span className="font-mono text-slate-400">
+                          <span className="font-mono text-slate-500">
                             {conflict.corridorId ?? '—'} · {conflict.date ?? '—'}
                           </span>{' '}
                           {conflict.detail}
                         </li>
                       ))}
                       {group.count > group.conflicts.length && (
-                        <li className="text-[11px] text-slate-400">
+                        <li className="text-2xs text-slate-500">
                           + {group.count - group.conflicts.length} more of this type
                         </li>
                       )}
@@ -174,10 +184,10 @@ export function KnownLimitations({
 
           {notYetDetectable.length > 0 && (
             <div className="mt-3 border-t border-slate-200 pt-2.5">
-              <p className="text-[11px] font-medium text-slate-700">Not checked for at all</p>
+              <p className="text-2xs font-medium text-slate-700">Not checked for at all</p>
               <ul className="mt-1 space-y-1">
                 {notYetDetectable.map((entry) => (
-                  <li key={entry.type} className="text-[11px] text-slate-500">
+                  <li key={entry.type} className="text-2xs text-slate-500">
                     <span className="font-medium text-slate-600">
                       {entry.type.replace(/_/g, ' ').toLowerCase()}
                     </span>{' '}
@@ -190,10 +200,10 @@ export function KnownLimitations({
 
           {checkedAndClear.length > 0 && (
             <div className="mt-3 border-t border-slate-200 pt-2.5">
-              <p className="text-[11px] font-medium text-emerald-700">Checked, and none found</p>
+              <p className="text-2xs font-medium text-emerald-700">Checked, and none found</p>
               <ul className="mt-1 space-y-1">
                 {checkedAndClear.map((entry) => (
-                  <li key={entry.type} className="text-[11px] text-slate-500">
+                  <li key={entry.type} className="text-2xs text-slate-500">
                     <span className="font-medium text-slate-600">
                       {entry.type.replace(/_/g, ' ').toLowerCase()}
                     </span>{' '}
@@ -211,7 +221,7 @@ export function KnownLimitations({
               </p>
               <ul className="mt-1 space-y-0.5">
                 {generationErrors.map((error) => (
-                  <li key={error.call} className="text-[11px] text-amber-800">
+                  <li key={error.call} className="text-2xs text-amber-800">
                     <span className="font-mono">{error.call}</span> — {error.message}
                   </li>
                 ))}

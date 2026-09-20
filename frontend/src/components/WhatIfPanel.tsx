@@ -9,6 +9,7 @@
  * option" is pressed, which reuses the exact FR6.2 override path T15 built
  * and T19 gates (D-065) - never a new, unreviewed write.
  */
+import { Check, FlaskConical, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import {
@@ -80,19 +81,19 @@ function OptionCard({
           <p className="text-xs font-semibold text-slate-900">
             {option.label}
             {recommended && (
-              <span className="ml-1.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">
+              <span className="ml-1.5 rounded bg-sky-100 px-1.5 py-0.5 text-3xs font-semibold text-sky-800">
                 recommended
               </span>
             )}
           </p>
           <span
-            className={`mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset ${BADGE_TONE[tone]}`}
+            className={`mt-1 inline-block rounded px-1.5 py-0.5 text-3xs font-medium ring-1 ring-inset ${BADGE_TONE[tone]}`}
           >
             {summariseConsequence(option)}
           </span>
           {isUnproven(option) && (
             <span
-              className="ml-1.5 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500"
+              className="ml-1.5 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-3xs text-slate-500"
               title="The solver found this within its time budget but did not prove it is the single best possible placement."
             >
               not proven optimal ({option.status})
@@ -101,10 +102,10 @@ function OptionCard({
         </div>
       </div>
 
-      <p className="mt-1.5 text-[11px] text-slate-600">{option.reason}</p>
+      <p className="mt-1.5 text-2xs text-slate-600">{option.reason}</p>
 
       {option.kind === 'traffic-block' ? (
-        <p className="mt-1.5 text-[11px] text-slate-400">
+        <p className="mt-1.5 text-2xs text-slate-500">
           Not applicable from here — see the Deferred Work panel's traffic-block costing.
         </p>
       ) : applying ? (
@@ -114,39 +115,40 @@ function OptionCard({
             value={reason}
             onChange={(event) => setReason(event.target.value)}
             placeholder="Why apply this option? (required — recorded in the audit trail)"
-            className="w-full rounded border border-slate-200 px-2 py-1.5 text-[11px] focus:border-slate-400 focus:outline-none"
+            className="w-full rounded border border-slate-200 px-2 py-1.5 text-2xs focus:border-slate-400 focus:outline-none"
           />
           <div className="flex items-center gap-2">
             <button
               type="button"
               disabled={reason.trim().length < 8 || result.isLoading}
               onClick={() => void onApply()}
-              className="rounded bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded bg-slate-900 px-2.5 py-1 text-2xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
             >
               {result.isLoading ? 'Applying…' : 'Confirm'}
             </button>
             <button
               type="button"
               onClick={() => setApplying(false)}
-              className="text-[11px] text-slate-500 hover:text-slate-800"
+              className="text-2xs text-slate-500 hover:text-slate-800"
             >
               Cancel
             </button>
           </div>
           {result.isSuccess && (
-            <p className="text-[11px] text-emerald-700">
-              ✓ Applied as a manual override — re-validated, same as any override (FR6.2).
+            <p className="flex items-center gap-1 text-2xs text-emerald-700">
+              <Check className="h-3 w-3 shrink-0" aria-hidden="true" />
+              Applied as a manual override — re-validated, same as any override (FR6.2).
             </p>
           )}
           {result.error && (
-            <p className="text-[11px] text-rose-700">{describeApiError(result.error)}</p>
+            <p className="text-2xs text-rose-700">{describeApiError(result.error)}</p>
           )}
         </div>
       ) : (
         <button
           type="button"
           onClick={() => setApplying(true)}
-          className="mt-2 rounded border border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+          className="mt-2 rounded border border-slate-300 px-2.5 py-1 text-2xs font-medium text-slate-700 hover:bg-slate-50"
         >
           Apply this option…
         </button>
@@ -178,20 +180,29 @@ export function WhatIfPanel({
   return (
     <section className="rounded-xl border-2 border-violet-300 bg-white shadow-sm">
       <header className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-3">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900">
-            What if — <span className="font-mono">{taskId}</span>
-          </h3>
-          <p className="text-xs text-slate-500">
-            A real re-solve of the same CP-SAT model, with this task's placement forced (FR5).
-          </p>
+        <div className="flex items-start gap-2.5">
+          <span
+            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-violet-100 text-violet-700"
+            aria-hidden="true"
+          >
+            <FlaskConical className="h-3.5 w-3.5" />
+          </span>
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">
+              What if — <span className="font-mono">{taskId}</span>
+            </h3>
+            <p className="text-xs text-slate-500">
+              A real re-solve of the same CP-SAT model, with this task's placement forced (FR5).
+            </p>
+          </div>
         </div>
         <button
           type="button"
           onClick={onClose}
-          className="rounded px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
+          aria-label="Close what-if panel"
+          className="rounded px-2 py-1 text-slate-500 hover:bg-slate-100"
         >
-          ✕
+          <X className="h-4 w-4" aria-hidden="true" />
         </button>
       </header>
 
@@ -219,7 +230,7 @@ export function WhatIfPanel({
               />
             ))}
           </div>
-          <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+          <p className="rounded-lg bg-slate-50 px-3 py-2 text-2xs text-slate-500">
             {data.framing}
           </p>
         </div>

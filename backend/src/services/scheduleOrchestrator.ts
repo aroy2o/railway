@@ -18,6 +18,7 @@ import {
   requestPriorityQueue,
   type BaselineSchedule,
   type OptimizedSchedule,
+  type OptimizerTask,
   type PolicyWeightsOverride,
   type PriorityQueueEntry,
   type RiskAssessment,
@@ -94,6 +95,12 @@ export async function generateSchedule({
   const contestableTaskIds = baseline?.contestableTaskIds ?? [];
   const scheduleId = `SCH-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 17)}`;
 
+  // SIH problem statement 26027's own headline goal ("maximize asset
+  // availability"), not just block utilisation - computed here rather than
+  // by the optimizer because the task->asset join it needs only Node has
+  // (OptimizerTask carries no assetId - see optimizerClient.ts).
+  const assetAvailability = await computeAssetAvailability(optimized, gathered.corridorCount);
+
   const document: ISchedule = {
     _id: scheduleId,
     horizon: optimized.horizon,
@@ -127,8 +134,11 @@ export async function generateSchedule({
       framing: riskResult.framing,
     },
     baseline: baseline ?? null,
+    assetAvailability,
     contestableTaskIds,
-    comparisonToBaseline: baseline ? buildComparison(optimized, baseline) : null,
+    comparisonToBaseline: baseline
+      ? buildComparison(optimized, baseline, payload.tasks, riskResult.framing)
+      : null,
     inputSummary: {
       taskCount: gathered.taskCount,
       corridorCount: gathered.corridorCount,
@@ -230,6 +240,27 @@ export interface ComparisonSide {
   overSubscribedWindows: number;
   blockMinutesUsed: number;
   blockUtilisationPct: number;
+  /**
+   * D-093. The ν objective term's own proxy (fewer, fuller possessions) -
+   * already computed identically by both engines' `metrics()`, just not
+   * previously carried into the comparison.
+   */
+  blocksUsed: number;
+  /**
+   * D-093. Of the contestable tasks THIS engine scheduled, how many landed
+   * on or before their real `slaDueDate`. A split task's LAST segment
+   * decides it, matching the optimizer's own `within_sla` CP-SAT variable
+   * exactly (`scheduler.py`'s `last_window.day <= task.sla_due_date`).
+   */
+  contestableWithinSla: number;
+  /** D-093. Of `BaselineComparison.criticalContestableCount`, how many did this engine schedule. */
+  criticalScheduled: number;
+  /**
+   * D-093. Of `BaselineComparison.highRiskContestableCount`, how many did
+   * this engine schedule. Always 0 when `riskFraming` is null - never
+   * render this number without that framing alongside it (PRD 9.1).
+   */
+  highRiskScheduled: number;
 }
 
 export interface BaselineComparison {
@@ -244,6 +275,31 @@ export interface BaselineComparison {
    */
   splitOnlyTaskCount: number;
   structurallyImpossibleCount: number;
+  /**
+   * D-093 - priority coverage's fixed denominator. Severity 5 is PRD 5.2's
+   * own discrete "critical" defect-severity bucket, not a top-N cut of the
+   * continuous `priorityScore` - so it needs no calibration argument, and
+   * is identical for both engines by construction (a fact about the task,
+   * not about who schedules it).
+   */
+  criticalContestableCount: number;
+  /**
+   * D-093 - risk reduction's fixed denominator. The top quartile by
+   * `failureRiskScore` among contestable tasks the model actually scored -
+   * a RELATIVE cut, since the calibrated probability `risk.py` produces has
+   * no absolute "this is high risk" line named anywhere in PRD 9.1 or the
+   * model itself. 0 whenever `riskFraming` is null (no task this generation
+   * carries a real score).
+   */
+  highRiskContestableCount: number;
+  /**
+   * D-093 - `risk.py`'s PRD 9.1 FRAMING, carried through verbatim (never
+   * paraphrased - NG4). Null whenever no task in this generation carries a
+   * real risk score (the /risk call was skipped or failed - see
+   * `applyAssetRisk`'s `empty` return) - the frontend must never render
+   * `highRiskContestableCount`/`highRiskScheduled` without this alongside.
+   */
+  riskFraming: string | null;
   optimized: ComparisonSide;
   baseline: ComparisonSide;
   caveats: string[];
@@ -276,6 +332,12 @@ export interface BaselineComparison {
 function buildComparison(
   optimized: OptimizedSchedule,
   baseline: BaselineSchedule,
+  // D-093: the exact task list both engines solved against - real slaDueDate/
+  // severity/failureRiskScore, already gathered once for the /optimize and
+  // /baseline requests themselves, so no extra join or optimizer call is
+  // needed to add the four KPIs below.
+  tasks: OptimizerTask[],
+  riskFraming: string | null,
 ): BaselineComparison {
   const contestable = new Set(baseline.contestableTaskIds ?? []);
   const splitOnly = new Set(baseline.splitOnlyTaskIds ?? []);
@@ -325,6 +387,73 @@ function buildComparison(
 
   const totalTasks = (optimized.metrics.tasksScheduled ?? 0) + (optimized.metrics.tasksDeferred ?? 0);
 
+  // D-093: SLA compliance, computed from block dates directly rather than
+  // re-reading decisionLog's loosely-typed `contributingFactors` - the SAME
+  // logic then works for the baseline, whose decision log never carried a
+  // `withinSla` flag at all. A split task's LAST segment decides it, exactly
+  // matching scheduler.py's `within_sla` CP-SAT variable
+  // (`last_window.day <= task.sla_due_date`).
+  const taskById = new Map(tasks.map((task) => [task.taskId, task]));
+
+  const latestScheduledDateByTask = (
+    blocks: Array<{ date: string; taskIds: string[] }>,
+  ): Map<string, string> => {
+    const latest = new Map<string, string>();
+    for (const block of blocks) {
+      for (const taskId of block.taskIds) {
+        const current = latest.get(taskId);
+        // ISO date strings (YYYY-MM-DD) compare correctly lexicographically.
+        if (!current || block.date > current) latest.set(taskId, block.date);
+      }
+    }
+    return latest;
+  };
+  const optimizedLatestDate = latestScheduledDateByTask(optimized.blocks);
+  const baselineLatestDate = latestScheduledDateByTask(baseline.blocks);
+
+  const countWithinSla = (scheduled: Set<string>, latestDate: Map<string, string>): number => {
+    let count = 0;
+    for (const taskId of scheduled) {
+      const date = latestDate.get(taskId);
+      const task = taskById.get(taskId);
+      if (date && task && date <= task.slaDueDate) count += 1;
+    }
+    return count;
+  };
+
+  // D-093: priority coverage. PRD 5.2's severity scale is 1-5, but the real
+  // fulldata-ktv-psa corpus contains zero severity-5 defects (max observed:
+  // 4, on 59 of 935 real tasks) - a severity-5-only bucket would be a
+  // permanent, silent 0/0 on the actual demo dataset, not a rare edge case.
+  // Widened to severity >= 4 ("high severity", the top real band) so the
+  // card reports something on the corpus this ships against; still a fixed
+  // discrete PRD band, not a top-N cut of a continuous score, and identical
+  // for both engines by construction (a fact about the task, not about who
+  // schedules it).
+  const criticalIds = new Set(
+    tasks.filter((task) => contestable.has(task.taskId) && task.severity >= 4).map((task) => task.taskId),
+  );
+  const countMatching = (scheduled: Set<string>, ids: Set<string>): number => {
+    let count = 0;
+    for (const taskId of scheduled) if (ids.has(taskId)) count += 1;
+    return count;
+  };
+
+  // D-093: risk reduction. "Flagged high-risk" is the top quartile by
+  // `failureRiskScore` among contestable tasks the model actually scored -
+  // relative, not an absolute cutoff, since the calibrated probability has
+  // no PRD- or model-named "high risk" line to draw one against. Empty
+  // whenever `riskFraming` is null, so the frontend never has a nonzero
+  // count with nothing to caveat it.
+  const scoredContestable = riskFraming
+    ? tasks
+        .filter((task) => contestable.has(task.taskId) && task.failureRiskScore !== null)
+        .sort((a, b) => (b.failureRiskScore ?? 0) - (a.failureRiskScore ?? 0))
+    : [];
+  const highRiskIds = new Set(
+    scoredContestable.slice(0, Math.ceil(scoredContestable.length * 0.25)).map((task) => task.taskId),
+  );
+
   return {
     contestableTaskCount: contestable.size,
     splitOnlyTaskCount: splitOnly.size,
@@ -333,6 +462,9 @@ function buildComparison(
     // contestable set, silently miscounting every split-only task as
     // "impossible for both" (D-084).
     structurallyImpossibleCount: totalTasks - contestable.size - splitOnly.size,
+    criticalContestableCount: criticalIds.size,
+    highRiskContestableCount: highRiskIds.size,
+    riskFraming,
     optimized: {
       contestableScheduled: optimizedScheduled.size,
       splitOnlyScheduled: optimizedSplitOnly.size,
@@ -342,6 +474,10 @@ function buildComparison(
       overSubscribedWindows: 0,
       blockMinutesUsed: optimized.metrics.blockMinutesUsed ?? 0,
       blockUtilisationPct: optimized.metrics.blockUtilisationPct ?? 0,
+      blocksUsed: optimized.metrics.blocksUsed ?? 0,
+      contestableWithinSla: countWithinSla(optimizedScheduled, optimizedLatestDate),
+      criticalScheduled: countMatching(optimizedScheduled, criticalIds),
+      highRiskScheduled: countMatching(optimizedScheduled, highRiskIds),
     },
     baseline: {
       contestableScheduled: baselineScheduled.size,
@@ -352,6 +488,10 @@ function buildComparison(
       overSubscribedWindows: baseline.metrics.overSubscribedWindows ?? 0,
       blockMinutesUsed: baseline.metrics.blockMinutesUsed ?? 0,
       blockUtilisationPct: baseline.metrics.blockUtilisationPct ?? 0,
+      blocksUsed: baseline.metrics.blocksUsed ?? 0,
+      contestableWithinSla: countWithinSla(baselineScheduled, baselineLatestDate),
+      criticalScheduled: countMatching(baselineScheduled, criticalIds),
+      highRiskScheduled: countMatching(baselineScheduled, highRiskIds),
     },
     // Not decoration. A screen that renders the numbers without these is
     // making a claim the data does not support (D-031).
@@ -368,9 +508,104 @@ function buildComparison(
   };
 }
 
-/** Most recently generated schedule, or null if none exists. */
-export function findLatestSchedule(): Promise<ISchedule | null> {
-  return Schedule.findOne({}).sort({ generatedAt: -1 }).lean<ISchedule | null>().exec();
+/** Lowest-availability assets kept per plan - see ISchedule.assetAvailability. */
+const WORST_ASSETS_LIMIT = 50;
+
+/**
+ * SIH problem statement 26027's headline goal is to "maximize asset
+ * availability", not just block utilisation - `blockUtilisationPct` measures
+ * how much of the ALLOCATED maintenance window got used, which is a
+ * different question from how much of the day an asset stayed available for
+ * train operations. This answers that second question instead.
+ *
+ * `overallPct` is corridor-wide (1 - total block minutes used across every
+ * corridor / (corridor count * horizon minutes)). `worstAssets` goes one
+ * level deeper than the corridor aggregate the rest of this file works at:
+ * a corridor's block window can serve ONE asset while every other asset on
+ * that corridor stays fully available, so each asset's own downtime is
+ * summed from the tasks actually scheduled against it (via Task.assetId -
+ * OptimizerTask carries no assetId, so this join can only happen here, not
+ * in the optimizer), not the corridor's block time. Capped at
+ * WORST_ASSETS_LIMIT - the lowest-availability assets, which is what a
+ * Controller actually needs to see, not a dump of every touched asset.
+ */
+async function computeAssetAvailability(
+  optimized: OptimizedSchedule,
+  corridorCount: number,
+): Promise<NonNullable<ISchedule['assetAvailability']>> {
+  const horizonMinutes = optimized.horizonDays * 1440;
+  const corridorMinutesCapacity = corridorCount * horizonMinutes;
+  const blockMinutesUsed = optimized.metrics.blockMinutesUsed ?? 0;
+  const overallPct = round2(
+    corridorMinutesCapacity > 0 ? 100 * (1 - blockMinutesUsed / corridorMinutesCapacity) : 100,
+  );
+
+  const scheduledTaskIds = Array.from(new Set(optimized.blocks.flatMap((block) => block.taskIds ?? [])));
+  if (scheduledTaskIds.length === 0) {
+    return { overallPct, corridorMinutesCapacity, assetsTouched: 0, worstAssets: [] };
+  }
+
+  const scheduledTasks = await Task.find({ _id: { $in: scheduledTaskIds } })
+    .select('_id assetId estBlockDurationMins')
+    .lean();
+
+  const minutesByAsset = new Map<string, number>();
+  for (const task of scheduledTasks) {
+    if (!task.assetId) continue;
+    minutesByAsset.set(
+      task.assetId,
+      (minutesByAsset.get(task.assetId) ?? 0) + (task.estBlockDurationMins ?? 0),
+    );
+  }
+
+  const touchedAssets = await Asset.find({ _id: { $in: Array.from(minutesByAsset.keys()) } })
+    .select('_id corridorId department blockSection')
+    .lean();
+  const assetById = new Map(touchedAssets.map((asset) => [asset._id, asset]));
+
+  const worstAssets = Array.from(minutesByAsset.entries())
+    .map(([assetId, scheduledMinutes]) => {
+      const asset = assetById.get(assetId);
+      return {
+        assetId,
+        corridorId: asset?.corridorId ?? 'unknown',
+        department: asset?.department ?? null,
+        blockSection: asset?.blockSection ?? null,
+        scheduledMinutes,
+        availabilityPct: round2(100 * (1 - scheduledMinutes / horizonMinutes)),
+      };
+    })
+    .sort((a, b) => a.availabilityPct - b.availabilityPct)
+    .slice(0, WORST_ASSETS_LIMIT);
+
+  return {
+    overallPct,
+    corridorMinutesCapacity,
+    assetsTouched: minutesByAsset.size,
+    worstAssets,
+  };
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/**
+ * Most recently generated schedule, or null if none exists.
+ *
+ * `horizonDays`, when given, scopes this to the latest plan generated AT
+ * that horizon specifically, rather than the latest plan overall. This is
+ * what lets the frontend keep an independent "current plan" per horizon
+ * (weekly vs monthly) - pre-solving one in the background no longer steals
+ * the other's "latest" pointer, which previously made switching horizons
+ * either re-solve every time or silently show the wrong horizon's plan
+ * (dashboard UX fix, deferred work session - no PRD task #).
+ */
+export function findLatestSchedule(horizonDays?: number): Promise<ISchedule | null> {
+  return Schedule.findOne(horizonDays ? { horizonDays } : {})
+    .sort({ generatedAt: -1 })
+    .lean<ISchedule | null>()
+    .exec();
 }
 
 export async function findScheduleById(scheduleId: string): Promise<ISchedule> {

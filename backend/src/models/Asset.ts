@@ -56,6 +56,31 @@ export interface IAsset {
   failureRiskFraming: string | null;
   failureRiskComputedAt: Date | null;
   synthetic: boolean;
+
+  // --- fulldata-ktv-psa branch extensions ---------------------------------
+  // The calibrated LightGBM risk model's feature set (ported from
+  // full_data/release/integration_package/scoring.py), carried on the asset
+  // instead of `degradationHistory` so /risk can score it directly. All
+  // optional: absent/undefined on assets seeded by the original
+  // datameet/data.gov.in + linear-trend-heuristic pipeline.
+  blockSection?: string;
+  lineNumber?: number;
+  ageYears?: number;
+  condition?: number;
+  openDefectsCount?: number;
+  openDefectsSev0?: number;
+  openDefectsSev1?: number;
+  openDefectsSev2?: number;
+  openDefectsSev3?: number;
+  daysSinceMaintenance?: number;
+  tonnageStress?: number;
+  /**
+   * Static snapshot from full_data's asset_days.csv (1-24), NOT a
+   * live-advancing calendar month - see build_synthetic_fulldata.py module
+   * docstring. A known limitation inherited from full_data's own model
+   * (its README states the same).
+   */
+  month?: number;
 }
 
 export type AssetDocument = HydratedDocument<IAsset>;
@@ -99,6 +124,19 @@ const assetSchema = new Schema<IAsset>(
     failureRiskFraming: { type: String, default: null },
     failureRiskComputedAt: { type: Date, default: null },
     synthetic: { type: Boolean, default: true },
+
+    blockSection: { type: String, index: true },
+    lineNumber: { type: Number },
+    ageYears: { type: Number },
+    condition: { type: Number },
+    openDefectsCount: { type: Number },
+    openDefectsSev0: { type: Number },
+    openDefectsSev1: { type: Number },
+    openDefectsSev2: { type: Number },
+    openDefectsSev3: { type: Number },
+    daysSinceMaintenance: { type: Number },
+    tonnageStress: { type: Number },
+    month: { type: Number },
   },
   { versionKey: false, _id: false },
 );
