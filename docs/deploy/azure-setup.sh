@@ -51,7 +51,14 @@ echo "== 3. Azure AD app registration + OIDC federated credential for GitHub Act
 # This lets GitHub Actions authenticate to Azure with no stored client
 # secret - only client-id/tenant-id/subscription-id, which are not secret
 # in the same way a password is (still stored as repo secrets by convention).
-APP_ID=$(az ad app create --display-name "railway-blockplan-gh-actions" --query appId -o tsv)
+APP_ID=$(az ad app list \
+  --display-name "railway-blockplan-gh-actions" \
+  --query '[0].appId' -o tsv)
+if [ -z "$APP_ID" ]; then
+  APP_ID=$(az ad app create --display-name "railway-blockplan-gh-actions" --query appId -o tsv)
+else
+  echo "  Reusing existing GitHub Actions app registration."
+fi
 az ad sp create --id "$APP_ID" --output none 2>/dev/null || true
 
 az ad app federated-credential create \
@@ -61,7 +68,7 @@ az ad app federated-credential create \
     \"issuer\": \"https://token.actions.githubusercontent.com\",
     \"subject\": \"repo:${GITHUB_ORG}/${GITHUB_REPO}:ref:refs/heads/main\",
     \"audiences\": [\"api://AzureADTokenExchange\"]
-  }"
+  }" || echo "  github-main-branch credential already exists; continuing."
 
 # GitHub's OIDC subject includes the exact branch ref, so the current demo
 # branch needs its own federated credential as well as main.
@@ -72,7 +79,7 @@ az ad app federated-credential create \
     \"issuer\": \"https://token.actions.githubusercontent.com\",
     \"subject\": \"repo:${GITHUB_ORG}/${GITHUB_REPO}:ref:refs/heads/fulldata-ktv-psa\",
     \"audiences\": [\"api://AzureADTokenExchange\"]
-  }"
+  }" || echo "  github-fulldata-branch credential already exists; continuing."
 
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 TENANT_ID=$(az account show --query tenantId -o tsv)
