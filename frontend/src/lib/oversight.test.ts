@@ -68,6 +68,7 @@ function schedule(overrides: Partial<Schedule> = {}): Schedule {
     contestableTaskIds: [],
     comparisonToBaseline: null,
     baseline: null,
+    assetAvailability: null,
     inputSummary: { taskCount: 2, corridorCount: 1, prioritySource: 'fr2.3-priority-engine' },
     generationErrors: [],
     ...overrides,

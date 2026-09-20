@@ -382,12 +382,25 @@ export interface EmergencyReoptimizeResult extends OptimizedSchedule {
 }
 
 /** FR3 - run the CP-SAT optimizer (PRD Section 13). */
+/**
+ * `28 <= horizonDays <= 31` mirrors the optimizer's own `_solve_budget`
+ * (app/routers/optimizer.py) exactly - the same window it uses to switch from
+ * `SOLVER_MAX_SECONDS` (10s) to `SOLVER_MAX_SECONDS_MONTHLY` (45s). This side
+ * has to agree with that choice, not invent its own, or the HTTP timeout and
+ * the solve budget it is meant to cover drift apart again (see
+ * MONTHLY_TIMEOUT_MS in config/env.ts for how that happened once already).
+ */
+function isMonthlyHorizon(horizonDays: number): boolean {
+  return horizonDays >= 28 && horizonDays <= 31;
+}
+
 export async function requestOptimizedSchedule(
   payload: OptimizerScenario,
 ): Promise<OptimizedSchedule> {
   return (await requestOptimizer('/optimize', {
     method: 'POST',
     body: payload,
+    timeoutMs: isMonthlyHorizon(payload.horizonDays) ? config.optimizer.monthlyTimeoutMs : undefined,
   })) as OptimizedSchedule;
 }
 
@@ -468,9 +481,32 @@ export interface RiskResponse {
  * an input to the FR2.3 priority score, so it has to exist before /prioritize
  * and /optimize see the tasks.
  */
-export async function requestAssetRisk(
-  assets: Array<{ assetId: string; degradationHistory: Array<{ healthMetric: number }> }>,
-): Promise<RiskResponse> {
+/**
+ * fulldata-ktv-psa branch: the /risk contract's feature set, ported from
+ * full_data/release/integration_package/scoring.py (see optimizer/app/core/
+ * risk.py for the full explanation). Replaces the original
+ * `degradationHistory`-based shape. Every field beyond `assetId` is optional
+ * on the wire - the optimizer reports "not scored, missing X" per asset
+ * rather than rejecting the whole batch, so a caller need not filter first.
+ */
+export interface AssetRiskFeatures {
+  assetId: string;
+  department?: 'Engineering' | 'S&T' | 'TRD';
+  blockSection?: string;
+  lineNumber?: number;
+  ageYears?: number;
+  condition?: number;
+  openDefectsCount?: number;
+  openDefectsSev0?: number;
+  openDefectsSev1?: number;
+  openDefectsSev2?: number;
+  openDefectsSev3?: number;
+  daysSinceMaintenance?: number;
+  tonnageStress?: number;
+  month?: number;
+}
+
+export async function requestAssetRisk(assets: AssetRiskFeatures[]): Promise<RiskResponse> {
   return (await requestOptimizer('/risk', {
     method: 'POST',
     body: { assets },

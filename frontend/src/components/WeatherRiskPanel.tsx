@@ -9,6 +9,8 @@
  * into a score or a schedule change. Advisory only - this panel does not
  * offer to move anything, because the solver never did either (D-068).
  */
+import { CloudRain } from 'lucide-react'
+
 import type { WeatherRiskBlock } from '../api/apiSlice.ts'
 
 const FRAMING =
@@ -29,9 +31,17 @@ export function WeatherRiskPanel({ weatherRisk }: WeatherRiskPanelProps) {
       data-tour="dashboard-weather-risk"
       className="rounded-lg border border-sky-100 bg-sky-50/40 px-4 py-3"
     >
-      <h2 className="text-xs font-semibold tracking-wide text-slate-600 uppercase">
-        Seasonal risk (PRD 9.9)
-      </h2>
+      <div className="flex items-center gap-2">
+        <span
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-sky-100 text-sky-700"
+          aria-hidden="true"
+        >
+          <CloudRain className="h-3 w-3" />
+        </span>
+        <h2 className="text-xs font-semibold tracking-wide text-slate-600 uppercase">
+          Seasonal risk (PRD 9.9)
+        </h2>
+      </div>
       <p className="mt-1 text-xs text-slate-600">
         <span className="rounded bg-white px-1.5 py-0.5 font-semibold tabular-nums text-sky-800 ring-1 ring-sky-200 ring-inset">
           {weatherRisk.count}
@@ -45,23 +55,23 @@ export function WeatherRiskPanel({ weatherRisk }: WeatherRiskPanelProps) {
           {weatherRisk.blocks.slice(0, 5).map((block, index) => (
             <li
               key={`${block.corridorId}-${block.date}-${index}`}
-              className="text-[11px] text-slate-600"
+              className="text-2xs text-slate-600"
             >
-              <span className="font-mono text-slate-400">
+              <span className="font-mono text-slate-500">
                 {block.corridorId} · {block.date}
               </span>{' '}
               {block.taskIds.join(', ')} ({block.departments.join(', ')})
             </li>
           ))}
           {weatherRisk.count > 5 && (
-            <li className="text-[11px] text-slate-400">
+            <li className="text-2xs text-slate-500">
               + {weatherRisk.count - 5} more block{weatherRisk.count - 5 === 1 ? '' : 's'}
             </li>
           )}
         </ul>
       )}
 
-      <p className="mt-2 text-[11px] text-slate-500">{FRAMING}</p>
+      <p className="mt-2 text-2xs text-slate-500">{FRAMING}</p>
     </section>
   )
 }

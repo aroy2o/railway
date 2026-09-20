@@ -98,7 +98,7 @@ export function LoginPage() {
         <button
           type="submit"
           disabled={loginState.isLoading}
-          className="w-full rounded-lg bg-slate-900 px-3 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+          className="w-full rounded-lg bg-slate-900 px-3 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 active:bg-slate-950 focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loginState.isLoading ? 'Signing in…' : 'Sign in'}
         </button>

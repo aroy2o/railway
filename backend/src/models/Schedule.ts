@@ -135,6 +135,30 @@ export interface ISchedule {
   } | null;
   /** The full FR9.1 baseline result, including its conflict report. */
   baseline: unknown | null;
+  /**
+   * fulldata-ktv-psa branch: SIH problem statement 26027's own headline goal
+   * is "maximize asset availability", not just block utilisation - this is
+   * that metric, computed here (not by the optimizer) because it needs the
+   * task->asset join only Node can make. `overallPct` is the corridor-wide
+   * figure; `worstAssets` is the lowest-availability assets actually touched
+   * by this plan (capped, not every touched asset - see scheduleOrchestrator.ts),
+   * so a Controller can see WHICH assets are most affected, not just an
+   * aggregate. `null` on a plan where this could not be computed (e.g. the
+   * optimizer call itself is what's being retried) rather than a misleading 0.
+   */
+  assetAvailability: {
+    overallPct: number;
+    corridorMinutesCapacity: number;
+    assetsTouched: number;
+    worstAssets: Array<{
+      assetId: string;
+      corridorId: string;
+      department: string | null;
+      blockSection: string | null;
+      scheduledMinutes: number;
+      availabilityPct: number;
+    }>;
+  } | null;
   /** D-031: the comparison denominator, so T14 cannot use the full backlog. */
   contestableTaskIds: string[];
 
@@ -263,6 +287,7 @@ const scheduleSchema = new Schema<ISchedule>(
     conflictReport: { type: Schema.Types.Mixed, default: null },
     riskModel: { type: Schema.Types.Mixed, default: null },
     baseline: { type: Schema.Types.Mixed, default: null },
+    assetAvailability: { type: Schema.Types.Mixed, default: null },
     contestableTaskIds: { type: [String], default: [] },
 
     inputSummary: {

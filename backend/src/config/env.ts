@@ -56,6 +56,20 @@ const envSchema = z.object({
   // 45s leaves comfortable headroom without inheriting /optimize's 30s
   // budget, which was sized for exactly one solve.
   WHATIF_TIMEOUT_MS: z.coerce.number().int().positive().default(45000),
+  // T28: a monthly (30-day) /optimize solve gets its own, longer budget on
+  // the optimizer side (SOLVER_MAX_SECONDS_MONTHLY, 45s default -
+  // app/config.py) precisely because the weekly OPTIMIZER_TIMEOUT_MS (30s)
+  // is sized for PRD Section 7's weekly promise, not the ~4x larger monthly
+  // search space. That optimizer-side budget was never matched by a longer
+  // HTTP timeout on this side though - harmless while every monthly solve
+  // happened to finish well under 30s on the original ~30-corridor corpus,
+  // but a real timeout once the corpus is large enough that CP-SAT actually
+  // needs the extra time (found live against the fulldata-ktv-psa branch's
+  // 136-corridor KTV-PSA scenario: monthly generation returned a clean
+  // "did not respond within 30000ms" 502 - the solve was still running).
+  // 60s leaves the same ~15s margin over the optimizer's 45s ceiling that
+  // WHATIF_TIMEOUT_MS leaves over its own solve budget above.
+  MONTHLY_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
 
   // Where the seed script reads the pipeline output from. Relative paths are
   // resolved against the repo root, so the default works from any cwd.
@@ -92,6 +106,7 @@ export interface AppConfig {
     readonly timeoutMs: number;
     readonly explainTimeoutMs: number;
     readonly whatIfTimeoutMs: number;
+    readonly monthlyTimeoutMs: number;
   };
   readonly paths: { readonly repoRoot: string; readonly processedData: string };
 }
@@ -114,6 +129,7 @@ export const config: AppConfig = Object.freeze({
     timeoutMs: raw.OPTIMIZER_TIMEOUT_MS,
     explainTimeoutMs: raw.EXPLAIN_TIMEOUT_MS,
     whatIfTimeoutMs: raw.WHATIF_TIMEOUT_MS,
+    monthlyTimeoutMs: raw.MONTHLY_TIMEOUT_MS,
   }),
   paths: Object.freeze({
     repoRoot: REPO_ROOT,

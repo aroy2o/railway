@@ -378,3 +378,48 @@ def test_decision_log_records_the_blindness(scenario_free=None):
 
 def test_department_order_constant_covers_all_three():
     assert set(DEPARTMENT_ORDER) == {"Engineering", "S&T", "TRD"}
+
+
+# --------------------------------------------------------------------------- #
+# D-093: weather-risk detection runs against the baseline's OWN placements,   #
+# too, so it is a real number-vs-number comparison, not AI-only.              #
+# --------------------------------------------------------------------------- #
+
+def test_a_flagged_corridor_scheduled_in_the_real_monsoon_window_is_reported():
+    """H (2026-08-24) sits inside the real IMD monsoon window - same reference
+    date test_weather.py pins for the optimized side."""
+    corridors = {
+        "A-B": CorridorAvailability(
+            "A-B", (DailyWindow(0, 200),), seasonal_risk_flag="monsoon-risk"
+        )
+    }
+    tasks = [task("E1", "A-B", "Engineering", 100)]
+
+    result = run_baseline(tasks, corridors, horizon_start=H, horizon_days=1)
+
+    assert result.known_gaps["weatherRisk"]["count"] == 1
+    assert result.known_gaps["weatherRisk"]["blocks"][0]["corridorId"] == "A-B"
+    assert result.known_gaps["weatherRisk"]["blocks"][0]["taskIds"] == ["E1"]
+    assert result.as_dict()["knownGaps"]["weatherRisk"]["count"] == 1
+
+
+def test_an_unflagged_corridor_reports_no_weather_risk():
+    corridors = {"A-B": CorridorAvailability("A-B", (DailyWindow(0, 200),))}
+    tasks = [task("E1", "A-B", "Engineering", 100)]
+
+    result = run_baseline(tasks, corridors, horizon_start=H, horizon_days=1)
+
+    assert result.known_gaps["weatherRisk"]["count"] == 0
+    assert result.known_gaps["weatherRisk"]["blocks"] == []
+
+
+def test_train_impact_is_deliberately_not_computed_for_the_baseline():
+    """D-093: both engines place tasks exclusively inside declared-free
+    windows, so `detect_train_impact` would report 0-vs-0 on every real
+    corpus - not a finding. `knownGaps` carries only `weatherRisk`."""
+    corridors = {"A-B": CorridorAvailability("A-B", (DailyWindow(0, 200),))}
+    tasks = [task("E1", "A-B", "Engineering", 100)]
+
+    result = run_baseline(tasks, corridors, horizon_start=H, horizon_days=1)
+
+    assert set(result.known_gaps.keys()) == {"weatherRisk"}

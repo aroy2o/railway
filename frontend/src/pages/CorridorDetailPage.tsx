@@ -20,9 +20,9 @@ import SyntheticBadge from '../components/SyntheticBadge.tsx'
 function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
-      <p className="text-[11px] tracking-wide text-slate-500 uppercase">{label}</p>
+      <p className="text-2xs tracking-wide text-slate-500 uppercase">{label}</p>
       <p className="mt-0.5 text-lg font-semibold text-slate-900 tabular-nums">{value}</p>
-      {note && <p className="text-[11px] text-slate-400">{note}</p>}
+      {note && <p className="text-2xs text-slate-400">{note}</p>}
     </div>
   )
 }
@@ -94,7 +94,7 @@ export function CorridorDetailPage() {
                 note="observed in real timetable"
               />
               <Stat
-                label="Utilisation"
+                label="Track occupancy"
                 value={`${(data.occupancy?.utilisationPct ?? 0).toFixed(1)}%`}
                 note={`${data.occupancy?.occupiedMinutes ?? 0} min occupied`}
               />

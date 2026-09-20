@@ -6,6 +6,7 @@
  * offers a button the API refuses - and the Controller reads that as the system
  * being broken rather than as the plan being in the wrong state.
  */
+import { ChevronRight, Workflow } from 'lucide-react'
 import { useState } from 'react'
 
 import {
@@ -64,12 +65,20 @@ export function WorkflowPanel({
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold text-slate-900">Approval workflow</h2>
-          <p className="mt-0.5 text-xs text-slate-500">{described.meaning}</p>
+        <div className="flex items-start gap-2.5">
+          <span
+            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600"
+            aria-hidden="true"
+          >
+            <Workflow className="h-3.5 w-3.5" />
+          </span>
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Approval workflow</h2>
+            <p className="mt-0.5 text-xs text-slate-500">{described.meaning}</p>
+          </div>
         </div>
         <span
-          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${TONE[described.tone]}`}
+          className={`rounded-full px-2.5 py-1 text-2xs font-semibold ring-1 ${TONE[described.tone]}`}
         >
           {described.label}
           {version !== null && ` · v${version}`}
@@ -78,10 +87,10 @@ export function WorkflowPanel({
 
       {/* PRD FR6.1's chain, shown as a chain - a judge should be able to see
           where the plan is without reading the state name. */}
-      <ol className="mt-4 flex flex-wrap items-center gap-1 text-[11px] text-slate-400">
+      <ol className="mt-4 flex flex-wrap items-center gap-1 text-2xs text-slate-500">
         {(['draft', 'under_review', 'approved', 'published'] as const).map((step, index) => (
           <li key={step} className="flex items-center gap-1">
-            {index > 0 && <span aria-hidden>→</span>}
+            {index > 0 && <ChevronRight className="h-3 w-3 text-slate-300" aria-hidden="true" />}
             <span
               className={
                 step === state
@@ -145,7 +154,7 @@ export function WorkflowPanel({
 
           {pending && describeAction(pending).requiresReason && (
             <div>
-              <label className="text-[11px] font-medium text-slate-600" htmlFor="workflow-reason">
+              <label className="text-2xs font-medium text-slate-600" htmlFor="workflow-reason">
                 Reason (required — recorded permanently in the audit trail)
               </label>
               <textarea
@@ -157,13 +166,13 @@ export function WorkflowPanel({
                 className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs focus:border-slate-400 focus:outline-none"
               />
               {!canSubmitAction(pending, reason) && (
-                <p className="mt-1 text-[11px] text-slate-400">At least 8 characters.</p>
+                <p className="mt-1 text-2xs text-slate-500">At least 8 characters.</p>
               )}
             </div>
           )}
 
           {pending && describeAction(pending).terminal && !describeAction(pending).requiresReason && (
-            <p className="text-[11px] text-slate-500">
+            <p className="text-2xs text-slate-500">
               Publishing freezes this plan — it cannot be overridden afterwards.
             </p>
           )}

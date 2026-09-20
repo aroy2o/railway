@@ -9,6 +9,16 @@
  * specific reason, never a plausible-looking invented number.
  */
 import { useState } from 'react'
+import {
+  CalendarClock,
+  ChevronDown,
+  Download,
+  ShieldCheck,
+  TrainFront,
+  TrendingUp,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react'
 
 import {
   useGetAssetsQuery,
@@ -38,6 +48,16 @@ const CATEGORY_NOTE: Record<KpiCategory['category'], string> = {
   Asset: 'What still needs attention once this plan is committed.',
 }
 
+/** One identity icon per category, matching the icon-in-chip pattern used
+ * app-wide - a wayfinding anchor for four sections a DRM otherwise has to
+ * read the label of to tell apart at a glance. */
+const CATEGORY_ICON: Record<KpiCategory['category'], LucideIcon> = {
+  Operations: TrainFront,
+  Maintenance: Wrench,
+  Planning: CalendarClock,
+  Asset: ShieldCheck,
+}
+
 /** The other KPIs in a category, once expanded — deliberately smaller and
  *  quieter than the headline so the one number a fast health check needs
  *  doesn't compete with the other three. */
@@ -45,17 +65,17 @@ function KpiCard({ kpi }: { kpi: Kpi }) {
   if (!kpi.available) {
     return (
       <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/60 px-3 py-2.5">
-        <p className="text-[10px] font-medium tracking-wide text-slate-500 uppercase">{kpi.label}</p>
+        <p className="text-2xs font-medium tracking-wide text-slate-500 uppercase">{kpi.label}</p>
         <p className="mt-0.5 text-sm font-semibold text-slate-400">not tracked</p>
-        <p className="mt-0.5 text-[11px] text-slate-500">{kpi.reason}</p>
+        <p className="mt-0.5 text-2xs text-slate-500">{kpi.reason}</p>
       </div>
     )
   }
   return (
     <div className="rounded-lg border border-slate-100 bg-white px-3 py-2.5">
-      <p className="text-[10px] font-medium tracking-wide text-slate-500 uppercase">{kpi.label}</p>
+      <p className="text-2xs font-medium tracking-wide text-slate-500 uppercase">{kpi.label}</p>
       <p className="mt-0.5 text-base font-semibold text-slate-800 tabular-nums">{kpi.value}</p>
-      <p className="mt-0.5 text-[11px] text-slate-500">{kpi.detail}</p>
+      <p className="mt-0.5 text-2xs text-slate-500">{kpi.detail}</p>
     </div>
   )
 }
@@ -72,7 +92,7 @@ function pickHeadline(kpis: Kpi[]): Kpi {
 function HeadlineStat({ kpi }: { kpi: Kpi }) {
   return (
     <div className="text-right">
-      <p className="text-[11px] font-medium tracking-wide text-slate-500 uppercase">{kpi.label}</p>
+      <p className="text-2xs font-medium tracking-wide text-slate-500 uppercase">{kpi.label}</p>
       <p
         className={`text-xl font-semibold tabular-nums ${
           kpi.available ? 'text-slate-900' : 'text-slate-400'
@@ -98,6 +118,7 @@ function CategorySection({
   const [expanded, setExpanded] = useState(false)
   const headline = pickHeadline(kpis)
   const rest = kpis.filter((kpi) => kpi !== headline)
+  const CategoryIcon = CATEGORY_ICON[category]
 
   return (
     <section
@@ -108,17 +129,26 @@ function CategorySection({
         type="button"
         onClick={() => setExpanded((value) => !value)}
         aria-expanded={expanded}
-        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors hover:bg-slate-50"
       >
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-slate-900">{category}</h3>
-          <p className="mt-0.5 text-xs text-slate-500">{note}</p>
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span
+            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600"
+            aria-hidden="true"
+          >
+            <CategoryIcon className="h-3.5 w-3.5" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-slate-900">{category}</h3>
+            <p className="mt-0.5 text-xs text-slate-500">{note}</p>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-4">
           <HeadlineStat kpi={headline} />
-          <span className="text-xs text-slate-400" aria-hidden="true">
-            {expanded ? '▾' : '▸'}
-          </span>
+          <ChevronDown
+            className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${expanded ? '' : '-rotate-90'}`}
+            aria-hidden="true"
+          />
         </div>
       </button>
 
@@ -159,8 +189,12 @@ export function DrmOversightPage() {
   // horizonDays, generatedAt - no blocks) is what the trend chart plots, so
   // it needs real history, not just the version picker's short list.
   const versions = useGetSchedulesQuery({ limit: 50 })
-  const tasks = useGetTasksQuery({ limit: 200 })
-  const assets = useGetAssetsQuery({ limit: 200 })
+  // 1500 / 2500, not 200: same fulldata-ktv-psa scale fix as
+  // ControllerDashboard.tsx and BlockDetailPanel.tsx - the old 200 cap left
+  // most of the ~935-task, ~2,300-asset corpus unresolvable in this page's
+  // own lookups.
+  const tasks = useGetTasksQuery({ limit: 1500 })
+  const assets = useGetAssetsQuery({ limit: 2500 })
 
   const plan = latest.data?.data
   const noScheduleYet = latest.error && (latest.error as { status?: number }).status === 404
@@ -217,8 +251,9 @@ export function DrmOversightPage() {
             <button
               type="button"
               onClick={onDownloadReport}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
             >
+              <Download className="h-3.5 w-3.5" aria-hidden="true" />
               Download report (CSV)
             </button>
           )
@@ -256,14 +291,24 @@ export function DrmOversightPage() {
                 data-tour="oversight-trends"
                 className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
               >
-                <h3 className="text-sm font-semibold text-slate-900">Trend history</h3>
-                <p className="mb-3 text-xs text-slate-500">
-                  Real KPI values across every {plan.horizon}-horizon plan this prototype has
-                  generated, oldest first - not literally "monthly": PRD names this "monthly
-                  trend charts", but a hackathon prototype's real operating history runs hours to
-                  days, never months. Plotting what actually exists, honestly labelled, beats
-                  claiming a cadence this data cannot back up.
-                </p>
+                <div className="flex items-start gap-2.5">
+                  <span
+                    className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600"
+                    aria-hidden="true"
+                  >
+                    <TrendingUp className="h-3.5 w-3.5" />
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">Trend history</h3>
+                    <p className="mb-3 text-xs text-slate-500">
+                      Real KPI values across every {plan.horizon}-horizon plan this prototype has
+                      generated, oldest first - not literally "monthly": PRD names this "monthly
+                      trend charts", but a hackathon prototype's real operating history runs hours
+                      to days, never months. Plotting what actually exists, honestly labelled,
+                      beats claiming a cadence this data cannot back up.
+                    </p>
+                  </div>
+                </div>
                 {trendReady ? (
                   <div className="grid gap-3 sm:grid-cols-2">
                     {trendSeries.map((series) => (

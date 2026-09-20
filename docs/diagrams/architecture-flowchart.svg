@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 2240 1090" width="2240" height="1090" role="img" aria-label="Flowchart: controller logs in, requests a schedule, the backend gathers the scenario from MongoDB (seeded from real and synthetic data), the optimizer solves the block plan with OR-Tools CP-SAT; on success the schedule is saved and explained with Groq LLM and shown to the controller to approve, on failure an error is returned and shown on the dashboard.">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 Z" fill="#C7CDE0"/>
+        </marker>
+      </defs>
+
+      <rect x="0" y="0" width="2240" height="1090" fill="#0F1424"/>
+
+      <text x="1120" y="50" text-anchor="middle" font-size="13" font-weight="600" letter-spacing="2" fill="#6E7690">SIH 26027 &#183; AI-ASSISTED BLOCK PLANNING</text>
+      <text x="1120" y="78" text-anchor="middle" font-size="17" fill="#F3F5FA">How a schedule moves from data to an approved plan</text>
+
+      <!-- ================= EDGES (drawn first, under shapes) ================= -->
+      <!-- feeder -> cylinder -->
+      <line x1="580" y1="255" x2="620" y2="255" stroke="#C7CDE0" stroke-width="2" marker-end="url(#arrow)"/>
+      <!-- cylinder -> gather -->
+      <line x1="715" y1="333" x2="715" y2="393" stroke="#C7CDE0" stroke-width="2" marker-end="url(#arrow)"/>
+      <!-- groq -> save/explain -->
+      <line x1="1515" y1="297" x2="1515" y2="393" stroke="#C7CDE0" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+
+      <!-- main chain -->
+      <line x1="280" y1="460" x2="328" y2="460" stroke="#C7CDE0" stroke-width="2.5" marker-end="url(#arrow)"/>
+      <line x1="550" y1="460" x2="598" y2="460" stroke="#C7CDE0" stroke-width="2.5" marker-end="url(#arrow)"/>
+      <line x1="830" y1="460" x2="878" y2="460" stroke="#C7CDE0" stroke-width="2.5" marker-end="url(#arrow)"/>
+      <line x1="1110" y1="460" x2="1158" y2="460" stroke="#C7CDE0" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+      <line x1="1352" y1="460" x2="1398" y2="460" stroke="#C7CDE0" stroke-width="2.5" marker-end="url(#arrow)"/>
+      <text x="1375" y="446" text-anchor="middle" font-size="14" font-weight="700" fill="#22A78C">yes</text>
+
+      <line x1="1255" y1="557" x2="1255" y2="648" stroke="#C7CDE0" stroke-width="2.5" marker-end="url(#arrow)"/>
+      <text x="1278" y="608" font-size="14" font-weight="700" fill="#E5533E">no</text>
+
+      <line x1="1255" y1="760" x2="1255" y2="828" stroke="#C7CDE0" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+      <line x1="1630" y1="460" x2="1678" y2="460" stroke="#C7CDE0" stroke-width="2.5" marker-end="url(#arrow)"/>
+      <line x1="1910" y1="460" x2="1958" y2="460" stroke="#C7CDE0" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+      <!-- ================= SHAPES ================= -->
+
+      <!-- Feeder: source data -->
+      <rect x="390" y="210" width="190" height="90" rx="12" fill="#171D33" stroke="#22A78C" stroke-width="2" stroke-dasharray="5 4"/>
+      <text x="485" y="248" text-anchor="middle" font-size="16" font-weight="700" fill="#F3F5FA">Source data</text>
+      <text x="485" y="270" text-anchor="middle" font-size="11.5" fill="#A9B1C6">offline scripts</text>
+
+      <!-- Cylinder: MongoDB -->
+      <g>
+        <rect x="620" y="200" width="190" height="110" fill="#22A78C"/>
+        <ellipse cx="715" cy="310" rx="95" ry="22" fill="#22A78C"/>
+        <ellipse cx="715" cy="200" rx="95" ry="22" fill="#22A78C"/>
+        <ellipse cx="715" cy="200" rx="95" ry="22" fill="none" stroke="#0F1424" stroke-width="1" opacity="0.15"/>
+        <text x="715" y="240" text-anchor="middle" font-size="17" font-weight="700" fill="#0B1B18">MongoDB</text>
+        <text x="715" y="262" text-anchor="middle" font-size="10.5" fill="#0B1B18">tasks &#183; assets</text>
+        <text x="715" y="276" text-anchor="middle" font-size="10.5" fill="#0B1B18">resources &#183; corridors</text>
+      </g>
+
+      <!-- Groq parallelogram -->
+      <polygon points="1440,195 1610,195 1590,295 1420,295" fill="#171D33" stroke="#8B6FE8" stroke-width="2" stroke-dasharray="5 4"/>
+      <text x="1515" y="228" text-anchor="middle" font-size="16" font-weight="700" fill="#F3F5FA">Groq LLM</text>
+      <text x="1515" y="250" text-anchor="middle" font-size="11" fill="#A9B1C6">openai/gpt-oss-120b</text>
+      <text x="1515" y="264" text-anchor="middle" font-size="11" fill="#A9B1C6">/explain endpoint</text>
+
+      <!-- Start terminator -->
+      <rect x="60" y="395" width="220" height="130" rx="65" fill="#F4C64B"/>
+      <text x="170" y="452" text-anchor="middle" font-size="20" font-weight="700" fill="#14182A">Log in</text>
+      <text x="170" y="482" text-anchor="middle" font-size="12.5" fill="#14182A">JWT &#183; role access</text>
+
+      <!-- P1: Request plan -->
+      <rect x="330" y="395" width="220" height="130" rx="14" fill="#171D33" stroke="#4A6FE8" stroke-width="2.5"/>
+      <text x="440" y="452" text-anchor="middle" font-size="20" font-weight="700" fill="#F3F5FA">Request plan</text>
+      <text x="440" y="482" text-anchor="middle" font-size="12.5" fill="#A9B1C6">React dashboard</text>
+
+      <!-- P2: Gather scenario -->
+      <rect x="600" y="395" width="230" height="130" rx="14" fill="#171D33" stroke="#4A6FE8" stroke-width="2.5"/>
+      <text x="715" y="452" text-anchor="middle" font-size="20" font-weight="700" fill="#F3F5FA">Gather scenario</text>
+      <text x="715" y="482" text-anchor="middle" font-size="12.5" fill="#A9B1C6">Node.js &#183; Express</text>
+
+      <!-- P3: Solve the plan -->
+      <rect x="880" y="395" width="230" height="130" rx="14" fill="#171D33" stroke="#4A6FE8" stroke-width="2.5"/>
+      <text x="995" y="452" text-anchor="middle" font-size="20" font-weight="700" fill="#F3F5FA">Solve the plan</text>
+      <text x="995" y="482" text-anchor="middle" font-size="12.5" fill="#A9B1C6">Python + OR-Tools CP-SAT</text>
+
+      <!-- Decision -->
+      <polygon points="1255,365 1350,460 1255,555 1160,460" fill="#E5533E"/>
+      <text x="1255" y="467" text-anchor="middle" font-size="19" font-weight="700" fill="#FFFFFF">Solved?</text>
+
+      <!-- P4: Save & explain -->
+      <rect x="1400" y="395" width="230" height="130" rx="14" fill="#171D33" stroke="#4A6FE8" stroke-width="2.5"/>
+      <text x="1515" y="452" text-anchor="middle" font-size="20" font-weight="700" fill="#F3F5FA">Save &amp; explain</text>
+      <text x="1515" y="482" text-anchor="middle" font-size="12.5" fill="#A9B1C6">writes Schedule, explains</text>
+
+      <!-- P5: Show result -->
+      <rect x="1680" y="395" width="230" height="130" rx="14" fill="#171D33" stroke="#4A6FE8" stroke-width="2.5"/>
+      <text x="1795" y="452" text-anchor="middle" font-size="20" font-weight="700" fill="#F3F5FA">Show result</text>
+      <text x="1795" y="482" text-anchor="middle" font-size="12.5" fill="#A9B1C6">Gantt + risk + baseline</text>
+
+      <!-- End terminator -->
+      <rect x="1960" y="395" width="220" height="130" rx="65" fill="#F4C64B"/>
+      <text x="2070" y="452" text-anchor="middle" font-size="20" font-weight="700" fill="#14182A">Approve plan</text>
+      <text x="2070" y="482" text-anchor="middle" font-size="12.5" fill="#14182A">controller decides</text>
+
+      <!-- Error branch -->
+      <rect x="1140" y="650" width="230" height="110" rx="14" fill="#171D33" stroke="#E5533E" stroke-width="2.5"/>
+      <text x="1255" y="697" text-anchor="middle" font-size="18" font-weight="700" fill="#F3F5FA">Return error</text>
+      <text x="1255" y="723" text-anchor="middle" font-size="12" fill="#A9B1C6">502 error returned</text>
+
+      <rect x="1145" y="830" width="220" height="90" rx="45" fill="#F4C64B"/>
+      <text x="1255" y="869" text-anchor="middle" font-size="17" font-weight="700" fill="#14182A">Error shown</text>
+      <text x="1255" y="891" text-anchor="middle" font-size="11.5" fill="#14182A">controller retries</text>
+
+      <!-- ================= LEGEND ================= -->
+      <g font-family="Segoe UI, Helvetica Neue, Arial, sans-serif">
+        <rect x="140" y="985" width="18" height="18" rx="4" fill="#F4C64B"/>
+        <text x="166" y="999" font-size="13" fill="#A9B1C6">Start / end</text>
+
+        <rect x="330" y="985" width="18" height="18" rx="4" fill="#171D33" stroke="#4A6FE8" stroke-width="2"/>
+        <text x="356" y="999" font-size="13" fill="#A9B1C6">Process step</text>
+
+        <polygon points="537,985 555,994 537,1003 519,994" fill="#E5533E"/>
+        <text x="566" y="999" font-size="13" fill="#A9B1C6">Decision</text>
+
+        <rect x="690" y="985" width="18" height="18" fill="#22A78C"/>
+        <text x="716" y="999" font-size="13" fill="#A9B1C6">Data store</text>
+
+        <polygon points="892,985 910,985 904,1003 886,1003" fill="#171D33" stroke="#8B6FE8" stroke-width="2"/>
+        <text x="918" y="999" font-size="13" fill="#A9B1C6">External service</text>
+      </g>
+
+      <text x="1120" y="1045" text-anchor="middle" font-size="12" fill="#6E7690">Maintenance, defect &amp; resource data is synthetic (PRD &#167;5) &#183; corridor and timetable data is real, ingested from open railway datasets.</text>
+    </svg>

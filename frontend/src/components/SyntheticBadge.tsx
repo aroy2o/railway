@@ -18,7 +18,7 @@ export function SyntheticBadge({ synthetic, realNote }: SyntheticBadgeProps) {
     return (
       <span
         title={realNote}
-        className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-700 uppercase ring-1 ring-emerald-600/30 ring-inset"
+        className="inline-flex items-center rounded px-1.5 py-0.5 text-2xs font-semibold tracking-wide text-emerald-700 uppercase ring-1 ring-emerald-600/30 ring-inset"
       >
         Real
       </span>
@@ -34,8 +34,8 @@ export function SyntheticBadge({ synthetic, realNote }: SyntheticBadgeProps) {
       }
       className={
         synthetic
-          ? 'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-violet-700 uppercase ring-1 ring-violet-600/30 ring-inset'
-          : 'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-700 uppercase ring-1 ring-emerald-600/30 ring-inset'
+          ? 'inline-flex items-center rounded px-1.5 py-0.5 text-2xs font-semibold tracking-wide text-violet-700 uppercase ring-1 ring-violet-600/30 ring-inset'
+          : 'inline-flex items-center rounded px-1.5 py-0.5 text-2xs font-semibold tracking-wide text-emerald-700 uppercase ring-1 ring-emerald-600/30 ring-inset'
       }
     >
       {synthetic ? 'Synthetic' : 'Real'}

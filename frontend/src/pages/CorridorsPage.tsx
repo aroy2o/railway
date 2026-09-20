@@ -64,7 +64,7 @@ export function CorridorsPage() {
               <Th>Name</Th>
               <Th>Band</Th>
               <Th align="right">Trains/day</Th>
-              <Th align="right">Utilisation</Th>
+              <Th align="right">Track occupancy</Th>
               <Th align="right">Free min</Th>
               <Th align="right">Windows</Th>
               <Th align="right">Tasks</Th>

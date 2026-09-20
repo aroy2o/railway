@@ -11,6 +11,7 @@
  * text already names the remedy - "requires a traffic block that displaces
  * trains" - and rewording it here would only weaken it.
  */
+import { Check, ChevronDown, ChevronRight, Clock } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { DeferredTask } from '../api/apiSlice.ts'
 
@@ -60,28 +61,42 @@ export function DeferredTasksPanel({ deferred }: { deferred: DeferredTask[] }) {
 
   if (deferred.length === 0) {
     return (
-      <section className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
-        <h2 className="text-sm font-semibold text-emerald-900">Nothing deferred</h2>
-        <p className="text-xs text-emerald-700">Every pending task was placed into a block.</p>
+      <section className="flex items-center gap-2.5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+        <span
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-emerald-100 text-emerald-700"
+          aria-hidden="true"
+        >
+          <Check className="h-3.5 w-3.5" />
+        </span>
+        <div>
+          <h2 className="text-sm font-semibold text-emerald-900">Nothing deferred</h2>
+          <p className="text-xs text-emerald-700">Every pending task was placed into a block.</p>
+        </div>
       </section>
     )
   }
 
   return (
-    <section>
-      <header className="pb-3">
-        <h2 className="text-sm font-semibold text-slate-900">
-          Deferred work{' '}
-          <span className="font-normal text-slate-500">({deferred.length} tasks)</span>
-        </h2>
-        <p className="text-xs text-slate-500">
-          Every task the solver could not place, with the reason it gave. Nothing is dropped
-          silently.
-        </p>
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <header className="flex flex-wrap items-center gap-2 pb-3">
+        <span
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-700"
+          aria-hidden="true"
+        >
+          <Clock className="h-3.5 w-3.5" />
+        </span>
+        <h2 className="text-sm font-semibold text-slate-900">Deferred work</h2>
+        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-600/20 ring-inset">
+          {deferred.length} task{deferred.length > 1 ? 's' : ''}
+        </span>
       </header>
+      <p className="-mt-2 mb-3 text-xs text-slate-500">
+        Every task the solver could not place, with the reason it gave. Nothing is dropped
+        silently.
+      </p>
 
       {costedCount > 0 && (
-        <p className="mb-3 rounded-lg bg-amber-50/50 px-3 py-2 text-[11px] text-slate-600">
+        <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-2xs text-slate-600">
           <span className="font-medium text-slate-700">Traffic-block cost</span> — {costedCount} of
           these could be forced through by displacing trains. Displaced counts and minutes are
           measured from the real timetable; the class split behind the weighting is apportioned
@@ -91,46 +106,55 @@ export function DeferredTasksPanel({ deferred }: { deferred: DeferredTask[] }) {
       )}
 
       <div className="divide-y divide-slate-100 rounded-lg border border-slate-100">
-        {groups.map(([reason, tasks]) => (
-          <div key={reason} className="px-4 py-3">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="text-sm font-medium text-slate-800">{REASON_LABEL[reason]}</h3>
-              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-600/20 ring-inset">
-                {tasks.length} task{tasks.length > 1 ? 's' : ''}
-              </span>
+        {groups.map(([reason, tasks]) => {
+          const isExpanded = expanded === reason
+          return (
+            <div key={reason} className="px-4 py-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-sm font-medium text-slate-800">{REASON_LABEL[reason]}</h3>
+                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-600/20 ring-inset">
+                  {tasks.length} task{tasks.length > 1 ? 's' : ''}
+                </span>
+              </div>
+              <p className="mt-1 max-w-3xl text-xs text-slate-500">{REASON_HINT[reason]}</p>
+
+              <button
+                type="button"
+                onClick={() => setExpanded(isExpanded ? null : reason)}
+                aria-expanded={isExpanded}
+                className="mt-2 -ml-1.5 flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-sky-700 transition-colors hover:bg-sky-50 active:bg-sky-100"
+              >
+                {isExpanded ? (
+                  <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                {isExpanded ? 'Hide' : 'Show'} the solver's reasoning
+              </button>
+
+              {isExpanded && (
+                <ul className="mt-2 max-h-64 space-y-1.5 overflow-y-auto rounded-lg bg-slate-50 p-3">
+                  {tasks.map((task) => {
+                    const cost = task.displacementOption?.impact?.measured
+                    return (
+                      <li key={task.taskId} className="text-2xs leading-relaxed text-slate-600">
+                        <span className="font-mono text-slate-800">{task.taskId}</span> —{' '}
+                        {task.detail}
+                        {cost && (
+                          <span className="ml-1 rounded bg-white px-1.5 py-0.5 text-3xs whitespace-nowrap text-amber-900 ring-1 ring-amber-200 ring-inset">
+                            {cost.trainsAffected} train{cost.trainsAffected === 1 ? '' : 's'} ·{' '}
+                            {cost.displacedMinutes} min
+                            {cost.clearanceMinutes > 0 && ` · +${cost.clearanceMinutes} min clearance`}
+                          </span>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
             </div>
-            <p className="mt-1 max-w-3xl text-xs text-slate-500">{REASON_HINT[reason]}</p>
-
-            <button
-              type="button"
-              onClick={() => setExpanded(expanded === reason ? null : reason)}
-              className="mt-2 text-xs font-medium text-sky-700 hover:underline"
-            >
-              {expanded === reason ? 'Hide' : 'Show'} the solver's reasoning
-            </button>
-
-            {expanded === reason && (
-              <ul className="mt-2 max-h-64 space-y-1.5 overflow-y-auto rounded-lg bg-slate-50 p-3">
-                {tasks.map((task) => {
-                  const cost = task.displacementOption?.impact?.measured
-                  return (
-                    <li key={task.taskId} className="text-[11px] leading-relaxed text-slate-600">
-                      <span className="font-mono text-slate-800">{task.taskId}</span> —{' '}
-                      {task.detail}
-                      {cost && (
-                        <span className="ml-1 rounded bg-white px-1.5 py-0.5 text-[10px] whitespace-nowrap text-amber-900 ring-1 ring-amber-200 ring-inset">
-                          {cost.trainsAffected} train{cost.trainsAffected === 1 ? '' : 's'} ·{' '}
-                          {cost.displacedMinutes} min
-                          {cost.clearanceMinutes > 0 && ` · +${cost.clearanceMinutes} min clearance`}
-                        </span>
-                      )}
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-          </div>
-        ))}
+          )
+        })}
       </div>
     </section>
   )

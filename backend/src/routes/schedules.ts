@@ -137,13 +137,24 @@ router.get(
   },
 );
 
+const latestQuerySchema = z.object({
+  // Optional: scopes "latest" to a specific horizon so weekly and monthly
+  // each have their own independent "current plan" (dashboard UX fix -
+  // see scheduleOrchestrator.ts's findLatestSchedule doc comment). Omitted
+  // keeps the original "latest overall" behaviour.
+  horizonDays: z.coerce.number().int().min(1).max(90).optional(),
+});
+type LatestQuery = z.infer<typeof latestQuerySchema>;
+
 /** Declared before `/:id` so "latest" is never read as a schedule id. */
 router.get(
   '/latest',
   requireRole('controller', 'drm'),
-  async (_req: Request, res: Response, next: NextFunction) => {
+  validate({ query: latestQuerySchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const schedule = await findLatestSchedule();
+      const { horizonDays } = validated<LatestQuery>(req.query);
+      const schedule = await findLatestSchedule(horizonDays);
       if (!schedule) {
         throw ApiError.notFound('No schedule has been generated yet. POST /api/schedules/generate');
       }

@@ -69,7 +69,7 @@ export function ResourcesPage() {
                       <Link
                         key={corridorId}
                         to={`/corridors/${encodeURIComponent(corridorId)}`}
-                        className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-600 hover:bg-slate-200"
+                        className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-2xs text-slate-600 hover:bg-slate-200"
                       >
                         {corridorId}
                       </Link>

@@ -25,6 +25,15 @@ import {
   type ReservationRow,
 } from '../lib/gantt.ts'
 
+/**
+ * A busy day can carry 60-80 corridor rows (the fulldata corpus routinely
+ * does), which made the timeline a page-length scroll before a single block
+ * was visible. Paginating keeps each page a fixed, glanceable height - the
+ * busiest corridors are still first, since `corridorRowsForDay` already
+ * sorts by possession time before pagination ever slices it.
+ */
+const ROWS_PER_PAGE = 12
+
 /** Reuses the DepartmentPill palette so colour means the same thing everywhere. */
 const DEPARTMENT_BAR: Record<Department, string> = {
   Engineering: 'bg-sky-500',
@@ -55,6 +64,14 @@ interface GanttTimelineProps {
    */
   onSelectBlock?: (block: ScheduleBlock) => void
   selectedBlockKey?: string | null
+  /**
+   * Monthly-only equivalent of `onSelectBlock` - a reservation cell has no
+   * single block (it can cover more than one window that day), so it hands
+   * up which corridor-day was clicked instead and leaves the caller to look
+   * up every real block for it and show the same `BlockDetailPanel` detail
+   * Weekly uses (task-level breakdown, not just a summary).
+   */
+  onSelectCorridorDay?: (corridorId: string, date: string) => void
   /** Purely for the legend hint below - whether the drill-down this click
    * opens will itself offer an override button. Never gates the click. */
   overridable?: boolean
@@ -73,6 +90,7 @@ export function GanttTimeline({
   horizon,
   onSelectBlock,
   selectedBlockKey,
+  onSelectCorridorDay,
   overridable = false,
   onSelectHorizon,
   isGeneratingHorizon,
@@ -90,6 +108,21 @@ export function GanttTimeline({
   )
 
   const rows = useMemo(() => corridorRowsForDay(blocks, selected), [blocks, selected])
+
+  // Reset to page 1 whenever the row set changes underneath - a new selected
+  // day or a regenerated plan - so a page number from a longer list never
+  // silently strands the view past the end of a shorter one. Adjusted during
+  // render (React's own recommended pattern for this - not an effect) so it
+  // never shows the stale page for even one frame.
+  const [page, setPage] = useState(0)
+  const [rowsForPage, setRowsForPage] = useState(rows)
+  if (rows !== rowsForPage) {
+    setRowsForPage(rows)
+    setPage(0)
+  }
+  const pageCount = Math.max(1, Math.ceil(rows.length / ROWS_PER_PAGE))
+  const currentPage = Math.min(page, pageCount - 1)
+  const pagedRows = rows.slice(currentPage * ROWS_PER_PAGE, (currentPage + 1) * ROWS_PER_PAGE)
 
   return (
     <section
@@ -115,7 +148,12 @@ export function GanttTimeline({
       </header>
 
       {isMonthly ? (
-        <MonthlyReservationGrid blocks={blocks} horizonStart={horizonStart} horizonDays={horizonDays} />
+        <MonthlyReservationGrid
+          blocks={blocks}
+          horizonStart={horizonStart}
+          horizonDays={horizonDays}
+          onSelectCorridorDay={onSelectCorridorDay}
+        />
       ) : (
         <>
           {/* Whole-week strip: every day, including the empty ones. */}
@@ -156,52 +194,65 @@ export function GanttTimeline({
               the work did not fit the windows available.
             </p>
           ) : (
-            <div className="overflow-x-auto px-5 py-4">
-              <div className="min-w-[720px]">
-                {/* Hour axis */}
-                <div className="mb-1 flex pl-[112px]">
-                  <div className="relative h-4 flex-1">
-                    {HOUR_TICKS.map((hour) => (
-                      <span
-                        key={hour}
-                        className="absolute -translate-x-1/2 text-[10px] tabular-nums text-slate-400"
-                        style={{ left: `${(hour / 24) * 100}%` }}
-                      >
-                        {String(hour).padStart(2, '0')}
-                      </span>
+            <>
+              <div className="overflow-x-auto px-5 py-4">
+                <div className="min-w-[720px]">
+                  {/* Hour axis */}
+                  <div className="mb-1 flex pl-[112px]">
+                    <div className="relative h-4 flex-1">
+                      {HOUR_TICKS.map((hour) => (
+                        <span
+                          key={hour}
+                          className="absolute -translate-x-1/2 text-[10px] tabular-nums text-slate-400"
+                          style={{ left: `${(hour / 24) * 100}%` }}
+                        >
+                          {String(hour).padStart(2, '0')}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {pagedRows.map((row) => (
+                      <div key={row.corridorId} className="flex items-center gap-2">
+                        <span className="w-[104px] shrink-0 truncate font-mono text-[11px] text-slate-600">
+                          {row.corridorId}
+                        </span>
+                        <div className="relative h-9 flex-1 rounded-md bg-slate-100">
+                          {/* Gridlines every 3 hours, so a bar can be read against the clock. */}
+                          {HOUR_TICKS.slice(1, -1).map((hour) => (
+                            <span
+                              key={hour}
+                              className="absolute top-0 h-full w-px bg-white/70"
+                              style={{ left: `${(hour / 24) * 100}%` }}
+                            />
+                          ))}
+                          {row.blocks.map((block) => (
+                            <BlockBar
+                              key={`${block.windowIndex}-${block.startMinute}`}
+                              block={block}
+                              onSelect={onSelectBlock}
+                              isSelected={selectedBlockKey === blockKey(block)}
+                            />
+                          ))}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 </div>
-
-                <div className="space-y-1.5">
-                  {rows.map((row) => (
-                    <div key={row.corridorId} className="flex items-center gap-2">
-                      <span className="w-[104px] shrink-0 truncate font-mono text-[11px] text-slate-600">
-                        {row.corridorId}
-                      </span>
-                      <div className="relative h-9 flex-1 rounded-md bg-slate-100">
-                        {/* Gridlines every 3 hours, so a bar can be read against the clock. */}
-                        {HOUR_TICKS.slice(1, -1).map((hour) => (
-                          <span
-                            key={hour}
-                            className="absolute top-0 h-full w-px bg-white/70"
-                            style={{ left: `${(hour / 24) * 100}%` }}
-                          />
-                        ))}
-                        {row.blocks.map((block) => (
-                          <BlockBar
-                            key={`${block.windowIndex}-${block.startMinute}`}
-                            block={block}
-                            onSelect={onSelectBlock}
-                            isSelected={selectedBlockKey === blockKey(block)}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
               </div>
-            </div>
+
+              {pageCount > 1 && (
+                <RowPager
+                  page={currentPage}
+                  pageCount={pageCount}
+                  rangeStart={currentPage * ROWS_PER_PAGE + 1}
+                  rangeEnd={Math.min((currentPage + 1) * ROWS_PER_PAGE, rows.length)}
+                  total={rows.length}
+                  onSelect={setPage}
+                />
+              )}
+            </>
           )}
         </>
       )}
@@ -217,24 +268,45 @@ export function GanttTimeline({
 /**
  * Corridor-day reservation heatmap (T28, PRD Section 13).
  *
- * Deliberately read-only: a reservation cell can represent SEVERAL blocks in
- * one day, so it has no single (corridor, date, windowIndex) to hand T15's
- * override endpoint. Overriding a specific placement still happens on the
- * Weekly view, which is exact-slot by construction.
+ * A cell is clickable, but hands the click UP to `onSelectCorridorDay`
+ * rather than opening its own detail view - the caller (ControllerDashboard)
+ * already has the full task/decision-log detail machinery `BlockDetailPanel`
+ * needs, and re-showing every real block for that corridor-day through the
+ * SAME panel weekly uses is what gives a Controller the full task-level
+ * detail here too (dependency chain, resources, risk breakdown), not a
+ * shorter summary. Never wired to override, though: a reservation cell can
+ * represent SEVERAL blocks in one day, so it has no single (corridor, date,
+ * windowIndex) to hand T15's override endpoint - overriding a specific
+ * placement still happens on the Weekly view, which is exact-slot by
+ * construction.
  */
 function MonthlyReservationGrid({
   blocks,
   horizonStart,
   horizonDays,
+  onSelectCorridorDay,
 }: {
   blocks: ScheduleBlock[]
   horizonStart: string
   horizonDays: number
+  onSelectCorridorDay?: (corridorId: string, date: string) => void
 }) {
   const rows = useMemo(
     () => monthlyReservationRows(blocks, horizonStart, horizonDays),
     [blocks, horizonStart, horizonDays],
   )
+
+  // Same reasoning and same pattern as the Weekly row list above: a full
+  // month's worth of corridors is a page-length scroll before pagination.
+  const [page, setPage] = useState(0)
+  const [rowsForPage, setRowsForPage] = useState(rows)
+  if (rows !== rowsForPage) {
+    setRowsForPage(rows)
+    setPage(0)
+  }
+  const pageCount = Math.max(1, Math.ceil(rows.length / ROWS_PER_PAGE))
+  const currentPage = Math.min(page, pageCount - 1)
+  const pagedRows = rows.slice(currentPage * ROWS_PER_PAGE, (currentPage + 1) * ROWS_PER_PAGE)
 
   if (rows.length === 0) {
     return (
@@ -245,51 +317,83 @@ function MonthlyReservationGrid({
   }
 
   return (
-    <div className="overflow-x-auto px-5 py-4">
-      <div className="min-w-[720px]">
-        <div className="mb-1 flex pl-[112px]">
-          {rows[0]!.days.map((day) => (
-            <span
-              key={day.date}
-              className="flex-1 text-center text-[9px] tabular-nums text-slate-400"
-            >
-              {new Date(`${day.date}T00:00:00Z`).getUTCDate()}
-            </span>
-          ))}
-        </div>
-        <div className="space-y-1">
-          {rows.map((row) => (
-            <div key={row.corridorId} className="flex items-center gap-2">
-              <span className="w-[104px] shrink-0 truncate font-mono text-[11px] text-slate-600">
-                {row.corridorId}
+    <>
+      <div className="overflow-x-auto px-5 py-4">
+        <div className="min-w-[720px]">
+          <div className="mb-1 flex pl-[112px]">
+            {rows[0]!.days.map((day) => (
+              <span
+                key={day.date}
+                className="flex-1 text-center text-[9px] tabular-nums text-slate-400"
+              >
+                {new Date(`${day.date}T00:00:00Z`).getUTCDate()}
               </span>
-              <div className="flex flex-1 gap-[2px]">
-                {row.days.map((day) => (
-                  <ReservationCell key={day.date} day={day} />
-                ))}
+            ))}
+          </div>
+          <div className="space-y-1">
+            {pagedRows.map((row) => (
+              <div key={row.corridorId} className="flex items-center gap-2">
+                <span className="w-[104px] shrink-0 truncate font-mono text-[11px] text-slate-600">
+                  {row.corridorId}
+                </span>
+                <div className="flex flex-1 gap-[2px]">
+                  {row.days.map((day) => (
+                    <ReservationCell
+                      key={day.date}
+                      day={day}
+                      onSelect={
+                        day.blockCount > 0 && onSelectCorridorDay
+                          ? () => onSelectCorridorDay(row.corridorId, day.date)
+                          : undefined
+                      }
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
-    </div>
+
+      {pageCount > 1 && (
+        <RowPager
+          page={currentPage}
+          pageCount={pageCount}
+          rangeStart={currentPage * ROWS_PER_PAGE + 1}
+          rangeEnd={Math.min((currentPage + 1) * ROWS_PER_PAGE, rows.length)}
+          total={rows.length}
+          onSelect={setPage}
+        />
+      )}
+    </>
   )
 }
 
-function ReservationCell({ day }: { day: ReservationRow['days'][number] }) {
+function ReservationCell({
+  day,
+  onSelect,
+}: {
+  day: ReservationRow['days'][number]
+  /** Omitted on an empty cell - there is nothing to inspect. */
+  onSelect?: () => void
+}) {
   if (day.departments.length === 0) {
     return <span className="h-5 flex-1 rounded-sm bg-slate-100" title={`${day.date} — no reservation`} />
   }
   const title =
     `${day.date} — ${day.departments.join(' + ')}` +
     (day.isCrossDepartmentBatch ? ' (shared block)' : '') +
-    ` — ${day.blockCount} block${day.blockCount > 1 ? 's' : ''}`
+    ` — ${day.blockCount} block${day.blockCount > 1 ? 's' : ''}` +
+    (onSelect ? '\n\nClick for details' : '')
+  const interaction = onSelect ? 'cursor-pointer hover:brightness-110' : ''
 
   if (day.departments.length === 1) {
     return (
-      <span
+      <button
+        type="button"
         title={title}
-        className={`h-5 flex-1 rounded-sm ${DEPARTMENT_BAR[day.departments[0]!]}`}
+        onClick={onSelect}
+        className={`h-5 flex-1 rounded-sm ${DEPARTMENT_BAR[day.departments[0]!]} ${interaction}`}
       />
     )
   }
@@ -297,16 +401,18 @@ function ReservationCell({ day }: { day: ReservationRow['days'][number] }) {
   // the same violet the hourly view uses for a shared block, so the same
   // colour means the same thing on both screens.
   return (
-    <span
+    <button
+      type="button"
       title={title}
-      className={`flex h-5 flex-1 overflow-hidden rounded-sm ${
+      onClick={onSelect}
+      className={`flex h-5 flex-1 overflow-hidden rounded-sm ${interaction} ${
         day.isCrossDepartmentBatch ? 'ring-1 ring-violet-600' : ''
       }`}
     >
       {day.departments.map((department) => (
         <span key={department} className={`flex-1 ${DEPARTMENT_BAR[department]}`} />
       ))}
-    </span>
+    </button>
   )
 }
 
@@ -382,6 +488,52 @@ function BlockBar({
       <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-violet-600 text-center text-[8px] font-bold tracking-wide text-white uppercase">
         shared block
       </span>
+    </div>
+  )
+}
+
+/** Corridor-row pager for a busy day (see ROWS_PER_PAGE's comment above). */
+function RowPager({
+  page,
+  pageCount,
+  rangeStart,
+  rangeEnd,
+  total,
+  onSelect,
+}: {
+  page: number
+  pageCount: number
+  rangeStart: number
+  rangeEnd: number
+  total: number
+  onSelect: (page: number) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-5 py-2.5 text-xs text-slate-500">
+      <span>
+        Corridors {rangeStart}–{rangeEnd} of {total}
+      </span>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onSelect(page - 1)}
+          disabled={page === 0}
+          className="rounded-md border border-slate-200 px-2 py-1 font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          ← Prev
+        </button>
+        <span className="px-1 tabular-nums">
+          Page {page + 1} of {pageCount}
+        </span>
+        <button
+          type="button"
+          onClick={() => onSelect(page + 1)}
+          disabled={page === pageCount - 1}
+          className="rounded-md border border-slate-200 px-2 py-1 font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next →
+        </button>
+      </div>
     </div>
   )
 }

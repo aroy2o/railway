@@ -23,14 +23,24 @@ router = APIRouter(tags=["risk"])
 
 @router.post("/risk")
 def risk_endpoint(request: RiskRequest) -> dict:
-    """Score each asset's likelihood of reaching the intervention threshold."""
+    """Score each asset's calibrated 30-day failure probability."""
     assessments = assess_assets(
         [
             {
                 "assetId": asset.asset_id,
-                "degradationHistory": [
-                    {"healthMetric": point.health_metric} for point in asset.degradation_history
-                ],
+                "department": asset.department,
+                "blockSection": asset.block_section,
+                "lineNumber": asset.line_number,
+                "ageYears": asset.age_years,
+                "condition": asset.condition,
+                "openDefectsCount": asset.open_defects_count,
+                "openDefectsSev0": asset.open_defects_sev0,
+                "openDefectsSev1": asset.open_defects_sev1,
+                "openDefectsSev2": asset.open_defects_sev2,
+                "openDefectsSev3": asset.open_defects_sev3,
+                "daysSinceMaintenance": asset.days_since_maintenance,
+                "tonnageStress": asset.tonnage_stress,
+                "month": asset.month,
             }
             for asset in request.assets
         ]
@@ -46,5 +56,5 @@ def risk_endpoint(request: RiskRequest) -> dict:
         # Repeated at the top level as well as per-assessment: a consumer that
         # reads only the envelope must not be able to miss it.
         "framing": FRAMING,
-        "modelType": "linear-trend-extrapolation-to-threshold",
+        "modelType": "lightgbm-classifier-isotonic-calibrated",
     }

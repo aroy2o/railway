@@ -1,9 +1,7 @@
 # Optimizer / AI microservice dependencies.
 #
 # Deliberately lean: libraries are added when the task that needs them lands,
-# not up front. Notably absent for now:
-#   scikit-learn / lifelines -> predictive risk model (task T16, PRD 9.1)
-#   anthropic                -> /explain endpoint    (task T18, PRD 9.2)
+# not up front.
 
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.32,<1.0
@@ -14,6 +12,21 @@ pydantic-settings>=2.6,<3.0
 # Installed from task T1 onward so an install failure surfaces now rather than
 # on the day the solver is being written.
 ortools>=9.11,<10.0
+
+# fulldata-ktv-psa branch only: the calibrated LightGBM risk model ported
+# from full_data/release/integration_package/scoring.py replaces the linear-
+# trend heuristic in app/core/risk.py. Pinned close to full_data's own
+# requirements.txt so the pickled model/calibrator/transformer artifacts
+# unpickle and score identically to how they were validated there.
+pandas==3.0.1
+# full_data pinned numpy==2.4.0, but that release was yanked upstream for a
+# backward-compatibility bug - relaxed to a range in the same major version
+# instead. numpy's own version does not affect the pickled model's behavior
+# (unlike scikit-learn's, which is pinned exactly).
+numpy>=2.1,<3.0
+scikit-learn==1.9.1
+lightgbm==4.7.0
+joblib==1.5.3
 
 # --- dev/test ---
 pytest>=8.3,<9.0

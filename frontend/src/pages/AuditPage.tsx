@@ -5,6 +5,7 @@
  * FR6.3's "prior versions remain viewable": every generation is its own
  * document (D-034), so the history of plans IS the version history.
  */
+import { GitCommitVertical } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -98,11 +99,19 @@ export function AuditPage() {
       >
         <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
           <nav data-tour="audit-versions" className="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <header className="border-b border-slate-100 px-4 py-3">
-              <h2 className="text-sm font-semibold text-slate-900">Plan versions</h2>
-              <p className="text-[11px] text-slate-500">
-                Each generation is its own document — nothing is overwritten (FR6.3).
-              </p>
+            <header className="flex items-start gap-2.5 border-b border-slate-100 px-4 py-3">
+              <span
+                className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600"
+                aria-hidden="true"
+              >
+                <GitCommitVertical className="h-3.5 w-3.5" />
+              </span>
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">Plan versions</h2>
+                <p className="text-2xs text-slate-500">
+                  Each generation is its own document — nothing is overwritten (FR6.3).
+                </p>
+              </div>
             </header>
             <ol className="max-h-[70vh] divide-y divide-slate-100 overflow-y-auto">
               {versions.data?.data.map((version) => {
@@ -113,18 +122,18 @@ export function AuditPage() {
                     <button
                       type="button"
                       onClick={() => setPicked(version._id)}
-                      className={`w-full px-4 py-2.5 text-left transition ${
+                      className={`w-full px-4 py-2.5 text-left transition-colors ${
                         active ? 'bg-slate-100' : 'hover:bg-slate-50'
                       }`}
                     >
-                      <span className="block truncate font-mono text-[11px] text-slate-700">
+                      <span className="block truncate font-mono text-2xs text-slate-700">
                         {version._id}
                       </span>
                       <span className="mt-0.5 flex items-baseline justify-between gap-2">
-                        <span className="text-[11px] text-slate-400">
+                        <span className="text-2xs text-slate-500">
                           {new Date(version.generatedAt).toLocaleDateString()}
                         </span>
-                        <span className="text-[11px] font-medium text-slate-600">
+                        <span className="text-2xs font-medium text-slate-600">
                           {state.label}
                         </span>
                       </span>

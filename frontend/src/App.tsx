@@ -8,7 +8,8 @@
  */
 import { Navigate, Route, Routes } from 'react-router-dom'
 
-import AppHeader from './components/AppHeader.tsx'
+import Sidebar from './components/Sidebar.tsx'
+import RexLogo from './components/RexLogo.tsx'
 import PrototypeBanner from './components/PrototypeBanner.tsx'
 import TourOverlay from './components/TourOverlay.tsx'
 import RequireRole from './components/RequireRole.tsx'
@@ -41,126 +42,149 @@ function RootRedirect() {
   return <Navigate to={user ? roleLandingRoute(user.role) : '/login'} replace />
 }
 
+/** Sidebar has nothing to navigate to before login, so the guest state gets
+ * a plain brand row instead - same identity, no nav rail. */
+function GuestBrandRow() {
+  return (
+    <div className="flex items-center gap-3 px-4 py-4 sm:px-6">
+      <RexLogo className="h-9 w-9 shrink-0" />
+      <div>
+        <h1 className="text-base leading-tight font-semibold text-slate-900">Rex Planner</h1>
+        <p className="text-xs text-slate-500">Maintenance block planning &amp; decision support</p>
+      </div>
+    </div>
+  )
+}
+
 function App() {
+  const user = useAppSelector((state) => state.auth.user)
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <PrototypeBanner />
-      <AppHeader />
 
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/" element={<RootRedirect />} />
+      <div className="lg:flex lg:items-start">
+        <Sidebar />
 
-          {/* PRD Section 8 calls the Controller Dashboard the primary demo
-              screen and its build order puts it first (D-039). Controller
-              only - see docs/DECISIONS.md's auth-session entry. */}
-          <Route
-            path="/dashboard"
-            element={
-              <RequireRole roles={['controller']}>
-                <ControllerDashboard />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/comparison"
-            element={
-              <RequireRole roles={['controller']}>
-                <ComparisonPage />
-              </RequireRole>
-            }
-          />
-          {/* Controller: full read/write. DRM: read-only (AuditPage itself
-              hides the write-capable WorkflowPanel for drm). */}
-          <Route
-            path="/audit"
-            element={
-              <RequireRole roles={['controller', 'drm']}>
-                <AuditPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/oversight"
-            element={
-              <RequireRole roles={['drm']}>
-                <DrmOversightPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/engineer"
-            element={
-              <RequireRole roles={['dept_engineer']}>
-                <DeptEngineerPortal />
-              </RequireRole>
-            }
-          />
+        <div className="flex min-w-0 flex-1 flex-col">
+          {!user && <GuestBrandRow />}
 
-          {/*
-            Read-only reference/browsing pages. Never role-scoped in the PRD
-            (only the seven PRD Section 8 screens above are) - flagged rather
-            than guessed: kept open to controller/drm/super_admin as shared
-            reference data, not offered to dept_engineer, whose PRD-defined
-            scope is narrower (own requests + published schedule only, both
-            served by /engineer above).
-          */}
-          <Route
-            path="/corridors"
-            element={
-              <RequireRole roles={['controller', 'drm']}>
-                <CorridorsPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/corridors/:id"
-            element={
-              <RequireRole roles={['controller', 'drm']}>
-                <CorridorDetailPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/assets"
-            element={
-              <RequireRole roles={['controller', 'drm']}>
-                <AssetsPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/tasks"
-            element={
-              <RequireRole roles={['controller', 'drm']}>
-                <TasksPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/resources"
-            element={
-              <RequireRole roles={['controller', 'drm']}>
-                <ResourcesPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/status"
-            element={
-              <RequireRole roles={['controller', 'drm']}>
-                <StatusPage />
-              </RequireRole>
-            }
-          />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </main>
+          <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6">
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/" element={<RootRedirect />} />
 
-      <footer className="mx-auto max-w-7xl px-4 pb-10 text-xs text-slate-400 sm:px-6">
-        Decision-support prototype — not a certified safety system (PRD non-goal NG3).
-      </footer>
+              {/* PRD Section 8 calls the Controller Dashboard the primary demo
+                  screen and its build order puts it first (D-039). Controller
+                  only - see docs/DECISIONS.md's auth-session entry. */}
+              <Route
+                path="/dashboard"
+                element={
+                  <RequireRole roles={['controller']}>
+                    <ControllerDashboard />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="/comparison"
+                element={
+                  <RequireRole roles={['controller']}>
+                    <ComparisonPage />
+                  </RequireRole>
+                }
+              />
+              {/* Controller: full read/write. DRM: read-only (AuditPage itself
+                  hides the write-capable WorkflowPanel for drm). */}
+              <Route
+                path="/audit"
+                element={
+                  <RequireRole roles={['controller', 'drm']}>
+                    <AuditPage />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="/oversight"
+                element={
+                  <RequireRole roles={['drm']}>
+                    <DrmOversightPage />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="/engineer"
+                element={
+                  <RequireRole roles={['dept_engineer']}>
+                    <DeptEngineerPortal />
+                  </RequireRole>
+                }
+              />
+
+              {/*
+                Read-only reference/browsing pages. Never role-scoped in the PRD
+                (only the seven PRD Section 8 screens above are) - flagged rather
+                than guessed: kept open to controller/drm/super_admin as shared
+                reference data, not offered to dept_engineer, whose PRD-defined
+                scope is narrower (own requests + published schedule only, both
+                served by /engineer above).
+              */}
+              <Route
+                path="/corridors"
+                element={
+                  <RequireRole roles={['controller', 'drm']}>
+                    <CorridorsPage />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="/corridors/:id"
+                element={
+                  <RequireRole roles={['controller', 'drm']}>
+                    <CorridorDetailPage />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="/assets"
+                element={
+                  <RequireRole roles={['controller', 'drm']}>
+                    <AssetsPage />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="/tasks"
+                element={
+                  <RequireRole roles={['controller', 'drm']}>
+                    <TasksPage />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="/resources"
+                element={
+                  <RequireRole roles={['controller', 'drm']}>
+                    <ResourcesPage />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="/status"
+                element={
+                  <RequireRole roles={['controller', 'drm']}>
+                    <StatusPage />
+                  </RequireRole>
+                }
+              />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </main>
+
+          <footer className="mx-auto w-full max-w-7xl px-4 pb-10 text-xs text-slate-400 sm:px-6">
+            Decision-support prototype — not a certified safety system (PRD non-goal NG3).
+          </footer>
+        </div>
+      </div>
 
       <TourOverlay />
     </div>

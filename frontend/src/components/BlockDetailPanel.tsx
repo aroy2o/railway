@@ -60,8 +60,12 @@ export function BlockDetailPanel({
   onClose,
   onOverride,
 }: BlockDetailPanelProps) {
-  const assets = useGetAssetsQuery({ limit: 200 })
-  const resources = useGetResourcesQuery({ limit: 200 })
+  // 2500 / 1000, not 200: the fulldata-ktv-psa corpus runs to ~2,300 assets
+  // and ~480 resources - the old 200 cap silently showed "Asset record not
+  // loaded" for most of them once this branch's real dataset replaced the
+  // small demo corpus the limit was originally sized for.
+  const assets = useGetAssetsQuery({ limit: 2500 })
+  const resources = useGetResourcesQuery({ limit: 1000 })
 
   const tasksById = useMemo(() => new Map(tasks.map((t) => [t._id, t])), [tasks])
   const assetsById = useMemo(

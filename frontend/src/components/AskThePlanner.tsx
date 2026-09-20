@@ -23,6 +23,7 @@
  *                answer, with the offending figures named. Never styled like a
  *                clean answer.
  */
+import { MessageCircleQuestion } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 
 import { useAskThePlannerMutation } from '../api/apiSlice.ts'
@@ -58,9 +59,17 @@ export function AskThePlanner({ scheduleId }: AskThePlannerProps) {
   }
 
   return (
-    <section>
-      <h2 className="text-sm font-semibold text-slate-900">Ask the Planner</h2>
-      <p className="mt-0.5 mb-3 text-xs text-slate-500">
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center gap-2">
+        <span
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600"
+          aria-hidden="true"
+        >
+          <MessageCircleQuestion className="h-3.5 w-3.5" />
+        </span>
+        <h2 className="text-sm font-semibold text-slate-900">Ask the Planner</h2>
+      </div>
+      <p className="mt-1.5 mb-3 text-xs text-slate-500">
         Answers come only from this plan's own decision log, conflicts and overrides. Every
         number is checked against those records before it reaches you, and anything the system
         does not hold, it says so rather than guessing.
@@ -93,7 +102,7 @@ export function AskThePlanner({ scheduleId }: AskThePlannerProps) {
               submit(suggestion)
             }}
             disabled={isLoading}
-            className="rounded-full border border-slate-200 px-2.5 py-1 text-[11px] text-slate-600 hover:border-slate-300 hover:bg-slate-50 disabled:opacity-50"
+            className="rounded-full border border-slate-200 px-2.5 py-1 text-2xs text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:opacity-50"
           >
             {suggestion}
           </button>
@@ -106,7 +115,7 @@ export function AskThePlanner({ scheduleId }: AskThePlannerProps) {
               setAsked(null)
               setQuestion('')
             }}
-            className="ml-auto text-[11px] text-slate-400 hover:text-slate-600"
+            className="ml-auto text-2xs text-slate-500 transition-colors hover:text-slate-700"
           >
             Clear
           </button>
@@ -114,8 +123,8 @@ export function AskThePlanner({ scheduleId }: AskThePlannerProps) {
       </div>
 
       {asked && (response || error || isLoading) && (
-        <p className="mt-4 text-xs text-slate-400">
-          <span className="font-medium text-slate-500">Asked:</span> {asked}
+        <p className="mt-4 text-xs text-slate-500">
+          <span className="font-medium text-slate-600">Asked:</span> {asked}
         </p>
       )}
 
@@ -124,7 +133,7 @@ export function AskThePlanner({ scheduleId }: AskThePlannerProps) {
           <p className="text-xs font-medium text-amber-900">
             The explanation layer is unavailable
           </p>
-          <p className="mt-1 text-[11px] text-amber-800">{explainErrorMessage(error)}</p>
+          <p className="mt-1 text-2xs text-amber-800">{explainErrorMessage(error)}</p>
         </div>
       )}
 
@@ -135,7 +144,7 @@ export function AskThePlanner({ scheduleId }: AskThePlannerProps) {
               <p className="text-xs font-semibold text-rose-900">
                 This answer contains figures that are not in the records
               </p>
-              <p className="mt-1 text-[11px] text-rose-800">
+              <p className="mt-1 text-2xs text-rose-800">
                 {response.verification.ungroundedNumbers.length > 0 && (
                   <>
                     Not found in any record:{' '}
@@ -173,15 +182,15 @@ export function AskThePlanner({ scheduleId }: AskThePlannerProps) {
 
           {state === 'declined' && (response.context.unavailableTopics?.length ?? 0) > 0 && (
             <div className="rounded-lg border border-slate-200 bg-white p-3">
-              <p className="text-[11px] font-medium text-slate-700">
+              <p className="text-2xs font-medium text-slate-700">
                 Why this system cannot answer that
               </p>
               <ul className="mt-1 space-y-1.5">
                 {response.context.unavailableTopics?.map((topic) => (
-                  <li key={topic.topic} className="text-[11px] text-slate-600">
+                  <li key={topic.topic} className="text-2xs text-slate-600">
                     <span className="font-medium text-slate-700">{topic.topic}</span> —{' '}
                     {topic.reason}
-                    <span className="block text-slate-400">Would come from {topic.blockedOn}</span>
+                    <span className="block text-slate-500">Would come from {topic.blockedOn}</span>
                   </li>
                 ))}
               </ul>
@@ -191,7 +200,7 @@ export function AskThePlanner({ scheduleId }: AskThePlannerProps) {
           {(response.context.modelFramings?.length ?? 0) > 0 && (
             <div className="rounded-lg border border-violet-200 bg-violet-50/60 p-3">
               {response.context.modelFramings?.map((entry) => (
-                <p key={entry.factId} className="text-[11px] text-violet-900">
+                <p key={entry.factId} className="text-2xs text-violet-900">
                   {entry.framing}
                 </p>
               ))}
@@ -199,28 +208,28 @@ export function AskThePlanner({ scheduleId }: AskThePlannerProps) {
           )}
 
           <details className="rounded-lg border border-slate-200 bg-white p-3">
-            <summary className="cursor-pointer text-[11px] font-medium text-slate-700">
+            <summary className="cursor-pointer text-2xs font-medium text-slate-700">
               Grounded in {response.groundedIn.length} cited record
               {response.groundedIn.length === 1 ? '' : 's'} · {response.context.factCount} available
             </summary>
             <div className="mt-2 space-y-2">
               {groupRecordIds(response.groundedIn).map((group) => (
                 <div key={group.kind}>
-                  <p className="text-[10px] font-semibold tracking-wide text-slate-500 uppercase">
+                  <p className="text-3xs font-semibold tracking-wide text-slate-500 uppercase">
                     {group.label}
                   </p>
-                  <p className="font-mono text-[11px] break-words text-slate-600">
+                  <p className="font-mono text-2xs wrap-break-word text-slate-600">
                     {group.ids.join(', ')}
                   </p>
                 </div>
               ))}
               {response.groundedIn.length === 0 && (
-                <p className="text-[11px] text-slate-500">
+                <p className="text-2xs text-slate-500">
                   The answer cited no specific record.
                 </p>
               )}
               {(response.context.unknownReferences?.length ?? 0) > 0 && (
-                <p className="text-[11px] text-slate-500">
+                <p className="text-2xs text-slate-500">
                   Named in the question but not in this plan:{' '}
                   <span className="font-mono">
                     {response.context.unknownReferences?.join(', ')}

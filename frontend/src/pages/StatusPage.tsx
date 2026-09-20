@@ -36,11 +36,11 @@ function ProvenanceList({ title, entries }: { title: string; entries?: Record<st
   if (!entries || Object.keys(entries).length === 0) return null
   return (
     <div className="mt-2">
-      <p className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">{title}</p>
+      <p className="text-2xs font-semibold tracking-wide text-slate-500 uppercase">{title}</p>
       <ul className="mt-1 space-y-0.5">
         {Object.entries(entries).map(([field, source]) => (
           <li key={field} className="text-xs text-slate-600">
-            <code className="rounded bg-slate-100 px-1 py-0.5 text-[11px] text-slate-700">
+            <code className="rounded bg-slate-100 px-1 py-0.5 text-2xs text-slate-700">
               {field}
             </code>{' '}
             — {source}

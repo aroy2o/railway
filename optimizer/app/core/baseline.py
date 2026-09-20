@@ -48,6 +48,7 @@ from app.core.scheduler import (
     expand_windows,
     _clock,
 )
+from app.core.weather import detect_weather_risk
 
 #: The order departments run their independent passes in.
 #:
@@ -131,6 +132,11 @@ class BaselineResult:
     over_subscribed: list[OverSubscribedWindow] = field(default_factory=list)
     decision_log: list[dict] = field(default_factory=list)
     department_order: tuple[str, ...] = DEPARTMENT_ORDER
+    #: T29 Phase 2 (comparison KPI expansion). Only `weatherRisk` is populated -
+    #: see `run_baseline`'s comment for why a `trainImpactConflicts` entry is
+    #: deliberately NOT added here despite `detect_train_impact` sharing the
+    #: same `(blocks, corridors)` signature.
+    known_gaps: dict = field(default_factory=dict)
 
     @property
     def scheduled_task_ids(self) -> set[str]:
@@ -181,6 +187,7 @@ class BaselineResult:
                 "process this system replaces (PRD Section 12).",
             },
             "decisionLog": self.decision_log,
+            "knownGaps": self.known_gaps,
         }
 
 
@@ -382,6 +389,37 @@ def run_baseline(
     _build_blocks(result, placements, tasks_by_id, windows)
     _detect_conflicts(result, claims, tasks_by_id, windows)
     result.decision_log = _build_decision_log(tasks, placements, result.deferred)
+
+    # T29 Phase 2 (comparison KPI expansion): run the SAME real-monsoon-data
+    # check T26 runs on the optimized plan, against this baseline's OWN
+    # placements, so weather/monsoon avoidance is a genuine number-vs-number
+    # comparison rather than a one-sided "AI-only" panel. This baseline
+    # process has no such check step of its own - what follows is what an
+    # outside reviewer cross-referencing its output against real flood-risk
+    # data by hand would find.
+    #
+    # `detect_train_impact` (scheduler.py) is deliberately NOT run here even
+    # though it shares this exact `(blocks, corridors)` signature: both this
+    # baseline and the optimizer place tasks EXCLUSIVELY inside `expand_windows`'
+    # declared-free windows (never into `occupied_windows`), by construction -
+    # see this function's own window-selection loop above and scheduler.py's
+    # matching AssertionError invariant on the optimized side. Running that
+    # check here would report 0-vs-0 every time, which is not a finding, it is
+    # the sanity check succeeding on both sides identically - see D-091's
+    # baseline-comparison scoping note for the full reasoning.
+    weather_risk = detect_weather_risk(result.blocks, corridors)
+    result.known_gaps["weatherRisk"] = {
+        "count": len(weather_risk),
+        "note": (
+            "Scheduled blocks on a corridor real Ministry of Jal Shakti flood-risk data "
+            "flags as monsoon-risk (T26), falling inside India's real IMD monsoon window "
+            "(~June 1 - ~October 15). Computed the same way as the optimizer's own check "
+            "(app.core.weather), against this baseline's own placements, so the two counts "
+            "are directly comparable. Advisory only on either side - neither engine avoids "
+            "or moves a block because of this flag; a Controller decides whether to act on it."
+        ),
+        "blocks": weather_risk[:20],
+    }
 
     # Same invariant the optimizer holds itself to (FR3.3): nothing vanishes.
     accounted = result.scheduled_task_ids | {d.task_id for d in result.deferred}

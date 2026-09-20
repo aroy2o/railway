@@ -5413,3 +5413,75 @@ justified by the fact that it exactly reproduces production's real output
 reversible local reproduction, not a code change. `optimizer/app/core/
 scheduler.py` carries no diff from this entry; the temporary diagnostic
 logging was removed before this entry was written.
+
+## D-093 — Extending the Baseline vs AI comparison to 4 more PRD 13.1 KPI
+axes (SLA compliance, priority coverage, risk reduction, weather avoidance);
+train/passenger impact scoped OUT as not a real per-engine number
+
+**Date:** 2026-09-19 · **Task:** Comparison page KPI expansion (rex-planner-design skill).
+
+**What shipped.** `buildComparison()` (`scheduleOrchestrator.ts`) now also
+computes, per side, over the same contestable-scheduled population it
+already uses for every other row:
+
+- **SLA compliance** - of the contestable tasks THIS engine actually
+  scheduled, how many landed on or before their real `slaDueDate` (a split
+  task's last segment, matching the optimizer's own `within_sla` CP-SAT
+  variable exactly).
+- **Priority coverage** - of the severity-5 ("critical") contestable tasks,
+  how many did this engine schedule. A discrete PRD 5.2 bucket, not a top-N
+  cut of the continuous `priorityScore`, so the threshold needs no
+  calibration argument.
+- **Risk reduction** - of the contestable tasks scheduled, how much of the
+  "flagged high-risk" backlog (top quartile by `failureRiskScore` among
+  SCORED contestable tasks - a relative cut, since the calibrated
+  probability has no absolute "high risk" line PRD 9.1 or `risk.py` names)
+  got covered. Ships with `risk.py`'s `FRAMING` string carried through
+  verbatim, not paraphrased, per PRD 9.1's non-goal NG4.
+- **Fragmentation** - `metrics.blocksUsed` on both sides was already
+  real and identical in shape (the ν objective term's own proxy: fewer,
+  fuller possessions); this only wires an existing number into the
+  comparison, no new computation.
+- **Weather/monsoon avoidance** - `optimizer/app/core/baseline.py`'s
+  `run_baseline()` now also calls `detect_weather_risk(result.blocks,
+  corridors)` against the baseline's own placements (previously only the
+  optimized plan ran this check). Real per-engine numbers, because which
+  corridor/day each task lands on genuinely differs between the two
+  algorithms even though the underlying window pattern does not.
+
+**Train/passenger impact - deliberately NOT given a real per-engine number,
+contrary to the initial plan.** Two candidate figures exist in
+`optimizer/app/core/trains.py`/`scheduler.py`, and neither varies by
+scheduling algorithm:
+
+1. `detect_train_impact(blocks, corridors)` - a sanity check that scheduled
+   blocks never overlap real train-occupied windows. Both this baseline and
+   the optimizer place tasks EXCLUSIVELY inside `expand_windows`'
+   declared-free windows by construction (the optimized side even asserts
+   this as an invariant in `solve_schedule`) - so running it against the
+   baseline's blocks would report 0-vs-0 on every real corpus. That is the
+   check succeeding identically on both sides, not a finding.
+2. `cheapest_displacement()`'s costed `DisplacementOption` - computed only
+   for tasks that fit NO window on their corridor at all (D-024/D-084's
+   `structurallyImpossibleCount`/`splitOnlyTaskCount` populations, which by
+   definition sit OUTSIDE the contestable subset this whole comparison is
+   drawn from). Which tasks land in that bucket is a static fact about the
+   task's duration and the corridor's window pattern - identical for both
+   engines - and the cost itself is a pure function of
+   `(corridor daily/occupied windows, class mix, required minutes)`, again
+   with nothing engine-dependent in it. Wiring this into the baseline would
+   reproduce the exact number already shown on the optimized side's deferred
+   tasks, dressed up as a comparison where none exists.
+
+Presenting either as a baseline-vs-AI card would be exactly the kind of
+looks-real-isn't trap D-031 exists to prevent. The Comparison page instead
+keeps the single-sided framing: the optimizer computes and surfaces a
+displacement cost automatically for every task it can't place; the baseline
+process has no such step at all, structurally, not merely a smaller number.
+
+**Tests:** `optimizer/tests/test_baseline.py` gained a weather-risk case
+(flagged corridor + real monsoon-window date -> `knownGaps.weatherRisk.count
+== 1`, mirroring `test_weather.py`'s existing optimized-side case). Backend
+comparison math was spot-checked against a live local generation's actual
+`optimized`/`baseline` payloads, not just type-checked - see the numbers
+recorded in the PR/commit this decision ships with.

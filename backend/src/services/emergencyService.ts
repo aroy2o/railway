@@ -122,6 +122,9 @@ export async function runEmergencyReoptimization({
     // fails (D-036), not a claim that they came out empty.
     riskModel: null,
     baseline: null,
+    // Same "not recomputed" reasoning as riskModel/baseline above - a narrow
+    // one-corridor amendment is not worth a full asset-availability join.
+    assetAvailability: null,
     comparisonToBaseline: null,
     contestableTaskIds: [],
     inputSummary: {

@@ -41,6 +41,16 @@ export interface ICorridor {
   // free windows live in `corridor_calendar` and are joined on read.
   seasonalRiskFlag: string | null;
 
+  // --- fulldata-ktv-psa branch extensions ---------------------------------
+  // A Corridor here is one physical LINE of a real block section
+  // ("<blockSection>#L<lineNumber>" as _id) rather than a station pair, so a
+  // multi-track section becomes several Corridor docs and the existing
+  // per-corridor no-double-booking scheduler logic applies per line with no
+  // change to scheduler.py. Optional: absent/null on corridors seeded by the
+  // original datameet/data.gov.in pipeline.
+  blockSection?: string;
+  lineNumber?: number;
+
   // --- real extensions produced by T2 ------------------------------------
   stationA: StationRef;
   stationB: StationRef;
@@ -83,6 +93,9 @@ const corridorSchema = new Schema<ICorridor>(
     zone: { type: String, default: null },
     section: { type: String, required: true },
     seasonalRiskFlag: { type: String, default: null },
+
+    blockSection: { type: String, index: true },
+    lineNumber: { type: Number },
 
     stationA: { type: stationSchema, required: true },
     stationB: { type: stationSchema, required: true },
