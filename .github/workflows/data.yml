@@ -2,7 +2,7 @@ name: data
 
 on:
   push:
-    branches: [main]
+    branches: [main, fulldata-ktv-psa]
     paths:
       - "data/**"
       - ".github/workflows/data.yml"

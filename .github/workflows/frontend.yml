@@ -2,7 +2,7 @@ name: frontend
 
 on:
   push:
-    branches: [main]
+    branches: [main, fulldata-ktv-psa]
     paths:
       - "frontend/**"
       - ".github/workflows/frontend.yml"

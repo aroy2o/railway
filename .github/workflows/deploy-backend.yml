@@ -11,7 +11,7 @@ name: deploy-backend
 
 on:
   push:
-    branches: [main]
+    branches: [main, fulldata-ktv-psa]
     paths:
       - "backend/**"
       - ".github/workflows/deploy-backend.yml"

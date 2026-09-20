@@ -2,7 +2,7 @@ name: optimizer
 
 on:
   push:
-    branches: [main]
+    branches: [main, fulldata-ktv-psa]
     paths:
       - "optimizer/**"
       - ".github/workflows/optimizer.yml"
