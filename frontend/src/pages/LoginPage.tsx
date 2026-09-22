@@ -3,9 +3,11 @@
  *
  * A plain username/password form, not a manual role dropdown: real JWT auth
  * (FR10.2) means the role comes from which account logs in, not from a
- * client-side selector next to it. Demo account credentials are documented in
- * `DEMO_ACCOUNTS.md` at the repo root, deliberately not shown here - see that
- * file's own note on why.
+ * client-side selector next to it. Demo account credentials (from
+ * `DEMO_ACCOUNTS.md` at the repo root) are shown alongside the form so a
+ * judge/evaluator can self-serve login without that file - a deliberate
+ * reversal of this screen's original "credentials stay out of the UI"
+ * design, made for demo/evaluation convenience.
  */
 import { useState, type FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
@@ -13,6 +15,33 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { describeApiError, useLoginMutation } from '../api/apiSlice.ts'
 import { credentialsReceived, roleLandingRoute } from '../store/slices/authSlice.ts'
 import { useAppDispatch, useAppSelector } from '../store/hooks.ts'
+
+const DEMO_ACCOUNTS = [
+  {
+    role: 'Dept Engineer',
+    username: 'engineer',
+    password: 'engineer123',
+    note: 'Submits maintenance requests, sees only their own.',
+  },
+  {
+    role: 'Controller',
+    username: 'controller',
+    password: 'controller123',
+    note: 'Full read/write on Dashboard, Comparison, Approval & Audit.',
+  },
+  {
+    role: 'DRM',
+    username: 'drm',
+    password: 'drm123',
+    note: 'Read-only: Oversight view and Approval & Audit.',
+  },
+  {
+    role: 'Super Admin',
+    username: 'admin',
+    password: 'admin123',
+    note: 'Demo convenience account, bypasses every role gate.',
+  },
+] as const
 
 export function LoginPage() {
   const dispatch = useAppDispatch()
@@ -45,11 +74,16 @@ export function LoginPage() {
     }
   }
 
+  function fillCredentials(account: (typeof DEMO_ACCOUNTS)[number]) {
+    setUsername(account.username)
+    setPassword(account.password)
+  }
+
   return (
-    <div className="mx-auto mt-12 max-w-sm sm:mt-20">
+    <div className="mx-auto mt-12 flex max-w-3xl flex-col gap-6 sm:mt-20 sm:flex-row sm:items-start">
       <form
         onSubmit={onSubmit}
-        className="space-y-5 rounded-2xl border border-slate-200 bg-white p-8 shadow-sm"
+        className="w-full space-y-5 rounded-2xl border border-slate-200 bg-white p-8 shadow-sm sm:max-w-sm"
       >
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Sign in</h1>
@@ -102,11 +136,35 @@ export function LoginPage() {
         >
           {loginState.isLoading ? 'Signing in…' : 'Sign in'}
         </button>
-
-        <p className="text-center text-xs text-slate-400">
-          Demo account credentials: see <code>DEMO_ACCOUNTS.md</code> at the repo root.
-        </p>
       </form>
+
+      <aside className="w-full rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:max-w-xs">
+        <h2 className="text-sm font-semibold text-slate-900">Demo accounts</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          For evaluators — click an account to fill the form, then Sign in.
+        </p>
+        <ul className="mt-4 space-y-3">
+          {DEMO_ACCOUNTS.map((account) => (
+            <li key={account.username}>
+              <button
+                type="button"
+                onClick={() => fillCredentials(account)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-left text-xs transition hover:border-slate-400 hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2 focus-visible:outline-none"
+              >
+                <p className="font-medium text-slate-900">{account.role}</p>
+                <p className="mt-1 font-mono text-slate-600">
+                  {account.username} / {account.password}
+                </p>
+                <p className="mt-1 text-slate-400">{account.note}</p>
+              </button>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-4 text-2xs text-slate-400">
+          Not real secrets — fixed demo accounts only. Full details in{' '}
+          <code>DEMO_ACCOUNTS.md</code> at the repo root.
+        </p>
+      </aside>
     </div>
   )
 }
